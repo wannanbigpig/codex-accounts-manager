@@ -2,9 +2,11 @@
 
 VS Code 扩展，用于管理多个 Codex 账号、查看配额总览，并快速切换当前生效的全局 `auth.json`。
 
-![Version](https://img.shields.io/visual-studio-marketplace/v/wannanbigpig.codex-accounts-manager)
-![Downloads](https://img.shields.io/visual-studio-marketplace/d/wannanbigpig.codex-accounts-manager)
+![Version](https://img.shields.io/badge/version-0.0.1-blue)
+![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
 ![License](https://img.shields.io/github/license/wannanbigpig/codex-tools)
+![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-tools?style=flat)
+![Last Commit](https://img.shields.io/github/last-commit/wannanbigpig/codex-tools)
 
 ---
 
@@ -133,4 +135,4 @@ npx @vscode/vsce package
 
 ## 许可证
 
-如需发布到公开市场，建议补充 [LICENSE](LICENSE) 文件。
+本项目基于 [MIT License](LICENSE) 开源。
