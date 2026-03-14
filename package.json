@@ -1,0 +1,82 @@
+{
+  "name": "codex-accounts-manager",
+  "displayName": "Codex Accounts Manager",
+  "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
+  "version": "0.0.1",
+  "publisher": "wannanbigpig",
+  "icon": "media/CT_logo_transparent_square_hd.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wannanbigpig/codex-tools.git"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:codexAccounts.addAccount",
+    "onCommand:codexAccounts.importCurrentAuth",
+    "onCommand:codexAccounts.switchAccount",
+    "onCommand:codexAccounts.refreshQuota",
+    "onCommand:codexAccounts.refreshAllQuotas",
+    "onCommand:codexAccounts.removeAccount",
+    "onCommand:codexAccounts.openDetails",
+    "onCommand:codexAccounts.showQuotaSummary"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codexAccounts.addAccount",
+        "title": "Codex Accounts: Add Account via OAuth"
+      },
+      {
+        "command": "codexAccounts.importCurrentAuth",
+        "title": "Codex Accounts: Import Current auth.json"
+      },
+      {
+        "command": "codexAccounts.switchAccount",
+        "title": "Codex Accounts: Switch Account"
+      },
+      {
+        "command": "codexAccounts.refreshQuota",
+        "title": "Codex Accounts: Refresh Quota"
+      },
+      {
+        "command": "codexAccounts.refreshAllQuotas",
+        "title": "Codex Accounts: Refresh All Quotas"
+      },
+      {
+        "command": "codexAccounts.removeAccount",
+        "title": "Codex Accounts: Remove Account"
+      },
+      {
+        "command": "codexAccounts.openDetails",
+        "title": "Codex Accounts: Open Details"
+      },
+      {
+        "command": "codexAccounts.openCodexHome",
+        "title": "Codex Accounts: Open Codex Home"
+      },
+      {
+        "command": "codexAccounts.showQuotaSummary",
+        "title": "Codex Accounts: Show Quota Summary"
+      }
+    ],
+    "menus": {}
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.11",
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.7.2",
+    "@vscode/vsce": "^3.2.1"
+  }
+}
