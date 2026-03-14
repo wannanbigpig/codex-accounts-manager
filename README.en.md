@@ -131,7 +131,7 @@ npx @vscode/vsce package
 
 ## Support
 
-- ☆ [GitHub Star](https://github.com/wannanbigpig/codex-tools)
+- ⭐ [GitHub Star](https://github.com/wannanbigpig/codex-tools)
 - 💬 [Report Issues](https://github.com/wannanbigpig/codex-tools/issues)
 
 ---
