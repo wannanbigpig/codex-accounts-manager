@@ -1,4 +1,6 @@
-# Codex Accounts Manager English · [简体中文](README.md)
+# Codex Accounts Manager 
+
+English · [简体中文](README.md)
 
 VS Code extension for managing multiple Codex accounts, viewing quota usage, and switching the active global `auth.json`.
 
