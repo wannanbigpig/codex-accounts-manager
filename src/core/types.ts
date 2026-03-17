@@ -73,6 +73,12 @@ export interface CodexQuotaErrorInfo {
 export interface CodexAccountRecord {
   /** 内部存储 ID */
   id: string;
+  /** 用户显示名 */
+  displayName?: string;
+  /** 用户头像 URL */
+  avatarUrl?: string;
+  /** 登录时间戳 (毫秒) */
+  loginAt?: number;
   /** 用户邮箱 */
   email: string;
   /** 用户 ID */
@@ -159,6 +165,8 @@ export interface DecodedAuthClaims {
     /** 组织名称 */
     title?: string;
   }>;
+  /** 登录时间戳 (毫秒) */
+  loginAt?: number;
 }
 
 /**
@@ -195,6 +203,42 @@ export interface CodexUsageResponse {
     /** 次窗口 */
     secondary_window?: UsageWindowInfo;
   };
+}
+
+/**
+ * 每日 token 使用量
+ */
+export interface CodexDailyUsagePoint {
+  /** 日期标识，优先 YYYY-MM-DD */
+  date: string;
+  /** 当日总 token 数 */
+  totalTokens: number;
+  /** VS Code / Extension token 数 */
+  extensionTokens?: number;
+  /** 其他 surface 总和 */
+  otherTokens?: number;
+  /** 各 surface 原始数值 */
+  surfaceValues?: Record<string, number>;
+  /** 输入 token 数 */
+  inputTokens?: number;
+  /** 输出 token 数 */
+  outputTokens?: number;
+  /** 缓存 token 数 */
+  cachedTokens?: number;
+  /** 原始条目 */
+  rawData?: unknown;
+}
+
+/**
+ * 每日 token 使用量明细
+ */
+export interface CodexDailyUsageBreakdown {
+  /** 天数范围 */
+  days: number;
+  /** 明细点 */
+  points: CodexDailyUsagePoint[];
+  /** 原始 API 数据 */
+  rawData?: unknown;
 }
 
 /**

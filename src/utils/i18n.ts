@@ -129,6 +129,19 @@ export type TranslationKey =
   | "externalAuth.changed.message"
   | "externalAuth.changed.reload"
   | "externalAuth.changed.later"
+  // Codex App restart
+  | "codexApp.restart.preference.auto"
+  | "codexApp.restart.preference.manual"
+  | "codexApp.restart.preference.message"
+  | "codexApp.restart.manual.message"
+  | "codexApp.restart.manual.action"
+  | "codexApp.restart.manual.later"
+  // Quota warning
+  | "quotaWarning.hourlyLabel"
+  | "quotaWarning.weeklyLabel"
+  | "quotaWarning.reviewLabel"
+  | "quotaWarning.message"
+  | "quotaWarning.dismiss"
   // Status Toggle
   | "statusToggle.alwaysShown"
   | "statusToggle.added"
@@ -273,6 +286,17 @@ const translations: TranslationData = {
     "externalAuth.changed.message": "检测到其他窗口已切换 Codex 账号到 {email}。是否立即重载当前窗口以同步内置 Codex 会话？",
     "externalAuth.changed.reload": "立即重载",
     "externalAuth.changed.later": "稍后",
+    "codexApp.restart.preference.auto": "帮我自动重启",
+    "codexApp.restart.preference.manual": "每次手动点击重启",
+    "codexApp.restart.preference.message": "检测到 Codex App 正在运行。切换账号后希望如何处理？",
+    "codexApp.restart.manual.message": "检测到 Codex App 正在运行。如需让桌面端同步当前账号，请手动点击重启。",
+    "codexApp.restart.manual.action": "重启 Codex App",
+    "codexApp.restart.manual.later": "暂不重启",
+    "quotaWarning.hourlyLabel": "5小时",
+    "quotaWarning.weeklyLabel": "每周",
+    "quotaWarning.reviewLabel": "代码审查",
+    "quotaWarning.message": "{account} 的 {quota} 配额已降到 {value}%，低于你设置的 {threshold}%。",
+    "quotaWarning.dismiss": "知道了",
 
     // 状态提示
     "statusToggle.alwaysShown": "当前激活账号会始终显示在状态栏弹窗顶部。",
@@ -401,6 +425,18 @@ const translations: TranslationData = {
       "Detected that another window switched the active Codex account to {email}. Reload this window now to sync the built-in Codex session?",
     "externalAuth.changed.reload": "Reload Now",
     "externalAuth.changed.later": "Later",
+    "codexApp.restart.preference.auto": "Restart automatically",
+    "codexApp.restart.preference.manual": "Let me restart manually each time",
+    "codexApp.restart.preference.message": "Codex App is currently running. How would you like account switches to handle it?",
+    "codexApp.restart.manual.message":
+      "Codex App is currently running. Restart it manually if you want the desktop app to pick up the new account now.",
+    "codexApp.restart.manual.action": "Restart Codex App",
+    "codexApp.restart.manual.later": "Not Now",
+    "quotaWarning.hourlyLabel": "5h",
+    "quotaWarning.weeklyLabel": "Weekly",
+    "quotaWarning.reviewLabel": "Review",
+    "quotaWarning.message": "{account} {quota} quota is at {value}%, below your configured threshold of {threshold}%.",
+    "quotaWarning.dismiss": "Dismiss",
 
     // Status toggle
     "statusToggle.alwaysShown": "The active account is always shown at the top of the status popup.",
@@ -434,6 +470,11 @@ function interpolate(text: string, params?: TranslationParams): string {
  * @returns 支持的语言类型
  */
 export function getLanguage(): SupportedLanguage {
+  const configured = vscode.workspace.getConfiguration("codexAccounts").get<string>("displayLanguage", "auto");
+  if (configured === "zh" || configured === "en") {
+    return configured;
+  }
+
   const language = vscode.env.language.toLowerCase();
   return language.startsWith("zh") ? "zh" : "en";
 }
@@ -591,5 +632,44 @@ export function getExternalAuthSyncCopy(): {
     message: (email: string) => _t("externalAuth.changed.message", { email }),
     reloadNow: _t("externalAuth.changed.reload"),
     later: _t("externalAuth.changed.later")
+  };
+}
+
+export function getCodexAppRestartCopy(): {
+  preferenceMessage: string;
+  auto: string;
+  manual: string;
+  manualMessage: string;
+  restartNow: string;
+  later: string;
+} {
+  const _t = t();
+
+  return {
+    preferenceMessage: _t("codexApp.restart.preference.message"),
+    auto: _t("codexApp.restart.preference.auto"),
+    manual: _t("codexApp.restart.preference.manual"),
+    manualMessage: _t("codexApp.restart.manual.message"),
+    restartNow: _t("codexApp.restart.manual.action"),
+    later: _t("codexApp.restart.manual.later")
+  };
+}
+
+export function getQuotaWarningCopy(): {
+  hourlyLabel: string;
+  weeklyLabel: string;
+  reviewLabel: string;
+  message: (account: string, quota: string, value: number, threshold: number) => string;
+  dismiss: string;
+} {
+  const _t = t();
+
+  return {
+    hourlyLabel: _t("quotaWarning.hourlyLabel"),
+    weeklyLabel: _t("quotaWarning.weeklyLabel"),
+    reviewLabel: _t("quotaWarning.reviewLabel"),
+    dismiss: _t("quotaWarning.dismiss"),
+    message: (account: string, quota: string, value: number, threshold: number) =>
+      _t("quotaWarning.message", { account, quota, value, threshold })
   };
 }

@@ -4,3 +4,5 @@
 
 export * from "./quota";
 export * from "./profile";
+export * from "./usage";
+export * from "./me";

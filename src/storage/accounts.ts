@@ -57,6 +57,15 @@ export class AccountsRepository {
   /** 待保存的数据队列 */
   private pendingSave: CodexAccountsIndex | null = null;
 
+  /** 持久化串行队列 */
+  private persistChain: Promise<void> = Promise.resolve();
+
+  /** 是否存在尚未安全落盘的改动 */
+  private isDirty = false;
+
+  /** 防止重复释放 */
+  private disposed = false;
+
   constructor(private readonly context: vscode.ExtensionContext) {
     this.secretStore = new SecretStore(context.secrets);
     this.indexPath = path.join(context.globalStorageUri.fsPath, INDEX_FILE);
@@ -80,14 +89,23 @@ export class AccountsRepository {
    * 清理资源
    */
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+
     if (this.saveDebounceTimer) {
       clearTimeout(this.saveDebounceTimer);
       this.saveDebounceTimer = null;
     }
-    // 如果有待保存的数据，立即保存
-    if (this.pendingSave) {
-      void this.persistIndexSync(this.pendingSave);
+
+    if (this.isDirty) {
+      const latestIndex = this.pendingSave ?? this.cache?.data;
+      if (latestIndex) {
+        this.persistIndexSync(latestIndex);
+      }
       this.pendingSave = null;
+      this.isDirty = false;
     }
   }
 
@@ -149,6 +167,7 @@ export class AccountsRepository {
 
     const account: CodexAccountRecord = {
       id,
+      loginAt: claims.loginAt ?? existing?.loginAt,
       email: claims.email,
       userId: claims.userId,
       authProvider: claims.authProvider,
@@ -338,6 +357,15 @@ export class AccountsRepository {
       account.planType = updatedPlanType;
     }
 
+    const storedTokens = updatedTokens ?? (await this.secretStore.getTokens(accountId));
+    if (!account.loginAt && storedTokens) {
+      const effectiveTokens = storedTokens;
+      if (effectiveTokens) {
+        const claims = extractClaims(effectiveTokens.idToken, effectiveTokens.accessToken);
+        account.loginAt = claims.loginAt ?? account.loginAt;
+      }
+    }
+
     if (updatedTokens) {
       await this.secretStore.setTokens(accountId, {
         ...updatedTokens,
@@ -356,22 +384,14 @@ export class AccountsRepository {
   async syncActiveAccountFromAuthFile(): Promise<void> {
     const auth = await readAuthFile();
     const index = await this.readIndex();
-
-    if (!auth) {
-      return;
-    }
-
-    const claims = extractClaims(auth.tokens.id_token, auth.tokens.access_token);
-    const derivedId = claims.email
+    const claims = auth ? extractClaims(auth.tokens.id_token, auth.tokens.access_token) : undefined;
+    const derivedId = claims?.email
       ? buildAccountStorageId(claims.email, claims.accountId, claims.organizationId)
       : undefined;
 
-    for (const account of index.accounts) {
-      account.isActive = account.id === derivedId;
+    if (syncActiveAccountState(index, derivedId)) {
+      this.writeIndex(index);
     }
-
-    index.currentAccountId = derivedId;
-    this.writeIndex(index);
   }
 
   /**
@@ -389,36 +409,38 @@ export class AccountsRepository {
    * 读取索引 (带缓存)
    */
   private async readIndex(): Promise<CodexAccountsIndex> {
+    if (this.pendingSave) {
+      return cloneIndex(this.pendingSave);
+    }
+
     // 检查缓存是否有效
     if (this.cache) {
       const age = Date.now() - this.cache.timestamp;
       if (age < CACHE_TTL_MS) {
-        // 返回缓存数据的深拷贝
-        return JSON.parse(JSON.stringify(this.cache.data)) as CodexAccountsIndex;
+        return cloneIndex(this.cache.data);
       }
     }
 
     // 缓存无效，从文件读取
     try {
       const raw = await fs.readFile(this.indexPath, "utf8");
-      const parsed = JSON.parse(raw) as CodexAccountsIndex;
-      parsed.accounts ??= [];
+      const snapshot = cloneIndex(JSON.parse(raw) as CodexAccountsIndex);
 
       // 更新缓存
       this.cache = {
-        data: parsed,
+        data: snapshot,
         timestamp: Date.now()
       };
 
-      return parsed;
+      return cloneIndex(snapshot);
     } catch {
       // 文件不存在或解析失败，返回空索引
-      const empty: CodexAccountsIndex = { accounts: [] };
+      const empty = createEmptyIndex();
       this.cache = {
         data: empty,
         timestamp: Date.now()
       };
-      return empty;
+      return cloneIndex(empty);
     }
   }
 
@@ -426,11 +448,14 @@ export class AccountsRepository {
    * 写入索引 (带防抖)
    */
   private writeIndex(index: CodexAccountsIndex): void {
+    const snapshot = cloneIndex(index);
+
     // 更新缓存
     this.cache = {
-      data: JSON.parse(JSON.stringify(index)) as CodexAccountsIndex,
+      data: snapshot,
       timestamp: Date.now()
     };
+    this.isDirty = true;
 
     // 清除之前的定时器
     if (this.saveDebounceTimer) {
@@ -438,14 +463,45 @@ export class AccountsRepository {
     }
 
     // 设置新的防抖定时器
-    this.pendingSave = index;
+    this.pendingSave = snapshot;
     this.saveDebounceTimer = setTimeout(() => {
-      if (this.pendingSave) {
-        this.persistIndexSync(this.pendingSave);
-        this.pendingSave = null;
-      }
-      this.saveDebounceTimer = null;
+      void this.flushPendingSave();
     }, DEBOUNCE_DELAY_MS);
+  }
+
+  private async flushPendingSave(): Promise<void> {
+    const snapshot = this.pendingSave;
+    this.pendingSave = null;
+    this.saveDebounceTimer = null;
+
+    if (!snapshot) {
+      return;
+    }
+
+    const persistTask = this.persistChain
+      .catch(() => undefined)
+      .then(async () => {
+        await this.persistIndex(snapshot);
+      });
+    this.persistChain = persistTask;
+
+    try {
+      await persistTask;
+      if (!this.pendingSave) {
+        this.isDirty = false;
+      }
+    } catch (error) {
+      console.error("[codexAccounts] failed to persist accounts index:", error);
+    }
+  }
+
+  private async persistIndex(index: CodexAccountsIndex): Promise<void> {
+    try {
+      await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
+      await fs.writeFile(this.indexPath, JSON.stringify(index, null, 2), "utf8");
+    } catch (cause) {
+      throw createError.storageWriteFailed(this.indexPath, cause);
+    }
   }
 
   /**
@@ -505,6 +561,34 @@ function markActive(index: CodexAccountsIndex, accountId: string): void {
   for (const account of index.accounts) {
     account.isActive = account.id === accountId;
   }
+}
+
+function syncActiveAccountState(index: CodexAccountsIndex, accountId: string | undefined): boolean {
+  const normalizedAccountId = accountId && index.accounts.some((account) => account.id === accountId) ? accountId : undefined;
+  let changed = index.currentAccountId !== normalizedAccountId;
+  index.currentAccountId = normalizedAccountId;
+
+  for (const account of index.accounts) {
+    const nextActive = account.id === normalizedAccountId;
+    if (account.isActive !== nextActive) {
+      account.isActive = nextActive;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function createEmptyIndex(): CodexAccountsIndex {
+  return { accounts: [] };
+}
+
+function cloneIndex(index: CodexAccountsIndex): CodexAccountsIndex {
+  const normalized: CodexAccountsIndex = {
+    currentAccountId: index?.currentAccountId,
+    accounts: Array.isArray(index?.accounts) ? index.accounts : []
+  };
+  return JSON.parse(JSON.stringify(normalized)) as CodexAccountsIndex;
 }
 
 /**

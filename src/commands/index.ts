@@ -17,8 +17,27 @@ import { AccountsRepository } from "../storage";
 import { openDetailsPanel } from "../ui";
 import { openQuotaSummaryPanel } from "../ui/quotaSummary";
 import { CodexAccountRecord } from "../core/types";
-import { getCommandCopy, restartCodexAppIfInstalled } from "../utils";
+import {
+  getCodexAppRestartCopy,
+  getCommandCopy,
+  getCodexAppState,
+  getQuotaWarningCopy,
+  restartCodexAppIfInstalled
+} from "../utils";
 import { createError, getErrorMessage } from "../core";
+
+const CODEX_APP_RESTART_MODE = "codexAppRestartMode";
+const QUOTA_WARNING_ENABLED = "quotaWarningEnabled";
+const QUOTA_WARNING_THRESHOLD = "quotaWarningThreshold";
+const SHOW_CODE_REVIEW_QUOTA = "showCodeReviewQuota";
+const warnedQuotaKeys = new Set<string>();
+
+type RefreshSingleQuotaOptions = {
+  announce?: boolean;
+  forceRefresh?: boolean;
+  refreshView?: boolean;
+  warnQuota?: boolean;
+};
 
 /**
  * 注册所有命令
@@ -75,17 +94,19 @@ export function registerCommands(
 
       await withProgress(copy.progressSwitch(account.email), async () => {
         await repo.switchAccount(account.id);
-        await restartCodexAppIfInstalled();
-        view.refresh();
-        const choice = await vscode.window.showInformationMessage(
-          copy.switchedAndAskReload(account.email),
-          copy.reloadNow,
-          copy.later
-        );
-        if (choice === copy.reloadNow) {
-          await vscode.commands.executeCommand("workbench.action.reloadWindow");
-        }
       });
+
+      await handleCodexAppRestartPreference();
+      view.refresh();
+
+      const choice = await vscode.window.showInformationMessage(
+        copy.switchedAndAskReload(account.email),
+        copy.reloadNow,
+        copy.later
+      );
+      if (choice === copy.reloadNow) {
+        await vscode.commands.executeCommand("workbench.action.reloadWindow");
+      }
     }),
     vscode.commands.registerCommand("codexAccounts.refreshQuota", async (item?: CodexAccountRecord) => {
       const copy = getCommandCopy();
@@ -96,17 +117,36 @@ export function registerCommands(
 
       await refreshSingleQuota(repo, view, account.id);
     }),
-    vscode.commands.registerCommand("codexAccounts.refreshAllQuotas", async () => {
+    vscode.commands.registerCommand("codexAccounts.refreshAllQuotas", async (options?: { silent?: boolean }) => {
       const copy = getCommandCopy();
       const accounts = await repo.listAccounts();
-      await withProgress(copy.progressRefreshAll, async (progress) => {
+      const refreshAll = async (progress?: vscode.Progress<{ message?: string; increment?: number }>) => {
         for (const [index, account] of accounts.entries()) {
-          progress.report({ message: copy.refreshingStep(index + 1, accounts.length, account.email) });
-          await refreshSingleQuota(repo, view, account.id, false);
+          progress?.report({ message: copy.refreshingStep(index + 1, accounts.length, account.email) });
+          if (options?.silent) {
+            await refreshSingleQuotaSafely(repo, view, account.id);
+            continue;
+          }
+          await refreshSingleQuota(repo, view, account.id, {
+            announce: false,
+            forceRefresh: true,
+            refreshView: false,
+            warnQuota: false
+          });
         }
-      });
+      };
+
+      if (options?.silent) {
+        await refreshAll();
+      } else {
+        await withProgress(copy.progressRefreshAll, refreshAll);
+      }
+
       view.refresh();
-      void vscode.window.showInformationMessage(copy.refreshedCount(accounts.length));
+      await maybeWarnForActiveQuota(repo);
+      if (!options?.silent) {
+        void vscode.window.showInformationMessage(copy.refreshedCount(accounts.length));
+      }
     }),
     vscode.commands.registerCommand("codexAccounts.removeAccount", async (item?: CodexAccountRecord) => {
       const copy = getCommandCopy();
@@ -156,7 +196,7 @@ export function registerCommands(
       if (!account) {
         return;
       }
-      openDetailsPanel(context, account);
+      openDetailsPanel(context, repo, account);
     }),
     vscode.commands.registerCommand("codexAccounts.openCodexHome", async () => {
       const codexHome = getCodexHome();
@@ -168,6 +208,38 @@ export function registerCommands(
   );
 }
 
+async function handleCodexAppRestartPreference(): Promise<void> {
+  const state = await getCodexAppState();
+  if (!state.installed || !state.running) {
+    return;
+  }
+
+  const config = vscode.workspace.getConfiguration("codexAccounts");
+  const currentMode = config.get<string>(CODEX_APP_RESTART_MODE);
+  const copy = getCodexAppRestartCopy();
+
+  let mode = currentMode;
+  if (mode !== "auto" && mode !== "manual") {
+    const choice = await vscode.window.showInformationMessage(copy.preferenceMessage, copy.auto, copy.manual);
+    if (!choice) {
+      return;
+    }
+
+    mode = choice === copy.auto ? "auto" : "manual";
+    await config.update(CODEX_APP_RESTART_MODE, mode, vscode.ConfigurationTarget.Global);
+  }
+
+  if (mode === "auto") {
+    await restartCodexAppIfInstalled();
+    return;
+  }
+
+  const manualChoice = await vscode.window.showInformationMessage(copy.manualMessage, copy.restartNow, copy.later);
+  if (manualChoice === copy.restartNow) {
+    await restartCodexAppIfInstalled();
+  }
+}
+
 /**
  * 刷新单个账号的配额
  */
@@ -175,8 +247,12 @@ async function refreshSingleQuota(
   repo: AccountsRepository,
   view: { refresh(): void },
   accountId: string,
-  announce = true
+  options: RefreshSingleQuotaOptions = {}
 ): Promise<void> {
+  const announce = options.announce ?? true;
+  const forceRefresh = options.forceRefresh ?? announce;
+  const refreshView = options.refreshView ?? true;
+  const warnQuota = options.warnQuota ?? true;
   const account = await repo.getAccount(accountId);
   if (!account) {
     return;
@@ -187,9 +263,14 @@ async function refreshSingleQuota(
     throw createError.accountNotFound(account.email);
   }
 
-  const result = await refreshQuota(account, tokens);
+  const result = await refreshQuota(account, tokens, forceRefresh);
   await repo.updateQuota(accountId, result.quota, result.error, result.updatedTokens, result.updatedPlanType);
-  view.refresh();
+  if (refreshView) {
+    view.refresh();
+  }
+  if (warnQuota) {
+    await maybeWarnForAccount(repo, accountId);
+  }
 
   if (announce) {
     const copy = getCommandCopy();
@@ -218,9 +299,79 @@ export async function refreshImportedAccountQuota(
     throw createError.accountNotFound(account.email);
   }
 
-  const result = await refreshQuota(account, tokens);
+  const result = await refreshQuota(account, tokens, true);
   await repo.updateQuota(accountId, result.quota, result.error, result.updatedTokens, result.updatedPlanType);
+  await maybeWarnForAccount(repo, accountId);
   return result;
+}
+
+async function refreshSingleQuotaSafely(
+  repo: AccountsRepository,
+  view: { refresh(): void },
+  accountId: string
+): Promise<void> {
+  try {
+    await refreshSingleQuota(repo, view, accountId, {
+      announce: false,
+      forceRefresh: false,
+      refreshView: false,
+      warnQuota: false
+    });
+  } catch (error) {
+    const account = await repo.getAccount(accountId);
+    const label = account ? formatAccountToastLabel(account) : accountId;
+    console.warn(`[codexAccounts] auto refresh failed for ${label}:`, error);
+  }
+}
+
+async function maybeWarnForActiveQuota(repo: AccountsRepository): Promise<void> {
+  const accounts = await repo.listAccounts();
+  const active = accounts.find((account) => account.isActive);
+  if (!active) {
+    return;
+  }
+  await maybeWarnForAccount(repo, active.id);
+}
+
+async function maybeWarnForAccount(repo: AccountsRepository, accountId: string): Promise<void> {
+  const config = vscode.workspace.getConfiguration("codexAccounts");
+  if (!config.get<boolean>(QUOTA_WARNING_ENABLED)) {
+    warnedQuotaKeys.clear();
+    return;
+  }
+
+  const threshold = config.get<number>(QUOTA_WARNING_THRESHOLD, 20);
+  const showCodeReview = config.get<boolean>(SHOW_CODE_REVIEW_QUOTA, true);
+  const account = await repo.getAccount(accountId);
+  if (!account?.isActive || !account.quotaSummary) {
+    return;
+  }
+
+  const copy = getQuotaWarningCopy();
+  const checks = [
+    { label: copy.hourlyLabel, value: account.quotaSummary.hourlyPercentage },
+    { label: copy.weeklyLabel, value: account.quotaSummary.weeklyPercentage },
+    ...(showCodeReview ? [{ label: copy.reviewLabel, value: account.quotaSummary.codeReviewPercentage }] : [])
+  ];
+
+  for (const check of checks) {
+    const warnKey = `${account.id}:${check.label}:${threshold}`;
+    if (typeof check.value !== "number" || check.value > threshold) {
+      warnedQuotaKeys.delete(warnKey);
+      continue;
+    }
+
+    if (warnedQuotaKeys.has(warnKey)) {
+      continue;
+    }
+
+    warnedQuotaKeys.add(warnKey);
+    void vscode.window.showWarningMessage(
+      copy.message(formatAccountToastLabel(account), check.label, check.value, threshold),
+      { modal: true },
+      copy.dismiss
+    );
+  }
 }
 
 /**

@@ -1,0 +1,33 @@
+:root {
+  --bg-1: #1f2336;
+  --bg-2: #242a40;
+  --card: rgba(255, 255, 255, 0.05);
+  --card-strong: rgba(255, 255, 255, 0.07);
+  --line: rgba(168, 176, 255, 0.18);
+  --text: #f4f7ff;
+  --muted: #aeb6d9;
+  --accent: #8b5cf6;
+  --track: rgba(255, 255, 255, 0.11);
+  --success: #7ddc7a;
+  --warning: #fbbf24;
+  --danger: #ef4444;
+  --shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
+  --cyan: #47c7f4;
+  --cyan-soft: rgba(71, 199, 244, 0.14);
+  --bar: linear-gradient(180deg, #a78bfa, #7c3aed);
+  --bar-soft: rgba(167, 139, 250, 0.24);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(139, 92, 246, 0.22), transparent 30%),
+    radial-gradient(circle at top right, rgba(34, 197, 94, 0.12), transparent 25%),
+    linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  color: var(--text);
+  font-family: "Avenir Next", "PingFang SC", "Segoe UI", sans-serif;
+}

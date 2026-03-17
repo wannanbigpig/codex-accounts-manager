@@ -3,7 +3,7 @@ import { AccountsRepository } from "../storage";
 import { CodexAccountRecord } from "../core/types";
 import { formatRelativeReset } from "../utils/time";
 import { t } from "../utils";
-import { escapeMarkdown } from "../utils";
+import { escapeMarkdown, quotaMarkerForPercentage } from "../utils";
 
 const STATUS_BAR_ICON = "$(dashboard)";
 
@@ -17,7 +17,18 @@ export class AccountsStatusBarProvider {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.item.name = "Codex Tools Quota";
     this.item.command = "codexAccounts.showQuotaSummary";
-    this.context.subscriptions.push(this.item);
+    this.context.subscriptions.push(
+      this.item,
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (
+          event.affectsConfiguration("codexAccounts.displayLanguage") ||
+          event.affectsConfiguration("codexAccounts.quotaGreenThreshold") ||
+          event.affectsConfiguration("codexAccounts.quotaYellowThreshold")
+        ) {
+          void this.refresh();
+        }
+      })
+    );
   }
 
   async refresh(): Promise<void> {
@@ -72,17 +83,18 @@ function buildTooltip(active: CodexAccountRecord, accounts: CodexAccountRecord[]
 }
 
 function renderAccountPanel(account: CodexAccountRecord, current: boolean): string {
+  const _t = t();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
   const plan = (account.planType ?? "team").toUpperCase();
   const header = current
-    ? `**${escapeMarkdown(title)}**  当前 · ${escapeMarkdown(plan)}`
+    ? `**${escapeMarkdown(title)}**  ${escapeMarkdown(_t("account.current"))} · ${escapeMarkdown(plan)}`
     : `**${escapeMarkdown(title)}**  ${escapeMarkdown(plan)}`;
 
   const lines = [
     header,
-    renderMetricRow("5h", account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime),
-    renderMetricRow("Week", account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime),
-    renderMetricRow("Review", account.quotaSummary?.codeReviewPercentage, account.quotaSummary?.codeReviewResetTime)
+    renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime),
+    renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime),
+    renderMetricRow(_t("quota.review"), account.quotaSummary?.codeReviewPercentage, account.quotaSummary?.codeReviewResetTime)
   ];
 
   return `${lines.join("  \n")}\n`;
@@ -90,7 +102,7 @@ function renderAccountPanel(account: CodexAccountRecord, current: boolean): stri
 
 function renderMetricRow(label: string, percent?: number, resetAt?: number): string {
   const value = typeof percent === "number" ? `${percent}%` : "--";
-  const reset = resetAt ? `${formatRelativeReset(resetAt)} (${formatResetClock(resetAt)})` : "reset unknown";
+  const reset = resetAt ? `${formatRelativeReset(resetAt)} (${formatResetClock(resetAt)})` : t()("quota.resetUnknown");
   return `${quotaMarker(percent)} \`${padLabel(label, 5)} ${buildThinBar(percent, 10)}\` ${value.padStart(6, " ")}  ${escapeMarkdown(reset)}`;
 }
 
@@ -116,14 +128,5 @@ function formatResetClock(resetAt: number): string {
 }
 
 function quotaMarker(value?: number): string {
-  if (typeof value !== "number") {
-    return "⚪";
-  }
-  if (value >= 60) {
-    return "🟢";
-  }
-  if (value >= 20) {
-    return "🟡";
-  }
-  return "🔴";
+  return quotaMarkerForPercentage(value);
 }

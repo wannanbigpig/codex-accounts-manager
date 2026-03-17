@@ -1,8 +1,15 @@
+import * as vscode from "vscode";
+
 /**
  * UI 工具模块
  *
  * 提供通用的 UI 渲染工具函数
  */
+
+export interface QuotaColorThresholds {
+  green: number;
+  yellow: number;
+}
 
 /**
  * HTML 转义 - 用于 Webview 内容安全
@@ -31,16 +38,53 @@ export function escapeHtmlAttr(value: string): string {
  * @returns 十六进制颜色代码
  */
 export function colorForPercentage(value?: number): string {
+  const thresholds = getQuotaColorThresholds();
+  return colorForPercentageWithThresholds(value, thresholds);
+}
+
+export function colorForPercentageWithThresholds(value: number | undefined, thresholds: QuotaColorThresholds): string {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return "#7ddc7a";
   }
-  if (value >= 60) {
+  if (value >= thresholds.green) {
     return "#7ddc7a";
   }
-  if (value >= 20) {
+  if (value >= thresholds.yellow) {
     return "#fbbf24";
   }
   return "#ef4444";
+}
+
+export function quotaMarkerForPercentage(value?: number): string {
+  const thresholds = getQuotaColorThresholds();
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "⚪";
+  }
+  if (value >= thresholds.green) {
+    return "🟢";
+  }
+  if (value >= thresholds.yellow) {
+    return "🟡";
+  }
+  return "🔴";
+}
+
+export function getQuotaColorThresholds(): QuotaColorThresholds {
+  const config = vscode.workspace.getConfiguration("codexAccounts");
+  const green = config.get<number>("quotaGreenThreshold", 60);
+  const yellow = config.get<number>("quotaYellowThreshold", 20);
+  return normalizeQuotaColorThresholds(green, yellow);
+}
+
+export function normalizeQuotaColorThresholds(green: number, yellow: number): QuotaColorThresholds {
+  const safeYellowBase = Number.isFinite(yellow) ? Math.max(0, Math.min(99, yellow)) : 20;
+  const safeGreenBase = Number.isFinite(green) ? Math.max(1, Math.min(100, green)) : 60;
+  const safeYellow = Math.min(safeYellowBase, safeGreenBase - 10);
+  const safeGreen = Math.max(safeGreenBase, safeYellow + 10);
+  return {
+    green: safeGreen,
+    yellow: safeYellow
+  };
 }
 
 /**

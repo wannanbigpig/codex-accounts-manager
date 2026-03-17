@@ -81,7 +81,8 @@ export function extractClaims(idToken: string, accessToken?: string): DecodedAut
       readString(idAuth, "organization_id") ??
       readString(idAuth, "chatgpt_organization_id") ??
       readString(idAuth, "org_id"),
-    organizations
+    organizations,
+    loginAt: readLoginEpochMs(idPayload, accessPayload)
   };
 }
 
@@ -110,4 +111,35 @@ export function isTokenExpired(token: string, skewSeconds = 60): boolean {
     return false;
   }
   return exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+}
+
+function readLoginEpochMs(
+  idPayload: Record<string, unknown>,
+  accessPayload?: Record<string, unknown>
+): number | undefined {
+  const candidates = [
+    idPayload["pwd_auth_time"],
+    accessPayload?.["pwd_auth_time"],
+    idPayload["auth_time"],
+    accessPayload?.["auth_time"],
+    idPayload["iat"],
+    accessPayload?.["iat"]
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeEpochMs(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeEpochMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return value > 1_000_000_000_000 ? Math.floor(value) : Math.floor(value * 1000);
 }

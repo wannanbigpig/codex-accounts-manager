@@ -4,7 +4,7 @@ English · [简体中文](README.md)
 
 VS Code extension for managing multiple Codex accounts, viewing quota usage, and switching the active global `auth.json`.
 
-![Version](https://img.shields.io/badge/version-0.0.1-blue)
+![Version](https://img.shields.io/badge/version-0.0.3-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
 ![License](https://img.shields.io/github/license/wannanbigpig/codex-tools)
 ![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-tools?style=flat)
@@ -14,7 +14,7 @@ VS Code extension for managing multiple Codex accounts, viewing quota usage, and
 
 Manage multiple Codex accounts inside VS Code, inspect quota usage, switch the active global account, and monitor key quota data from the status bar.
 
-**Features:** quota dashboard, multi-account management, OAuth sign-in, current `auth.json` import, single/all quota refresh, status bar monitoring, details panel, bilingual UI.
+**Features:** quota dashboard, multi-account management, OAuth sign-in, first-run local account detection and binding, immediate quota refresh after import, cross-window account sync, Codex App auto-restart, status bar monitoring, details panel, bilingual UI, and extension-level language override.
 
 **Language:** follows the current VS Code display language. Currently supports Simplified Chinese and English.
 
@@ -36,10 +36,26 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 ### Multi-Account Management
 
 - Add a new account through OAuth
+- Detect an existing local Codex `auth.json` when no account has been saved yet
+- Bind the detected local account into the extension with one click
 - Import the currently active local Codex `auth.json`
+- Refresh quota immediately after local bind or import
 - Store multiple accounts locally
 - Switch the active account with one click
 - Remove accounts you no longer use
+
+### Cross-Window Sync
+
+- Watch global `auth.json` changes
+- Automatically sync the active account when another VS Code window switches accounts
+- Prompt the current window to reload when an external account switch is detected
+
+### Codex App Integration
+
+- Detect whether Codex App is installed when switching accounts
+- Automatically restart Codex App if it is already running
+- Skip restart if the desktop app is installed but not currently running
+- Currently supports common macOS, Windows, and Linux install/process patterns
 
 ### Quota Visibility
 
@@ -62,6 +78,7 @@ Each account can show:
 - Automatically follows the current VS Code display language
 - Supports Simplified Chinese and English
 - Dashboard copy, prompts, and interaction text switch with the editor language
+- You can also force this extension to use Simplified Chinese or English without changing the rest of VS Code
 
 ### Details Panel
 
@@ -74,13 +91,40 @@ Open a per-account details panel to inspect:
 
 ---
 
+## Settings
+
+You can change these directly from the settings button in the top-right corner of the dashboard, or from VS Code Settings by searching for `codexAccounts`.
+
+- `Language`
+  - `Auto (follow VS Code)`, `Simplified Chinese`, `English`
+  - Only affects codex-tools dashboard copy and prompt text
+- `Codex App Restart Policy`
+  - `Restart automatically`: restart Codex App on account switch if it is already running
+  - `Ask every time`: let you confirm each restart manually
+- `Automatic Quota Refresh`
+  - Can be disabled, or set to `5 / 10 / 15 / 30 / 60` minutes
+  - Defaults to `15` minutes
+  - When disabled, no timed refresh runs
+- `Codex App Launch Path`
+  - Optional custom desktop app path
+  - Leave empty to use auto-detection
+- `Dashboard Display`
+  - Choose whether to show the `Code Review` quota
+- `Quota Warning`
+  - Enable or disable low-quota alerts
+  - When enabled, choose a threshold of `10 / 20 / 30 / 40 / 50%`
+  - After refresh, the extension shows a localized warning when the active account drops below the configured threshold
+
+---
+
 ## Usage
 
 1. Install the extension
-2. Run `Codex Accounts: Add Account via OAuth`
-3. Or run `Codex Accounts: Import Current auth.json`
-4. Run `Codex Accounts: Show Quota Summary`
-5. Refresh quotas, switch accounts, inspect details, and manage status bar visibility from the dashboard
+2. On first launch, if a local Codex `auth.json` already exists, the extension can bind it and refresh quota immediately
+3. Run `Codex Accounts: Add Account via OAuth`
+4. Or run `Codex Accounts: Import Current auth.json`
+5. Run `Codex Accounts: Show Quota Summary`
+6. Refresh quotas, switch accounts, inspect details, and manage status bar visibility from the dashboard
 
 ---
 
@@ -141,6 +185,9 @@ npx @vscode/vsce package
 
 - Account data is stored locally
 - Switching accounts updates the machine-wide active Codex `auth.json`
+- Quota is refreshed immediately after local account bind/import
+- External account changes from another window are detected automatically
+- Codex App restart only happens when the desktop app is already running
 - Quota visibility depends on the data returned by the current Codex session
 
 ---

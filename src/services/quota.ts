@@ -9,11 +9,14 @@
  */
 
 import { CodexAccountRecord, CodexQuotaErrorInfo, CodexQuotaSummary, CodexTokens, CodexUsageResponse } from "../core/types";
-import { refreshTokens } from "../auth/oauth";
+import { needsRefresh, refreshTokens } from "../auth/oauth";
 import { extractClaims } from "../utils/jwt";
+import { logNetworkEvent } from "../utils/debug";
 
 /** 配额缓存失效时间 (毫秒) - 避免短时间内重复刷新 */
 const QUOTA_CACHE_TTL_MS = 30000; // 30 秒
+
+const QUOTA_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 
 /** 配额缓存接口 */
 interface QuotaCacheEntry {
@@ -21,12 +24,13 @@ interface QuotaCacheEntry {
   summary: CodexQuotaSummary;
   /** 缓存时间戳 */
   timestamp: number;
-  /** 账号 ID */
-  accountId: string;
 }
 
 /** 内存缓存 */
-let quotaCache: QuotaCacheEntry | null = null;
+const quotaCache = new Map<string, QuotaCacheEntry>();
+
+/** 同账号并发刷新复用 */
+const inflightQuotaRefreshes = new Map<string, Promise<QuotaRefreshResult>>();
 
 export interface QuotaRefreshResult {
   quota?: CodexQuotaSummary;
@@ -48,74 +52,88 @@ export async function refreshQuota(
   tokens: CodexTokens,
   forceRefresh = false
 ): Promise<QuotaRefreshResult> {
-  // 检查缓存（如果非强制刷新）
-  if (!forceRefresh && quotaCache) {
-    const age = Date.now() - quotaCache.timestamp;
-    if (age < QUOTA_CACHE_TTL_MS && quotaCache.accountId === account.id) {
-      return { quota: quotaCache.summary };
+  if (!forceRefresh) {
+    const cached = quotaCache.get(account.id);
+    if (cached) {
+      if (Date.now() - cached.timestamp < QUOTA_CACHE_TTL_MS) {
+        return { quota: cached.summary };
+      }
+      quotaCache.delete(account.id);
     }
   }
 
-  let effectiveTokens = tokens;
+  const inflight = inflightQuotaRefreshes.get(account.id);
+  if (inflight) {
+    return inflight;
+  }
 
-  // 检查是否需要刷新令牌
-  if (await shouldRefresh(tokens)) {
-    if (!tokens.refreshToken) {
-      return { error: buildError("Token expired and no refresh token is available") };
+  const refreshTask = (async (): Promise<QuotaRefreshResult> => {
+    let effectiveTokens = tokens;
+
+    if (needsRefresh(tokens.accessToken)) {
+      if (!tokens.refreshToken) {
+        return { error: buildError("Token expired and no refresh token is available") };
+      }
+      effectiveTokens = await refreshTokens(tokens.refreshToken);
+      effectiveTokens.accountId = effectiveTokens.accountId ?? account.accountId;
     }
-    effectiveTokens = await refreshTokens(tokens.refreshToken);
-    effectiveTokens.accountId = effectiveTokens.accountId ?? account.accountId;
+
+    const accountId = account.accountId ?? extractClaims(effectiveTokens.idToken, effectiveTokens.accessToken).accountId;
+
+    const headers = new Headers({
+      Authorization: `Bearer ${effectiveTokens.accessToken}`,
+      Accept: "application/json"
+    });
+    if (accountId) {
+      headers.set("ChatGPT-Account-Id", accountId);
+    }
+
+    const response = await fetch(QUOTA_USAGE_URL, {
+      method: "GET",
+      headers
+    });
+
+    const raw = await response.text();
+    logNetworkEvent("quota", {
+      accountId,
+      status: response.status,
+      ok: response.ok,
+      url: QUOTA_USAGE_URL,
+      bodyPreview: raw.slice(0, 1000)
+    });
+    if (!response.ok) {
+      return { error: buildError(extractErrorMessage(response.status, raw)), updatedTokens: effectiveTokens };
+    }
+
+    const usage = JSON.parse(raw) as CodexUsageResponse;
+    const quotaSummary = parseUsage(usage);
+
+    quotaCache.set(account.id, {
+      summary: quotaSummary,
+      timestamp: Date.now()
+    });
+
+    return {
+      quota: quotaSummary,
+      updatedTokens: effectiveTokens,
+      updatedPlanType: usage.plan_type
+    };
+  })();
+
+  inflightQuotaRefreshes.set(account.id, refreshTask);
+  try {
+    return await refreshTask;
+  } finally {
+    if (inflightQuotaRefreshes.get(account.id) === refreshTask) {
+      inflightQuotaRefreshes.delete(account.id);
+    }
   }
-
-  const accountId = account.accountId ?? extractClaims(effectiveTokens.idToken, effectiveTokens.accessToken).accountId;
-
-  const headers = new Headers({
-    Authorization: `Bearer ${effectiveTokens.accessToken}`,
-    Accept: "application/json"
-  });
-  if (accountId) {
-    headers.set("ChatGPT-Account-Id", accountId);
-  }
-
-  const response = await fetch("https://chatgpt.com/backend-api/wham/usage", {
-    method: "GET",
-    headers
-  });
-
-  const raw = await response.text();
-  if (!response.ok) {
-    return { error: buildError(extractErrorMessage(response.status, raw)), updatedTokens: effectiveTokens };
-  }
-
-  const usage = JSON.parse(raw) as CodexUsageResponse;
-  const quotaSummary = parseUsage(usage, raw);
-
-  // 更新缓存
-  quotaCache = {
-    summary: quotaSummary,
-    timestamp: Date.now(),
-    accountId: account.id
-  };
-
-  return {
-    quota: quotaSummary,
-    updatedTokens: effectiveTokens,
-    updatedPlanType: usage.plan_type
-  };
-}
-
-/**
- * 判断是否需要刷新令牌
- */
-async function shouldRefresh(tokens: CodexTokens): Promise<boolean> {
-  const { needsRefresh } = await import("../auth/oauth");
-  return needsRefresh(tokens.accessToken);
 }
 
 /**
  * 解析配额使用量数据
  */
-function parseUsage(usage: CodexUsageResponse, raw: string): CodexQuotaSummary {
+function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
   const primary = usage.rate_limit?.primary_window;
   const secondary = usage.rate_limit?.secondary_window;
   const codeReviewPrimary = usage.code_review_rate_limit?.primary_window;
@@ -133,7 +151,7 @@ function parseUsage(usage: CodexUsageResponse, raw: string): CodexQuotaSummary {
     codeReviewResetTime: normalizeReset(codeReviewPrimary?.reset_at, codeReviewPrimary?.reset_after_seconds),
     codeReviewWindowMinutes: normalizeWindow(codeReviewPrimary?.limit_window_seconds),
     codeReviewWindowPresent: Boolean(codeReviewPrimary),
-    rawData: JSON.parse(raw) as unknown
+    rawData: usage
   };
 }
 

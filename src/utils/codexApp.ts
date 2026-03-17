@@ -4,6 +4,7 @@ import * as path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { setTimeout as delay } from "timers/promises";
+import * as vscode from "vscode";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,23 +41,42 @@ const WINDOWS_PROCESS_CANDIDATES = ["Codex.exe"];
 const LINUX_PROCESS_CANDIDATES = ["codex"];
 
 export async function restartCodexAppIfInstalled(): Promise<boolean> {
-  const launcher = await findInstalledCodexApp();
-  if (!launcher) {
-    return false;
-  }
-
-  const wasRunning = await isCodexAppRunning();
-  if (!wasRunning) {
+  const state = await getCodexAppState();
+  if (!state.installed || !state.running || !state.launcherPath) {
     return false;
   }
 
   await forceStopCodexProcesses();
   await delay(800);
-  await launchCodexApp(launcher);
+  await launchCodexApp(state.launcherPath);
   return true;
 }
 
+export async function getCodexAppState(): Promise<{
+  installed: boolean;
+  running: boolean;
+  launcherPath?: string;
+}> {
+  const launcherPath = await findInstalledCodexApp();
+  if (!launcherPath) {
+    return { installed: false, running: false };
+  }
+
+  const running = await isCodexAppRunning();
+  return { installed: true, running, launcherPath };
+}
+
 async function findInstalledCodexApp(): Promise<string | undefined> {
+  const customPath = vscode.workspace.getConfiguration("codexAccounts").get<string>("codexAppPath")?.trim();
+  if (customPath) {
+    try {
+      await fs.access(customPath);
+      return customPath;
+    } catch {
+      // Fall back to built-in detection when the custom path is invalid.
+    }
+  }
+
   const candidates = getAppCandidates();
   for (const candidate of candidates) {
     try {

@@ -12,6 +12,7 @@
 import { CodexTokens } from "../core/types";
 import { extractClaims } from "../utils/jwt";
 import { APIError } from "../core/errors";
+import { logNetworkEvent } from "../utils/debug";
 
 /**
  * 远程账号档案信息
@@ -58,6 +59,13 @@ export async function fetchRemoteAccountProfile(tokens: CodexTokens): Promise<Re
   });
 
   const raw = await response.text();
+  logNetworkEvent("profile", {
+    accountId,
+    status: response.status,
+    ok: response.ok,
+    url: ACCOUNT_CHECK_URL,
+    bodyPreview: raw.slice(0, 1000)
+  });
   if (!response.ok) {
     throw new APIError(`Account profile API returned ${response.status}: ${raw.slice(0, 200)}`, {
       statusCode: response.status,

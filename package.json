@@ -21,6 +21,99 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Codex Accounts",
+      "properties": {
+        "codexAccounts.codexAppRestartMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "default": "manual",
+          "markdownDescription": "How to handle Codex App restart when switching accounts and the desktop app is already running. `auto` restarts it automatically, `manual` asks you to click restart each time."
+        },
+        "codexAccounts.displayLanguage": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "zh",
+            "en"
+          ],
+          "default": "auto",
+          "markdownDescription": "Language used by codex-tools. `auto` follows the current VS Code display language, `zh` forces Simplified Chinese, and `en` forces English."
+        },
+        "codexAccounts.autoRefreshMinutes": {
+          "type": "number",
+          "enum": [
+            0,
+            5,
+            10,
+            15,
+            30,
+            60
+          ],
+          "default": 0,
+          "markdownDescription": "Automatically refresh saved account quotas every N minutes. Set to `0` to disable."
+        },
+        "codexAccounts.codexAppPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional custom path to the Codex desktop app. If empty, the extension uses built-in platform-specific detection."
+        },
+        "codexAccounts.showCodeReviewQuota": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show Code Review quota in the dashboard."
+        },
+        "codexAccounts.quotaWarningEnabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show a warning notification when the active account quota drops below the configured threshold."
+        },
+        "codexAccounts.quotaWarningThreshold": {
+          "type": "number",
+          "enum": [
+            10,
+            20,
+            30,
+            40,
+            50
+          ],
+          "default": 20,
+          "markdownDescription": "Quota warning threshold percentage for the active account."
+        },
+        "codexAccounts.quotaGreenThreshold": {
+          "type": "number",
+          "enum": [
+            50,
+            60,
+            70,
+            80,
+            90
+          ],
+          "default": 60,
+          "markdownDescription": "Quota percentage at or above this value is shown in green."
+        },
+        "codexAccounts.quotaYellowThreshold": {
+          "type": "number",
+          "enum": [
+            10,
+            20,
+            30,
+            40,
+            50
+          ],
+          "default": 20,
+          "markdownDescription": "Quota percentage at or above this value is shown in yellow. Values below this threshold are shown in red."
+        },
+        "codexAccounts.debugNetwork": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable sanitized network debug logs for codex-tools requests in the `Codex Accounts Network` output channel."
+        }
+      }
+    },
     "commands": [
       {
         "command": "codexAccounts.addAccount",

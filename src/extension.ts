@@ -12,9 +12,11 @@ import * as vscode from "vscode";
 import { refreshImportedAccountQuota, registerCommands } from "./commands";
 import { getAuthJsonPath, readAuthFile } from "./codex";
 import { AccountsRepository } from "./storage";
-import { AccountsStatusBarProvider } from "./ui";
-import { getExternalAuthSyncCopy, getLocalAccountCopy } from "./utils";
+import { AccountsStatusBarProvider, refreshDetailsPanel, refreshQuotaSummaryPanel } from "./ui";
+import { getExternalAuthSyncCopy, getLocalAccountCopy, registerDebugOutput } from "./utils";
 import { getErrorMessage } from "./core";
+
+let activeRepo: AccountsRepository | undefined;
 
 /**
  * 激活扩展
@@ -22,19 +24,25 @@ import { getErrorMessage } from "./core";
  * @param context - 扩展上下文
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  registerDebugOutput(context);
   const repo = new AccountsRepository(context);
+  activeRepo = repo;
   await repo.init();
+  context.subscriptions.push({ dispose: () => repo.dispose() });
 
   const statusBar = new AccountsStatusBarProvider(context, repo);
 
   const refreshers = {
     refresh(): void {
       void statusBar.refresh();
+      void refreshDetailsPanel();
+      void refreshQuotaSummaryPanel();
     }
   };
 
   registerCommands(context, repo, refreshers);
   registerAuthFileWatcher(context, repo, refreshers);
+  registerAutoRefreshScheduler(context);
   await promptImportLocalAccountIfNeeded(repo, refreshers);
   await statusBar.refresh();
 }
@@ -43,7 +51,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  * 停用扩展
  */
 export function deactivate(): void {
-  // 清理资源（如果需要）
+  activeRepo?.dispose();
+  activeRepo = undefined;
 }
 
 /**
@@ -120,6 +129,7 @@ function registerAuthFileWatcher(
 
   watcher.onDidChange(scheduleSync, null, context.subscriptions);
   watcher.onDidCreate(scheduleSync, null, context.subscriptions);
+  watcher.onDidDelete(scheduleSync, null, context.subscriptions);
   context.subscriptions.push(watcher, {
     dispose(): void {
       if (syncTimer) {
@@ -164,4 +174,41 @@ async function syncActiveAccountFromExternalChange(
   } finally {
     markHidden();
   }
+}
+
+function registerAutoRefreshScheduler(context: vscode.ExtensionContext): void {
+  let timer: NodeJS.Timeout | undefined;
+
+  const applySchedule = (): void => {
+    if (timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+
+    const minutes = vscode.workspace.getConfiguration("codexAccounts").get<number>("autoRefreshMinutes", 0);
+    if (!minutes || minutes <= 0) {
+      return;
+    }
+
+    timer = setInterval(() => {
+      void vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", { silent: true });
+    }, minutes * 60 * 1000);
+  };
+
+  applySchedule();
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("codexAccounts.autoRefreshMinutes")) {
+        applySchedule();
+      }
+    }),
+    {
+      dispose(): void {
+        if (timer) {
+          clearInterval(timer);
+        }
+      }
+    }
+  );
 }
