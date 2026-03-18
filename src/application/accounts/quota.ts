@@ -12,7 +12,8 @@ const AUTO_SWITCH_WEEKLY_THRESHOLD = "autoSwitchWeeklyThreshold";
 const QUOTA_WARNING_ENABLED = "quotaWarningEnabled";
 const QUOTA_WARNING_THRESHOLD = "quotaWarningThreshold";
 const SHOW_CODE_REVIEW_QUOTA = "showCodeReviewQuota";
-const warnedQuotaKeys = new Set<string>();
+const MAX_WARNINGS_PER_CYCLE = 3;
+const quotaWarningCounts = new Map<string, number>();
 
 export type RefreshView = {
   refresh(): void;
@@ -167,7 +168,7 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
 export async function maybeWarnForAccount(repo: AccountsRepository, accountId: string): Promise<void> {
   const config = vscode.workspace.getConfiguration("codexAccounts");
   if (!config.get<boolean>(QUOTA_WARNING_ENABLED, false)) {
-    warnedQuotaKeys.clear();
+    quotaWarningCounts.clear();
     return;
   }
 
@@ -188,15 +189,16 @@ export async function maybeWarnForAccount(repo: AccountsRepository, accountId: s
   for (const check of checks) {
     const warnKey = `${account.id}:${check.label}:${threshold}`;
     if (typeof check.value !== "number" || check.value > threshold) {
-      warnedQuotaKeys.delete(warnKey);
+      quotaWarningCounts.delete(warnKey);
       continue;
     }
 
-    if (warnedQuotaKeys.has(warnKey)) {
+    const warningCount = quotaWarningCounts.get(warnKey) ?? 0;
+    if (warningCount >= MAX_WARNINGS_PER_CYCLE) {
       continue;
     }
 
-    warnedQuotaKeys.add(warnKey);
+    quotaWarningCounts.set(warnKey, warningCount + 1);
     void vscode.window
       .showWarningMessage(
         copy.message(formatAccountToastLabel(account), check.label, check.value, threshold),

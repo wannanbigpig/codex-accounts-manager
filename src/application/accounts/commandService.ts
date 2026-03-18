@@ -10,7 +10,8 @@ import {
   getCodexAppState,
   getCommandCopy,
   logNetworkEvent,
-  restartCodexAppIfInstalled
+  restartCodexAppIfInstalled,
+  t
 } from "../../utils";
 import { openDetailsPanel } from "../../ui";
 import { openQuotaSummaryPanel } from "../../ui/quotaSummary";
@@ -95,7 +96,7 @@ export class AccountsCommandService {
 
   async switchAccount(item?: CodexAccountRecord): Promise<void> {
     const copy = getCommandCopy();
-    const account = item ?? (await this.pickAccount(copy.pickActivateAccount));
+    const account = item ?? (await this.pickSwitchAccount(copy.pickActivateAccount));
     if (!account) {
       return;
     }
@@ -287,6 +288,31 @@ export class AccountsCommandService {
     return selected?.account;
   }
 
+  private async pickSwitchAccount(placeHolder: string): Promise<CodexAccountRecord | undefined> {
+    const accounts = await this.repo.listAccounts();
+    if (!accounts.length) {
+      void vscode.window.showInformationMessage(getCommandCopy().noAccounts);
+      return undefined;
+    }
+
+    const _t = t();
+    const selected = await vscode.window.showQuickPick(
+      accounts.map((account) => ({
+        label: account.email,
+        description: buildSwitchPickerDescription(account, _t("account.current")),
+        detail: buildSwitchPickerDetail(account, _t("quota.hourly"), _t("quota.weekly")),
+        account
+      })),
+      {
+        placeHolder,
+        matchOnDescription: true,
+        matchOnDetail: true
+      }
+    );
+
+    return selected?.account;
+  }
+
   private async withProgress(
     title: string,
     callback: (progress: vscode.Progress<{ message?: string; increment?: number }>) => Promise<void>
@@ -300,4 +326,24 @@ export class AccountsCommandService {
       callback
     );
   }
+}
+
+function buildSwitchPickerDescription(account: CodexAccountRecord, currentLabel: string): string {
+  const parts = [account.accountName?.trim(), account.planType?.trim()];
+  if (account.isActive) {
+    parts.push(currentLabel);
+  }
+
+  return parts.filter(Boolean).join(" · ");
+}
+
+function buildSwitchPickerDetail(account: CodexAccountRecord, hourlyLabel: string, weeklyLabel: string): string {
+  return [
+    `${hourlyLabel} ${formatQuickPickQuota(account.quotaSummary?.hourlyPercentage)}`,
+    `${weeklyLabel} ${formatQuickPickQuota(account.quotaSummary?.weeklyPercentage)}`
+  ].join(" · ");
+}
+
+function formatQuickPickQuota(value: number | undefined): string {
+  return typeof value === "number" ? `${value}%` : "--";
 }

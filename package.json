@@ -107,14 +107,14 @@
         "codexAccounts.quotaWarningEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Show a warning notification when the active account quota drops below the configured threshold."
+          "markdownDescription": "Show a warning notification when the active account's 5-hour or weekly remaining quota drops below the configured threshold."
         },
         "codexAccounts.quotaWarningThreshold": {
           "type": "number",
           "minimum": 5,
           "maximum": 90,
           "default": 20,
-          "markdownDescription": "Quota warning threshold percentage for the active account."
+          "markdownDescription": "Warning threshold percentage shared by the active account's 5-hour and weekly remaining quota."
         },
         "codexAccounts.quotaGreenThreshold": {
           "type": "number",
