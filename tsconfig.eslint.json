@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.webview.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": [
+    "vite.webview.config.mts",
+    "webview-src/**/*.ts",
+    "webview-src/**/*.tsx",
+    "src/domain/dashboard/**/*.ts",
+    "src/localization/**/*.ts"
+  ]
+}
