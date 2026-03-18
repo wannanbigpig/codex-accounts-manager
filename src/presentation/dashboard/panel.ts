@@ -56,6 +56,8 @@ class DashboardPanelController {
     } else {
       this.panel.title = panelTitle;
       this.panel.iconPath = iconUri;
+      this.webviewReady = false;
+      this.panel.webview.html = this.renderShell(this.panel.webview);
       this.panel.reveal(vscode.ViewColumn.Beside, false);
     }
 

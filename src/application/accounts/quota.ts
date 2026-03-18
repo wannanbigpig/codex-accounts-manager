@@ -92,12 +92,13 @@ export async function refreshImportedAccountQuota(
 export async function refreshSingleQuotaSafely(
   repo: AccountsRepository,
   view: RefreshView,
-  accountId: string
+  accountId: string,
+  options: { forceRefresh?: boolean } = {}
 ): Promise<void> {
   try {
     await refreshSingleQuota(repo, view, accountId, {
       announce: false,
-      forceRefresh: false,
+      forceRefresh: options.forceRefresh ?? false,
       refreshView: false,
       warnQuota: false
     });

@@ -132,14 +132,16 @@ export class AccountsCommandService {
     await refreshSingleQuota(this.repo, this.view, account.id);
   }
 
-  async refreshAllQuotas(options?: { silent?: boolean }): Promise<void> {
+  async refreshAllQuotas(options?: { silent?: boolean; forceRefresh?: boolean }): Promise<void> {
     const copy = getCommandCopy();
     const accounts = await this.repo.listAccounts();
     const refreshAll = async (progress?: vscode.Progress<{ message?: string; increment?: number }>) => {
       for (const [index, account] of accounts.entries()) {
         progress?.report({ message: copy.refreshingStep(index + 1, accounts.length, account.email) });
         if (options?.silent) {
-          await refreshSingleQuotaSafely(this.repo, this.view, account.id);
+          await refreshSingleQuotaSafely(this.repo, this.view, account.id, {
+            forceRefresh: options.forceRefresh
+          });
           continue;
         }
         await refreshSingleQuota(this.repo, this.view, account.id, {

@@ -60,6 +60,7 @@ export function openDetailsPanel(
       if (
         !detailsPanel ||
         (!event.affectsConfiguration("codexAccounts.displayLanguage") &&
+          !event.affectsConfiguration("codexAccounts.showCodeReviewQuota") &&
           !event.affectsConfiguration("codexAccounts.quotaGreenThreshold") &&
           !event.affectsConfiguration("codexAccounts.quotaYellowThreshold"))
       ) {
@@ -168,6 +169,7 @@ function renderHtml(
   }
 ): string {
   const quota = account.quotaSummary;
+  const showCodeReview = vscode.workspace.getConfiguration("codexAccounts").get<boolean>("showCodeReviewQuota", true);
   const accountStatus = account.isActive ? copy.currentlyActive : copy.savedAccount;
   const provider = prettyAuthProvider(account.authProvider);
   const identityName = account.accountName?.trim() ?? account.email;
@@ -231,11 +233,15 @@ function renderHtml(
         <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.weeklyPercentage)};">${renderQuotaValue(quota?.weeklyPercentage)}</div>
         <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.weeklyResetTime, copy)}</div>
       </div>
-      <div class="quota-card">
+      ${
+        showCodeReview
+          ? `<div class="quota-card">
         <h2>${escapeHtml(copy.reviewQuota)}</h2>
         <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.codeReviewPercentage)};">${renderQuotaValue(quota?.codeReviewPercentage)}</div>
         <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.codeReviewResetTime, copy)}</div>
-      </div>
+      </div>`
+          : ""
+      }
     </section>
 
     <section class="usage-card">

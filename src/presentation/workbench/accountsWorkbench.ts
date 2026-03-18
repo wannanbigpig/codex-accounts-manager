@@ -187,12 +187,15 @@ export class AccountsWorkbench {
         return;
       }
 
-      timer = setInterval(
-        () => {
-          void vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", { silent: true });
-        },
-        minutes * 60 * 1000
-      );
+      const runAutoRefresh = (): void => {
+        void vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", {
+          silent: true,
+          forceRefresh: true
+        });
+      };
+
+      timer = setInterval(runAutoRefresh, minutes * 60 * 1000);
+      runAutoRefresh();
     };
 
     applySchedule();

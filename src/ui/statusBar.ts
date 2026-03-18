@@ -22,6 +22,7 @@ export class AccountsStatusBarProvider {
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (
           event.affectsConfiguration("codexAccounts.displayLanguage") ||
+          event.affectsConfiguration("codexAccounts.showCodeReviewQuota") ||
           event.affectsConfiguration("codexAccounts.quotaGreenThreshold") ||
           event.affectsConfiguration("codexAccounts.quotaYellowThreshold")
         ) {
@@ -64,6 +65,7 @@ function buildStatusText(account: CodexAccountRecord): string {
 
 function buildTooltip(active: CodexAccountRecord, accounts: CodexAccountRecord[]): vscode.MarkdownString {
   const _t = t();
+  const showCodeReview = vscode.workspace.getConfiguration("codexAccounts").get<boolean>("showCodeReviewQuota", true);
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = true;
   const selectedExtras = accounts
@@ -72,17 +74,17 @@ function buildTooltip(active: CodexAccountRecord, accounts: CodexAccountRecord[]
     .slice(0, 2);
 
   md.appendMarkdown(`**${_t("panel.dashboard.title")}**\n\n`);
-  md.appendMarkdown(renderAccountPanel(active, true));
+  md.appendMarkdown(renderAccountPanel(active, true, showCodeReview));
   for (const account of selectedExtras) {
     md.appendMarkdown(`\n`);
-    md.appendMarkdown(renderAccountPanel(account, false));
+    md.appendMarkdown(renderAccountPanel(account, false, showCodeReview));
   }
 
   md.appendMarkdown(`\n\n---\n${_t("status.tooltip")}`);
   return md;
 }
 
-function renderAccountPanel(account: CodexAccountRecord, current: boolean): string {
+function renderAccountPanel(account: CodexAccountRecord, current: boolean, showCodeReview: boolean): string {
   const _t = t();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
   const plan = (account.planType ?? "team").toUpperCase();
@@ -93,9 +95,12 @@ function renderAccountPanel(account: CodexAccountRecord, current: boolean): stri
   const lines = [
     header,
     renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime),
-    renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime),
-    renderMetricRow(_t("quota.review"), account.quotaSummary?.codeReviewPercentage, account.quotaSummary?.codeReviewResetTime)
+    renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime)
   ];
+
+  if (showCodeReview) {
+    lines.push(renderMetricRow(_t("quota.review"), account.quotaSummary?.codeReviewPercentage, account.quotaSummary?.codeReviewResetTime));
+  }
 
   return `${lines.join("  \n")}\n`;
 }
