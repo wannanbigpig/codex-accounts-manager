@@ -153,8 +153,8 @@ export async function refreshTokens(refreshToken: string): Promise<CodexTokens> 
   };
 }
 
-export function needsRefresh(accessToken: string): boolean {
-  return isTokenExpired(accessToken);
+export function needsRefresh(accessToken: string, skewSeconds = 60): boolean {
+  return isTokenExpired(accessToken, skewSeconds);
 }
 
 export function prepareOAuthLoginSession(port = CALLBACK_PORT): PreparedOAuthLoginSession {

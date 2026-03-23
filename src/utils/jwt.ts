@@ -11,6 +11,19 @@
 import { DecodedAuthClaims } from "../core/types";
 import { AuthError, ErrorCode } from "../core/errors";
 
+type JwtPayloadCacheEntry = {
+  payload: Record<string, unknown>;
+  expiresAt?: number;
+};
+
+type ClaimsCacheEntry = {
+  claims: DecodedAuthClaims;
+  expiresAt?: number;
+};
+
+const jwtPayloadCache = new Map<string, JwtPayloadCacheEntry>();
+const claimsCache = new Map<string, ClaimsCacheEntry>();
+
 /**
  * Base64URL 解码
  */
@@ -28,12 +41,23 @@ function decodeBase64Url(segment: string): string {
  * @throws 当令牌格式无效时
  */
 export function decodeJwtPayload(token: string): Record<string, unknown> {
+  pruneExpiredCacheEntries();
+  const cached = jwtPayloadCache.get(token);
+  if (cached) {
+    return cached.payload;
+  }
+
   const parts = token.split(".");
   if (parts.length < 2 || !parts[1]) {
     throw new AuthError("Invalid JWT token format", { code: ErrorCode.AUTH_TOKEN_INVALID });
   }
 
-  return JSON.parse(decodeBase64Url(parts[1])) as Record<string, unknown>;
+  const payload = JSON.parse(decodeBase64Url(parts[1])) as Record<string, unknown>;
+  const expiresAt = readExpiryEpochMs(payload);
+  if (expiresAt) {
+    jwtPayloadCache.set(token, { payload, expiresAt });
+  }
+  return payload;
 }
 
 /**
@@ -52,6 +76,13 @@ function readString(record: Record<string, unknown>, key: string): string | unde
  * @returns 解码后的认证声明
  */
 export function extractClaims(idToken: string, accessToken?: string): DecodedAuthClaims {
+  pruneExpiredCacheEntries();
+  const cacheKey = buildClaimsCacheKey(idToken, accessToken);
+  const cached = claimsCache.get(cacheKey);
+  if (cached) {
+    return cached.claims;
+  }
+
   const idPayload = decodeJwtPayload(idToken);
   const accessPayload = accessToken ? decodeJwtPayload(accessToken) : undefined;
   const idAuth = (idPayload["https://api.openai.com/auth"] ?? {}) as Record<string, unknown>;
@@ -65,7 +96,7 @@ export function extractClaims(idToken: string, accessToken?: string): DecodedAut
   const emailValue = idPayload["email"];
   const authProviderValue = idPayload["auth_provider"];
 
-  return {
+  const claims = {
     email: typeof emailValue === "string" ? emailValue : undefined,
     userId:
       readString(idAuth, "chatgpt_user_id") ??
@@ -88,6 +119,16 @@ export function extractClaims(idToken: string, accessToken?: string): DecodedAut
     organizations,
     loginAt: readLoginEpochMs(idPayload, accessPayload)
   };
+
+  const expiryCandidates = [readExpiryEpochMs(idPayload), readExpiryEpochMs(accessPayload)].filter(
+    (value): value is number => typeof value === "number"
+  );
+  const expiresAt = expiryCandidates.length ? Math.min(...expiryCandidates) : undefined;
+  if (typeof expiresAt === "number") {
+    claimsCache.set(cacheKey, { claims, expiresAt });
+  }
+
+  return claims;
 }
 
 /**
@@ -146,4 +187,32 @@ function normalizeEpochMs(value: unknown): number | undefined {
   }
 
   return value > 1_000_000_000_000 ? Math.floor(value) : Math.floor(value * 1000);
+}
+
+function buildClaimsCacheKey(idToken: string, accessToken?: string): string {
+  return `${idToken}::${accessToken ?? ""}`;
+}
+
+function readExpiryEpochMs(payload?: Record<string, unknown>): number | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  const expValue = payload["exp"];
+  return typeof expValue === "number" && Number.isFinite(expValue) && expValue > 0
+    ? Math.floor(expValue * 1000)
+    : undefined;
+}
+
+function pruneExpiredCacheEntries(): void {
+  const now = Date.now();
+  pruneMap(jwtPayloadCache, now);
+  pruneMap(claimsCache, now);
+}
+
+function pruneMap<T extends { expiresAt?: number }>(map: Map<string, T>, now: number): void {
+  for (const [key, entry] of map.entries()) {
+    if (entry.expiresAt && entry.expiresAt <= now) {
+      map.delete(key);
+    }
+  }
 }

@@ -39,6 +39,7 @@ export class AccountsStatusBarProvider {
     const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
     const primary = accounts.find((item) => item.id === currentWindowAccountId) ?? active ?? accounts[0];
     const _t = t();
+    const showCodeReview = vscode.workspace.getConfiguration("codexAccounts").get<boolean>("showCodeReviewQuota", true);
 
     if (!primary) {
       this.item.text = `${STATUS_BAR_ICON} Codex Accounts Manager`;
@@ -52,7 +53,7 @@ export class AccountsStatusBarProvider {
     }
 
     this.item.text = buildStatusText(primary);
-    this.item.tooltip = buildTooltip(primary, active, accounts);
+    this.item.tooltip = buildTooltip(primary, active, accounts, showCodeReview);
     this.item.show();
   }
 }
@@ -69,10 +70,10 @@ function buildStatusText(account: CodexAccountRecord): string {
 function buildTooltip(
   primary: CodexAccountRecord,
   active: CodexAccountRecord | undefined,
-  accounts: CodexAccountRecord[]
+  accounts: CodexAccountRecord[],
+  showCodeReview: boolean
 ): vscode.MarkdownString {
   const _t = t();
-  const showCodeReview = vscode.workspace.getConfiguration("codexAccounts").get<boolean>("showCodeReviewQuota", true);
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = true;
   const fallbackActive = active && active.id !== primary.id ? [active] : [];

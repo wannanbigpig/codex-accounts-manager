@@ -144,6 +144,37 @@ export class AccountsRepository {
     }
   }
 
+  async updateTokens(accountId: string, tokens: CodexTokens): Promise<CodexAccountRecord> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+
+    if (!account) {
+      throw createError.accountNotFound(accountId);
+    }
+
+    const effectiveTokens = {
+      ...tokens,
+      accountId: tokens.accountId ?? account.accountId
+    };
+
+    await this.secretStore.setTokens(accountId, effectiveTokens);
+
+    if (effectiveTokens.accountId && effectiveTokens.accountId !== account.accountId) {
+      account.accountId = effectiveTokens.accountId;
+      account.updatedAt = Date.now();
+      this.writeIndex(index);
+    }
+
+    if (account.isActive) {
+      await writeAuthFile({
+        ...effectiveTokens,
+        accountId: account.accountId ?? effectiveTokens.accountId
+      });
+    }
+
+    return account;
+  }
+
   /**
    * 插入或更新账号 (从令牌)
    *

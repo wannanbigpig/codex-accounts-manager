@@ -2,6 +2,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { refreshImportedAccountQuota, registerCommands } from "../../commands";
 import { getAuthJsonPath, readAuthFile } from "../../codex";
+import { needsRefresh, refreshTokens } from "../../auth/oauth";
 import { AccountsRepository } from "../../storage";
 import { refreshQuotaSummaryPanel } from "../dashboard";
 import { AccountsStatusBarProvider, refreshDetailsPanel } from "../../ui";
@@ -10,10 +11,14 @@ import { getErrorMessage } from "../../core";
 import { readCurrentAuthAccountStorageId } from "../../utils/accountIdentity";
 import { needsWindowReloadForAccount, setCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
 
+const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const TOKEN_REFRESH_SKEW_SECONDS = 10 * 60;
+
 export class AccountsWorkbench {
   private readonly repo: AccountsRepository;
   private readonly statusBar: AccountsStatusBarProvider;
   private lastObservedAuthIdentity?: string;
+  private lastRefreshSignature?: string;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.repo = new AccountsRepository(context);
@@ -30,9 +35,7 @@ export class AccountsWorkbench {
 
     const flushRefresh = (): void => {
       refreshTimer = undefined;
-      void this.statusBar.refresh();
-      void refreshDetailsPanel();
-      void refreshQuotaSummaryPanel();
+      void this.refreshViewsIfNeeded();
     };
 
     const refreshers = {
@@ -59,12 +62,27 @@ export class AccountsWorkbench {
     registerCommands(this.context, this.repo, refreshers);
     this.registerAuthFileWatcher(refreshers);
     this.registerAutoRefreshScheduler();
+    this.registerTokenRefreshScheduler(refreshers);
     await this.promptImportCurrentAccountIfNeeded(refreshers);
     await this.statusBar.refresh();
   }
 
   dispose(): void {
     this.repo.dispose();
+  }
+
+  private async refreshViewsIfNeeded(): Promise<void> {
+    const signature = await this.buildRefreshSignature();
+    if (signature === this.lastRefreshSignature) {
+      return;
+    }
+
+    this.lastRefreshSignature = signature;
+    await Promise.all([
+      this.statusBar.refresh(),
+      refreshDetailsPanel(),
+      refreshQuotaSummaryPanel()
+    ]);
   }
 
   private async promptImportCurrentAccountIfNeeded(view: { refresh(): void }): Promise<void> {
@@ -212,6 +230,49 @@ export class AccountsWorkbench {
     return readCurrentAuthAccountStorageId();
   }
 
+  private async buildRefreshSignature(): Promise<string> {
+    const accounts = await this.repo.listAccounts();
+    return JSON.stringify({
+      observed: this.lastObservedAuthIdentity,
+      accounts: accounts.map((account) => ({
+        id: account.id,
+        email: account.email,
+        accountName: account.accountName,
+        planType: account.planType,
+        accountId: account.accountId,
+        organizationId: account.organizationId,
+        userId: account.userId,
+        isActive: account.isActive,
+        showInStatusBar: Boolean(account.showInStatusBar),
+        lastQuotaAt: account.lastQuotaAt,
+        updatedAt: account.updatedAt,
+        quotaError: account.quotaError
+          ? {
+              code: account.quotaError.code,
+              message: account.quotaError.message,
+              timestamp: account.quotaError.timestamp
+            }
+          : undefined,
+        quotaSummary: account.quotaSummary
+          ? {
+              hourlyPercentage: account.quotaSummary.hourlyPercentage,
+              hourlyResetTime: account.quotaSummary.hourlyResetTime,
+              hourlyWindowMinutes: account.quotaSummary.hourlyWindowMinutes,
+              hourlyWindowPresent: account.quotaSummary.hourlyWindowPresent,
+              weeklyPercentage: account.quotaSummary.weeklyPercentage,
+              weeklyResetTime: account.quotaSummary.weeklyResetTime,
+              weeklyWindowMinutes: account.quotaSummary.weeklyWindowMinutes,
+              weeklyWindowPresent: account.quotaSummary.weeklyWindowPresent,
+              codeReviewPercentage: account.quotaSummary.codeReviewPercentage,
+              codeReviewResetTime: account.quotaSummary.codeReviewResetTime,
+              codeReviewWindowMinutes: account.quotaSummary.codeReviewWindowMinutes,
+              codeReviewWindowPresent: account.quotaSummary.codeReviewWindowPresent
+            }
+          : undefined
+      }))
+    });
+  }
+
   private registerAutoRefreshScheduler(): void {
     let timer: NodeJS.Timeout | undefined;
 
@@ -253,5 +314,53 @@ export class AccountsWorkbench {
         }
       }
     );
+  }
+
+  private registerTokenRefreshScheduler(view: { refresh(): void }): void {
+    let timer: NodeJS.Timeout | undefined;
+    let inFlight = false;
+
+    const runTokenRefreshSweep = async (): Promise<void> => {
+      if (inFlight) {
+        return;
+      }
+
+      inFlight = true;
+      try {
+        const accounts = await this.repo.listAccounts();
+        for (const account of accounts) {
+          try {
+            const tokens = await this.repo.getTokens(account.id);
+            if (!tokens?.accessToken || !tokens.refreshToken || !needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
+              continue;
+            }
+
+            const refreshed = await refreshTokens(tokens.refreshToken);
+            await this.repo.updateTokens(account.id, {
+              ...refreshed,
+              accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
+            });
+          } catch (error) {
+            console.warn(`[codexAccounts] background token refresh failed for ${account.email}:`, error);
+          }
+        }
+      } finally {
+        inFlight = false;
+        view.refresh();
+      }
+    };
+
+    timer = setInterval(() => {
+      void runTokenRefreshSweep();
+    }, TOKEN_REFRESH_CHECK_INTERVAL_MS);
+    void runTokenRefreshSweep();
+
+    this.context.subscriptions.push({
+      dispose(): void {
+        if (timer) {
+          clearInterval(timer);
+        }
+      }
+    });
   }
 }

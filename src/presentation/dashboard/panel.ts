@@ -25,6 +25,7 @@ class DashboardPanelController {
   private configWatcher: vscode.Disposable | undefined;
   private webviewReady = false;
   private publishTimer: NodeJS.Timeout | undefined;
+  private lastPublishedStateSignature: string | undefined;
   private readonly oauthSessions = new Map<string, PreparedOAuthLoginSession>();
 
   constructor(
@@ -53,6 +54,7 @@ class DashboardPanelController {
         this.configWatcher?.dispose();
         this.configWatcher = undefined;
         this.oauthSessions.clear();
+        this.lastPublishedStateSignature = undefined;
         this.panel = undefined;
         this.webviewReady = false;
       });
@@ -104,6 +106,7 @@ class DashboardPanelController {
     }
 
     this.webviewReady = false;
+    this.lastPublishedStateSignature = undefined;
     this.panel.webview.html = this.renderShell(this.panel.webview);
   }
 
@@ -117,6 +120,18 @@ class DashboardPanelController {
       .toString();
     const state = await buildDashboardState(this.repo, this.settingsStore, logoUri);
     this.panel.title = state.panelTitle;
+    const signature = JSON.stringify({
+      lang: state.lang,
+      panelTitle: state.panelTitle,
+      brandSub: state.brandSub,
+      settings: state.settings,
+      accounts: state.accounts
+    });
+    if (signature === this.lastPublishedStateSignature) {
+      return;
+    }
+
+    this.lastPublishedStateSignature = signature;
 
     const message: DashboardHostMessage = {
       type: "dashboard:snapshot",

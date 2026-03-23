@@ -30,6 +30,7 @@ import {
 
 const CODEX_APP_RESTART_MODE = "codexAppRestartMode";
 const CODEX_APP_RESTART_ENABLED = "codexAppRestartEnabled";
+const REFRESH_ALL_CONCURRENCY = 4;
 
 export class AccountsCommandService {
   constructor(
@@ -211,21 +212,23 @@ export class AccountsCommandService {
     const copy = getCommandCopy();
     const accounts = await this.repo.listAccounts();
     const refreshAll = async (progress?: vscode.Progress<{ message?: string; increment?: number }>) => {
-      for (const [index, account] of accounts.entries()) {
-        progress?.report({ message: copy.refreshingStep(index + 1, accounts.length, account.email) });
+      let started = 0;
+      await runWithConcurrencyLimit(accounts, REFRESH_ALL_CONCURRENCY, async (account) => {
+        started += 1;
+        progress?.report({ message: copy.refreshingStep(started, accounts.length, account.email) });
         if (options?.silent) {
           await refreshSingleQuotaSafely(this.repo, this.view, account.id, {
             forceRefresh: options.forceRefresh
           });
-          continue;
+          return;
         }
         await refreshSingleQuota(this.repo, this.view, account.id, {
           announce: false,
-          forceRefresh: true,
+          forceRefresh: options?.forceRefresh ?? true,
           refreshView: false,
           warnQuota: false
         });
-      }
+      });
     };
 
     if (options?.silent) {
@@ -417,6 +420,31 @@ function buildSwitchPickerDescription(account: CodexAccountRecord, currentLabel:
   }
 
   return parts.filter(Boolean).join(" · ");
+}
+
+async function runWithConcurrencyLimit<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+
+  let cursor = 0;
+  const runnerCount = Math.min(limit, items.length);
+  await Promise.allSettled(
+    Array.from({ length: runnerCount }, async () => {
+      while (cursor < items.length) {
+        const index = cursor++;
+        const item = items[index];
+        if (typeof index !== "number" || !item) {
+          return;
+        }
+        await worker(item, index);
+      }
+    })
+  );
 }
 
 function buildSwitchPickerDetail(account: CodexAccountRecord, hourlyLabel: string, weeklyLabel: string): string {

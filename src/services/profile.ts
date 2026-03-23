@@ -11,9 +11,18 @@
 
 import { CodexTokens } from "../core/types";
 import { extractClaims } from "../utils/jwt";
-import { fetchWithTimeout } from "../utils/network";
+import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
 import { APIError } from "../core/errors";
 import { logNetworkEvent } from "../utils/debug";
+
+const PROFILE_CACHE_TTL_MS = 60_000;
+
+type ProfileCacheEntry = {
+  profile: RemoteAccountProfile;
+  expiresAt: number;
+};
+
+const profileCache = new Map<string, ProfileCacheEntry>();
 
 /**
  * 远程账号档案信息
@@ -45,6 +54,13 @@ export async function fetchRemoteAccountProfile(tokens: CodexTokens): Promise<Re
 
   const claims = extractClaims(tokens.idToken, tokens.accessToken);
   const accountId = tokens.accountId ?? claims.accountId;
+  pruneProfileCache();
+  const cacheKey = buildProfileCacheKey(tokens.accessToken, accountId);
+  const cached = profileCache.get(cacheKey);
+  if (cached) {
+    return cached.profile;
+  }
+
   const primary = await requestAccountProfile(ACCOUNT_CHECK_URL, tokens.accessToken, accountId);
   const shouldRetry =
     accountId &&
@@ -59,6 +75,10 @@ export async function fetchRemoteAccountProfile(tokens: CodexTokens): Promise<Re
     if (fallback.ok) {
       const fallbackProfile = parseAccountProfile(fallback.payload, accountId, claims.organizationId);
       if (fallbackProfile) {
+        profileCache.set(cacheKey, {
+          profile: fallbackProfile,
+          expiresAt: Date.now() + PROFILE_CACHE_TTL_MS
+        });
         return fallbackProfile;
       }
     }
@@ -71,7 +91,14 @@ export async function fetchRemoteAccountProfile(tokens: CodexTokens): Promise<Re
     });
   }
 
-  return parseAccountProfile(primary.payload, accountId, claims.organizationId);
+  const profile = parseAccountProfile(primary.payload, accountId, claims.organizationId);
+  if (profile) {
+    profileCache.set(cacheKey, {
+      profile,
+      expiresAt: Date.now() + PROFILE_CACHE_TTL_MS
+    });
+  }
+  return profile;
 }
 
 async function requestAccountProfile(url: string, accessToken: string, accountId?: string): Promise<{
@@ -80,40 +107,48 @@ async function requestAccountProfile(url: string, accessToken: string, accountId
   raw: string;
   payload: Record<string, unknown>;
 }> {
-  const headers = new Headers({
-    Authorization: `Bearer ${accessToken}`,
-    Accept: "application/json"
-  });
+  return retryWithBackoff(
+    async () => {
+      const headers = new Headers({
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json"
+      });
 
-  if (accountId) {
-    headers.set("ChatGPT-Account-Id", accountId);
-  }
+      if (accountId) {
+        headers.set("ChatGPT-Account-Id", accountId);
+      }
 
-  const response = await fetchWithTimeout(
-    url,
-    {
-      method: "GET",
-      headers
+      const response = await fetchWithTimeout(
+        url,
+        {
+          method: "GET",
+          headers
+        },
+        8000,
+        "Account profile request"
+      );
+
+      const raw = await response.text();
+      logNetworkEvent("profile", {
+        accountId,
+        status: response.status,
+        ok: response.ok,
+        url,
+        bodyPreview: raw.slice(0, 1000)
+      });
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        raw,
+        payload: parseProfilePayload(raw)
+      };
     },
-    8000,
-    "Account profile request"
+    {
+      shouldRetryError: isRetriableNetworkError,
+      shouldRetryResult: (result) => !result.ok && isRetriableHttpStatus(result.status)
+    }
   );
-
-  const raw = await response.text();
-  logNetworkEvent("profile", {
-    accountId,
-    status: response.status,
-    ok: response.ok,
-    url,
-    bodyPreview: raw.slice(0, 1000)
-  });
-
-  return {
-    ok: response.ok,
-    status: response.status,
-    raw,
-    payload: parseProfilePayload(raw)
-  };
 }
 
 function parseProfilePayload(raw: string): Record<string, unknown> {
@@ -253,4 +288,17 @@ function readField(record: Record<string, unknown> | undefined, keys: string[]):
     }
   }
   return undefined;
+}
+
+function buildProfileCacheKey(accessToken: string, accountId?: string): string {
+  return `${accessToken}::${accountId ?? ""}`;
+}
+
+function pruneProfileCache(): void {
+  const now = Date.now();
+  for (const [key, entry] of profileCache.entries()) {
+    if (entry.expiresAt <= now) {
+      profileCache.delete(key);
+    }
+  }
 }

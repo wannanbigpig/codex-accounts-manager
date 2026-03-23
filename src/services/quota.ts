@@ -12,7 +12,7 @@ import { CodexAccountRecord, CodexQuotaErrorInfo, CodexQuotaSummary, CodexTokens
 import { needsRefresh, refreshTokens } from "../auth/oauth";
 import { extractClaims } from "../utils/jwt";
 import { logNetworkEvent } from "../utils/debug";
-import { fetchWithTimeout } from "../utils/network";
+import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
 
 /** 配额缓存失效时间 (毫秒) - 避免短时间内重复刷新 */
 const QUOTA_CACHE_TTL_MS = 30000; // 30 秒
@@ -53,6 +53,7 @@ export async function refreshQuota(
   tokens: CodexTokens,
   forceRefresh = false
 ): Promise<QuotaRefreshResult> {
+  pruneQuotaCache();
   if (!forceRefresh) {
     const cached = quotaCache.get(account.id);
     if (cached) {
@@ -127,39 +128,47 @@ async function requestQuotaUsage(accessToken: string, accountId?: string): Promi
   raw: string;
   payload: CodexUsageResponse;
 }> {
-  const headers = new Headers({
-    Authorization: `Bearer ${accessToken}`,
-    Accept: "application/json"
-  });
-  if (accountId) {
-    headers.set("ChatGPT-Account-Id", accountId);
-  }
+  return retryWithBackoff(
+    async () => {
+      const headers = new Headers({
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json"
+      });
+      if (accountId) {
+        headers.set("ChatGPT-Account-Id", accountId);
+      }
 
-  const response = await fetchWithTimeout(
-    QUOTA_USAGE_URL,
-    {
-      method: "GET",
-      headers
+      const response = await fetchWithTimeout(
+        QUOTA_USAGE_URL,
+        {
+          method: "GET",
+          headers
+        },
+        15000,
+        "Quota request"
+      );
+
+      const raw = await response.text();
+      logNetworkEvent("quota", {
+        accountId,
+        status: response.status,
+        ok: response.ok,
+        url: QUOTA_USAGE_URL,
+        bodyPreview: raw.slice(0, 1000)
+      });
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        raw,
+        payload: parseUsagePayload(raw)
+      };
     },
-    15000,
-    "Quota request"
+    {
+      shouldRetryError: isRetriableNetworkError,
+      shouldRetryResult: (result) => !result.ok && isRetriableHttpStatus(result.status)
+    }
   );
-
-  const raw = await response.text();
-  logNetworkEvent("quota", {
-    accountId,
-    status: response.status,
-    ok: response.ok,
-    url: QUOTA_USAGE_URL,
-    bodyPreview: raw.slice(0, 1000)
-  });
-
-  return {
-    ok: response.ok,
-    status: response.status,
-    raw,
-    payload: parseUsagePayload(raw)
-  };
 }
 
 function parseUsagePayload(raw: string): CodexUsageResponse {
@@ -310,4 +319,13 @@ function buildError(message: string): CodexQuotaErrorInfo {
     message,
     timestamp: Math.floor(Date.now() / 1000)
   };
+}
+
+function pruneQuotaCache(): void {
+  const now = Date.now();
+  for (const [key, entry] of quotaCache.entries()) {
+    if (now - entry.timestamp >= QUOTA_CACHE_TTL_MS) {
+      quotaCache.delete(key);
+    }
+  }
 }
