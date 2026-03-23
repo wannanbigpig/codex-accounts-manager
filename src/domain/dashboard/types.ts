@@ -40,6 +40,8 @@ export interface DashboardCopy {
   addAccount: string;
   importCurrent: string;
   refreshAll: string;
+  shareToken: string;
+  shareTokenDisabledTip: string;
   dashboardTitle: string;
   dashboardSub: string;
   empty: string;
@@ -47,6 +49,11 @@ export interface DashboardCopy {
   noActiveAccountSub: string;
   primaryAccount: string;
   current: string;
+  disabledTag: string;
+  authErrorTag: string;
+  quotaErrorTag: string;
+  reauthorizeBtn: string;
+  reloadBtn: string;
   hourlyLabel: string;
   weeklyLabel: string;
   reviewLabel: string;
@@ -63,6 +70,33 @@ export interface DashboardCopy {
   detailsBtn: string;
   removeBtn: string;
   settingsTitle: string;
+  addAccountModalTitle: string;
+  shareTokenModalTitle: string;
+  oauthTab: string;
+  importJsonTab: string;
+  authorizationLink: string;
+  copyLink: string;
+  openInBrowser: string;
+  manualCallbackLabel: string;
+  manualCallbackPlaceholder: string;
+  authorizedContinue: string;
+  oauthReadyHint: string;
+  jsonPreview: string;
+  copyJson: string;
+  copySuccess: string;
+  downloadJson: string;
+  importJson: string;
+  importJsonPlaceholder: string;
+  importJsonSubmit: string;
+  importJsonHint: string;
+  importJsonExamplesSummary: string;
+  importJsonExamplesHint: string;
+  importJsonSingleExampleLabel: string;
+  importJsonBatchExampleLabel: string;
+  importJsonChooseFile: string;
+  importJsonFileReadError: string;
+  shareSelectedCount: string;
+  closeModal: string;
   showSensitive: string;
   hideSensitive: string;
   codexAppRestartTitle: string;
@@ -129,6 +163,8 @@ export interface DashboardCopy {
   languageEn: string;
   languageNote: string;
   statusShort: string;
+  selectAccount: string;
+  deselectAccount: string;
   statusToggleTip: string;
   statusToggleTipChecked: string;
   statusLimitTip: string;
@@ -164,6 +200,7 @@ export interface DashboardAccountViewModel {
   canToggleStatusBar: boolean;
   statusToggleTitle: string;
   hasQuota402: boolean;
+  quotaIssueKind?: "disabled" | "auth" | "quota";
   lastQuotaAt?: number;
   metrics: DashboardMetricViewModel[];
 }
@@ -182,12 +219,45 @@ export type DashboardActionName =
   | "addAccount"
   | "importCurrent"
   | "refreshAll"
+  | "shareTokens"
+  | "copyText"
+  | "openExternalUrl"
+  | "downloadJsonFile"
+  | "importSharedJson"
+  | "prepareOAuthSession"
+  | "completeOAuthSession"
   | "refreshView"
+  | "reloadPrompt"
+  | "reauthorize"
   | "details"
   | "switch"
   | "refresh"
   | "remove"
   | "toggleStatusBar";
+
+export interface DashboardOAuthSessionDescriptor {
+  sessionId: string;
+  authUrl: string;
+  redirectUri: string;
+}
+
+export interface DashboardActionPayload {
+  accountIds?: string[];
+  jsonText?: string;
+  text?: string;
+  url?: string;
+  filename?: string;
+  oauthSessionId?: string;
+  callbackUrl?: string;
+}
+
+export interface DashboardActionResultPayload {
+  sharedJson?: string;
+  oauthSession?: DashboardOAuthSessionDescriptor;
+  importedCount?: number;
+  importedEmails?: string[];
+  email?: string;
+}
 
 export type DashboardHostMessage =
   | {
@@ -200,6 +270,8 @@ export type DashboardHostMessage =
       action: DashboardActionName;
       accountId?: string;
       status: "completed" | "failed";
+      payload?: DashboardActionResultPayload;
+      error?: string;
     };
 
 export type DashboardClientMessage =
@@ -209,6 +281,7 @@ export type DashboardClientMessage =
       requestId: string;
       action: DashboardActionName;
       accountId?: string;
+      payload?: DashboardActionPayload;
     }
   | {
       type: "dashboard:setting";

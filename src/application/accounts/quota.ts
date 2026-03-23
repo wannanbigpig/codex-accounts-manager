@@ -3,6 +3,7 @@ import { createError } from "../../core";
 import { CodexAccountRecord } from "../../core/types";
 import { QuotaRefreshResult, refreshQuota } from "../../services";
 import { AccountsRepository } from "../../storage";
+import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
 
@@ -164,6 +165,10 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   await repo.switchAccount(next.id);
   view.markObservedAuthIdentity?.(next.id);
   view.refresh();
+
+  if (!needsWindowReloadForAccount(next.id)) {
+    return true;
+  }
 
   const copy = getDashboardCopy(getLanguage());
   const commandCopy = getCommandCopy();

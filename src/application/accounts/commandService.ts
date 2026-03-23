@@ -5,6 +5,9 @@ import { getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
 import { CodexAccountRecord } from "../../core/types";
 import { AccountsRepository } from "../../storage";
+import { buildAccountStorageId } from "../../utils/accountIdentity";
+import { extractClaims } from "../../utils/jwt";
+import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
 import {
   getCodexAppRestartCopy,
   getCodexAppState,
@@ -39,8 +42,10 @@ export class AccountsCommandService {
     const copy = getCommandCopy();
     try {
       logNetworkEvent("account.add", { step: "started" });
-      await this.withProgress(copy.progressAddAccount, async () => {
-        const tokens = await loginWithOAuth();
+      await this.withProgress(
+        copy.progressAddAccount,
+        async (_progress, cancellationToken) => {
+          const tokens = await loginWithOAuth(cancellationToken);
         logNetworkEvent("account.add", {
           step: "oauth-complete",
           hasRefreshToken: Boolean(tokens.refreshToken),
@@ -70,8 +75,17 @@ export class AccountsCommandService {
         } else {
           void vscode.window.showInformationMessage(copy.addedAndRefreshed(account.email));
         }
-      });
+        },
+        { cancellable: true }
+      );
     } catch (error) {
+      if (isOauthCancelled(error)) {
+        logNetworkEvent("account.add", {
+          step: "cancelled",
+          message: getErrorMessage(error)
+        });
+        return;
+      }
       logNetworkEvent("account.add", {
         step: "failed",
         message: getErrorMessage(error)
@@ -94,6 +108,61 @@ export class AccountsCommandService {
     });
   }
 
+  async reauthorizeAccount(item?: CodexAccountRecord): Promise<void> {
+    const copy = getCommandCopy();
+    const account = item ?? (await this.pickAccount(copy.pickRefreshAccount));
+    if (!account) {
+      return;
+    }
+
+    await this.withProgress(
+      copy.progressAddAccount,
+      async (_progress, cancellationToken) => {
+      const tokens = await loginWithOAuth(cancellationToken);
+      const claims = extractClaims(tokens.idToken, tokens.accessToken);
+      const authorizedId = claims.email
+        ? buildAccountStorageId(claims.email, claims.accountId, claims.organizationId)
+        : undefined;
+
+      if (!authorizedId || authorizedId !== account.id) {
+        void vscode.window.showWarningMessage(
+          `Authorized account does not match ${account.email}. No changes were applied.`
+        );
+        return;
+      }
+
+      const updated = await this.repo.upsertFromTokens(tokens, account.isActive);
+      if (account.isActive) {
+        await this.repo.switchAccount(updated.id);
+        this.view.markObservedAuthIdentity?.(updated.id);
+      }
+
+      const result = await refreshImportedAccountQuota(this.repo, updated.id);
+      this.view.refresh();
+
+      if (result.error) {
+        void vscode.window.showWarningMessage(copy.importedButQuotaFailed(updated.email, result.error.message));
+        return;
+      }
+
+      if (account.isActive && needsWindowReloadForAccount(updated.id)) {
+        const choice = await vscode.window.showInformationMessage(
+          copy.switchedAndAskReload(updated.email),
+          copy.reloadNow,
+          copy.later
+        );
+        if (choice === copy.reloadNow) {
+          await vscode.commands.executeCommand("workbench.action.reloadWindow");
+        }
+        return;
+      }
+
+      void vscode.window.showInformationMessage(copy.importedAndRefreshed(updated.email));
+      },
+      { cancellable: true }
+    );
+  }
+
   async switchAccount(item?: CodexAccountRecord): Promise<void> {
     const copy = getCommandCopy();
     const account = item ?? (await this.pickSwitchAccount(copy.pickActivateAccount));
@@ -113,6 +182,10 @@ export class AccountsCommandService {
 
     await this.handleCodexAppRestartPreference();
     this.view.refresh();
+
+    if (!needsWindowReloadForAccount(account.id)) {
+      return;
+    }
 
     const choice = await vscode.window.showInformationMessage(
       copy.switchedAndAskReload(account.email),
@@ -316,17 +389,25 @@ export class AccountsCommandService {
 
   private async withProgress(
     title: string,
-    callback: (progress: vscode.Progress<{ message?: string; increment?: number }>) => Promise<void>
+    callback: (
+      progress: vscode.Progress<{ message?: string; increment?: number }>,
+      token: vscode.CancellationToken
+    ) => Promise<void>,
+    options?: { cancellable?: boolean }
   ): Promise<void> {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title,
-        cancellable: false
+        cancellable: options?.cancellable ?? false
       },
       callback
     );
   }
+}
+
+function isOauthCancelled(error: unknown): boolean {
+  return getErrorMessage(error).toLowerCase().includes("cancelled");
 }
 
 function buildSwitchPickerDescription(account: CodexAccountRecord, currentLabel: string): string {
@@ -339,10 +420,12 @@ function buildSwitchPickerDescription(account: CodexAccountRecord, currentLabel:
 }
 
 function buildSwitchPickerDetail(account: CodexAccountRecord, hourlyLabel: string, weeklyLabel: string): string {
-  return [
-    `${hourlyLabel} ${formatQuickPickQuota(account.quotaSummary?.hourlyPercentage)}`,
-    `${weeklyLabel} ${formatQuickPickQuota(account.quotaSummary?.weeklyPercentage)}`
-  ].join(" · ");
+  const quota = account.quotaSummary;
+  const parts = [
+    ...(quota?.hourlyWindowPresent ? [`${hourlyLabel} ${formatQuickPickQuota(quota.hourlyPercentage)}`] : []),
+    ...(quota?.weeklyWindowPresent ? [`${weeklyLabel} ${formatQuickPickQuota(quota.weeklyPercentage)}`] : [])
+  ];
+  return parts.join(" · ");
 }
 
 function formatQuickPickQuota(value: number | undefined): string {

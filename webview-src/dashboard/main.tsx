@@ -1,6 +1,6 @@
 import { render } from "preact";
 import type { ComponentChildren } from "preact";
-import { useEffect, useReducer, useRef } from "preact/hooks";
+import { useEffect, useReducer, useRef, useState } from "preact/hooks";
 import type {
   DashboardAccountViewModel,
   DashboardActionName,
@@ -8,6 +8,7 @@ import type {
   DashboardCopy,
   DashboardHostMessage,
   DashboardMetricViewModel,
+  DashboardOAuthSessionDescriptor,
   DashboardSettingKey,
   DashboardSettings,
   DashboardState
@@ -40,6 +41,7 @@ type AppState = {
   privacyMode: boolean;
   lastEnabledAutoRefreshMinutes: number;
   now: number;
+  selectedAccountIds: string[];
   pendingActions: PendingActionRequest[];
 };
 
@@ -50,6 +52,7 @@ type AppAction =
   | { type: "toggle-privacy" }
   | { type: "settings-patch"; patch: Partial<DashboardSettings> }
   | { type: "tick"; now: number }
+  | { type: "toggle-select"; accountId: string }
   | { type: "request-action"; request: PendingActionRequest }
   | { type: "resolve-action"; requestId: string };
 
@@ -62,7 +65,14 @@ const vscodeApi =
         }
       };
 
-const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>(["addAccount", "importCurrent", "refreshAll"]);
+const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
+  "addAccount",
+  "importCurrent",
+  "refreshAll",
+  "importSharedJson",
+  "completeOAuthSession",
+  "downloadJsonFile"
+]);
 
 function createInitialState(): AppState {
   return {
@@ -70,6 +80,7 @@ function createInitialState(): AppState {
     privacyMode: false,
     lastEnabledAutoRefreshMinutes: 15,
     now: Date.now(),
+    selectedAccountIds: [],
     pendingActions: []
   };
 }
@@ -77,13 +88,26 @@ function createInitialState(): AppState {
 function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "snapshot":
+      {
+        const nextAccountIds = new Set(action.snapshot.accounts.map((account) => account.id));
+        const selectedAccountIds = state.selectedAccountIds.filter((accountId) => nextAccountIds.has(accountId));
+
+        return {
+          ...state,
+          snapshot: action.snapshot,
+          selectedAccountIds,
+          lastEnabledAutoRefreshMinutes:
+            action.snapshot.settings.autoRefreshMinutes > 0
+              ? action.snapshot.settings.autoRefreshMinutes
+              : state.lastEnabledAutoRefreshMinutes
+        };
+      }
+    case "toggle-select":
       return {
         ...state,
-        snapshot: action.snapshot,
-        lastEnabledAutoRefreshMinutes:
-          action.snapshot.settings.autoRefreshMinutes > 0
-            ? action.snapshot.settings.autoRefreshMinutes
-            : state.lastEnabledAutoRefreshMinutes
+        selectedAccountIds: state.selectedAccountIds.includes(action.accountId)
+          ? state.selectedAccountIds.filter((accountId) => accountId !== action.accountId)
+          : [...state.selectedAccountIds, action.accountId]
       };
     case "open-settings":
       return {
@@ -146,6 +170,19 @@ function reducer(state: AppState, action: AppAction): AppState {
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const actionTimeoutsRef = useRef<Map<string, number>>(new Map());
+  const copyFeedbackTimeoutRef = useRef<number | undefined>(undefined);
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [addAccountModalOpen, setAddAccountModalOpen] = useState(false);
+  const [addAccountTab, setAddAccountTab] = useState<"oauth" | "import">("oauth");
+  const [oauthSession, setOauthSession] = useState<DashboardOAuthSessionDescriptor | undefined>();
+  const [oauthCallbackUrl, setOauthCallbackUrl] = useState("");
+  const [oauthError, setOauthError] = useState<string | undefined>();
+  const [importJsonText, setImportJsonText] = useState("");
+  const [importJsonError, setImportJsonError] = useState<string | undefined>();
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareModalJson, setShareModalJson] = useState("");
+  const [sharePreviewExpanded, setSharePreviewExpanded] = useState(false);
+  const [copyFeedbackKey, setCopyFeedbackKey] = useState<string | null>(null);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<DashboardHostMessage>) => {
@@ -159,6 +196,44 @@ function App() {
           return;
         case "dashboard:action-result":
           dispatch({ type: "resolve-action", requestId: event.data.requestId });
+          if (event.data.status === "failed") {
+            if (event.data.action === "importSharedJson") {
+              setImportJsonError(event.data.error);
+            }
+            if (event.data.action === "prepareOAuthSession" || event.data.action === "completeOAuthSession") {
+              setOauthError(event.data.error);
+            }
+            return;
+          }
+
+          if (event.data.action === "shareTokens" && event.data.payload?.sharedJson) {
+            setShareModalJson(event.data.payload.sharedJson);
+            setSharePreviewExpanded(false);
+            setShareModalOpen(true);
+            return;
+          }
+
+          if (event.data.action === "prepareOAuthSession" && event.data.payload?.oauthSession) {
+            setOauthSession(event.data.payload.oauthSession);
+            setOauthError(undefined);
+            return;
+          }
+
+          if (event.data.action === "completeOAuthSession") {
+            setOauthCallbackUrl("");
+            setOauthSession(undefined);
+            setOauthError(undefined);
+            setAddAccountModalOpen(false);
+            setAddAccountTab("oauth");
+            return;
+          }
+
+          if (event.data.action === "importSharedJson") {
+            setImportJsonError(undefined);
+            setImportJsonText("");
+            setAddAccountModalOpen(false);
+            setAddAccountTab("oauth");
+          }
           return;
         default:
           return;
@@ -167,6 +242,14 @@ function App() {
 
     const onKeydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (shareModalOpen) {
+          setShareModalOpen(false);
+          return;
+        }
+        if (addAccountModalOpen) {
+          setAddAccountModalOpen(false);
+          return;
+        }
         dispatch({ type: "close-settings" });
       }
     };
@@ -179,7 +262,7 @@ function App() {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("keydown", onKeydown);
     };
-  }, []);
+  }, [addAccountModalOpen, shareModalOpen]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -222,6 +305,9 @@ function App() {
         window.clearTimeout(timeoutId);
       });
       actionTimeoutsRef.current.clear();
+      if (copyFeedbackTimeoutRef.current !== undefined) {
+        window.clearTimeout(copyFeedbackTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -237,12 +323,26 @@ function App() {
   }
 
   const activeAccount = snapshot.accounts.find((account) => account.isActive);
+  const showCopyFeedback = (key: string) => {
+    setCopyFeedbackKey(key);
+    if (copyFeedbackTimeoutRef.current !== undefined) {
+      window.clearTimeout(copyFeedbackTimeoutRef.current);
+    }
+    copyFeedbackTimeoutRef.current = window.setTimeout(() => {
+      setCopyFeedbackKey((current) => (current === key ? null : current));
+      copyFeedbackTimeoutRef.current = undefined;
+    }, 2000);
+  };
 
   const patchSettings = (patch: Partial<DashboardSettings>): void => {
     dispatch({ type: "settings-patch", patch });
   };
 
-  const sendAction = (action: DashboardActionName, accountId?: string): void => {
+  const sendAction = (
+    action: DashboardActionName,
+    accountId?: string,
+    payload?: Extract<DashboardClientMessage, { type: "dashboard:action" }>["payload"]
+  ): void => {
     const requestId = createActionRequestId();
     dispatch({
       type: "request-action",
@@ -257,7 +357,8 @@ function App() {
       type: "dashboard:action",
       action,
       accountId,
-      requestId
+      requestId,
+      payload
     });
   };
 
@@ -312,9 +413,55 @@ function App() {
   const hasGlobalPendingAction = state.pendingActions.some(
     (request) => request.accountId == null && BLOCKING_GLOBAL_ACTIONS.has(request.action)
   );
+  const selectedAccountIds = new Set(state.selectedAccountIds);
+  const selectedCount = state.selectedAccountIds.length;
   const isAccountBusy = (accountId: string): boolean =>
     hasGlobalPendingAction || state.pendingActions.some((request) => request.accountId === accountId);
   const privacyToggleLabel = state.privacyMode ? snapshot.copy.showSensitive : snapshot.copy.hideSensitive;
+  const prepareOAuthPending = isActionPending("prepareOAuthSession");
+  const completeOAuthPending = isActionPending("completeOAuthSession");
+  const importSharedPending = isActionPending("importSharedJson");
+  const sharePending = isActionPending("shareTokens");
+  const downloadSharePending = isActionPending("downloadJsonFile");
+  const maskedShareModalJson = maskSharedJson(shareModalJson);
+  const sharePreviewValue = sharePreviewExpanded ? shareModalJson : maskedShareModalJson;
+  const importSingleExample = `{
+  "tokens": {
+    "id_token": "eyJ...",
+    "access_token": "eyJ...",
+    "refresh_token": "rt_..."
+  }
+}`;
+  const importBatchExample = `[
+  {
+    "id": "codex_demo_1",
+    "email": "user@example.com",
+    "tokens": {
+      "id_token": "eyJ...",
+      "access_token": "eyJ...",
+      "refresh_token": "rt_..."
+    },
+    "created_at": 1730000000,
+    "last_used": 1730000000
+  }
+]`;
+
+  const openAddAccountModal = (): void => {
+    setAddAccountModalOpen(true);
+    setAddAccountTab("oauth");
+    setOauthSession(undefined);
+    setOauthCallbackUrl("");
+    setOauthError(undefined);
+    setImportJsonError(undefined);
+    sendAction("prepareOAuthSession");
+  };
+
+  const handleShareTokens = (): void => {
+    if (!selectedCount) {
+      return;
+    }
+    sendAction("shareTokens", undefined, { accountIds: state.selectedAccountIds });
+  };
 
   return (
     <>
@@ -376,12 +523,15 @@ function App() {
             now={state.now}
             privacyMode={state.privacyMode}
             disabled={hasGlobalPendingAction}
-            addPending={isActionPending("addAccount")}
+            addPending={prepareOAuthPending}
             importPending={isActionPending("importCurrent")}
             refreshAllPending={isActionPending("refreshAll")}
-            onAddAccount={() => sendAction("addAccount")}
+            sharePending={sharePending}
+            selectedCount={selectedCount}
+            onAddAccount={openAddAccountModal}
             onImportCurrent={() => sendAction("importCurrent")}
             onRefreshAll={() => sendAction("refreshAll")}
+            onShareTokens={handleShareTokens}
           />
         </section>
         {snapshot.accounts.length > 0 ? (
@@ -390,7 +540,14 @@ function App() {
               <div>
                 <div class="header-title header-title-with-meta" style={{ fontSize: "14px" }}>
                   {snapshot.copy.savedAccounts}
-                  <span class="header-count-badge">{formatSavedAccountsSummary(snapshot.lang, snapshot.accounts.length)}</span>
+                  <span class="header-count-badge">
+                    {formatSavedAccountsSummary(
+                      snapshot.lang,
+                      snapshot.accounts.length,
+                      snapshot.accounts.filter((account) => !account.quotaIssueKind).length,
+                      snapshot.accounts.filter((account) => Boolean(account.quotaIssueKind)).length
+                    )}
+                  </span>
                 </div>
                 <div class="header-sub">{snapshot.copy.savedAccountsSub}</div>
               </div>
@@ -406,11 +563,15 @@ function App() {
                   now={state.now}
                   privacyMode={state.privacyMode}
                   busy={isAccountBusy(account.id)}
+                  reloadPromptPending={isActionPending("reloadPrompt", account.id)}
                   switchPending={isActionPending("switch", account.id)}
+                  reauthorizePending={isActionPending("reauthorize", account.id)}
                   refreshPending={isActionPending("refresh", account.id)}
                   detailsPending={isActionPending("details", account.id)}
                   removePending={isActionPending("remove", account.id)}
                   togglePending={isActionPending("toggleStatusBar", account.id)}
+                  selected={selectedAccountIds.has(account.id)}
+                  onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
                   onAction={sendAction}
                 />
               ))}
@@ -635,6 +796,249 @@ function App() {
           </div>
         </div>
       </div>
+
+      <ModalShell
+        open={addAccountModalOpen}
+        title={snapshot.copy.addAccountModalTitle}
+        closeLabel={snapshot.copy.closeModal}
+        className="dashboard-modal-compact"
+        onClose={() => setAddAccountModalOpen(false)}
+      >
+        <div class="modal-tabs" role="tablist" aria-label={snapshot.copy.addAccountModalTitle}>
+          <button
+            class={`modal-tab ${addAccountTab === "oauth" ? "active" : ""}`}
+            type="button"
+            onClick={() => setAddAccountTab("oauth")}
+          >
+            <span class="modal-tab-icon" aria-hidden="true">
+              <GlobeIcon />
+            </span>
+            {snapshot.copy.oauthTab}
+          </button>
+          <button
+            class={`modal-tab ${addAccountTab === "import" ? "active" : ""}`}
+            type="button"
+            onClick={() => setAddAccountTab("import")}
+          >
+            <span class="modal-tab-icon" aria-hidden="true">
+              <ImportIcon />
+            </span>
+            {snapshot.copy.importJsonTab}
+          </button>
+        </div>
+        {addAccountTab === "oauth" ? (
+          <div class="modal-stack">
+            <div class="modal-field">
+              <div class="modal-label">{snapshot.copy.authorizationLink}</div>
+              <div class="modal-input-row">
+                <input
+                  class="modal-input"
+                  type="text"
+                  readOnly
+                  value={oauthSession?.authUrl ?? ""}
+                  placeholder={snapshot.copy.authorizationLink}
+                />
+                <button
+                  class={`modal-mini-btn modal-icon-btn ${copyFeedbackKey === "oauth-link" ? "is-success" : ""}`}
+                  type="button"
+                  disabled={!oauthSession?.authUrl}
+                  aria-label={copyFeedbackKey === "oauth-link" ? snapshot.copy.copySuccess : snapshot.copy.copyLink}
+                  onClick={() => {
+                    if (!oauthSession?.authUrl) {
+                      return;
+                    }
+                    sendAction("copyText", undefined, { text: oauthSession.authUrl });
+                    showCopyFeedback("oauth-link");
+                  }}
+                >
+                  {copyFeedbackKey === "oauth-link" ? <SuccessIcon /> : <CopyIcon />}
+                </button>
+              </div>
+            </div>
+            <button
+              class="modal-primary-btn"
+              type="button"
+              disabled={!oauthSession?.authUrl}
+              onClick={() => {
+                if (!oauthSession?.authUrl) {
+                  return;
+                }
+                sendAction("openExternalUrl", undefined, { url: oauthSession.authUrl });
+              }}
+            >
+              <span class="modal-btn-icon" aria-hidden="true">
+                <GlobeIcon />
+              </span>
+              {snapshot.copy.openInBrowser}
+            </button>
+            <div class="modal-field">
+              <div class="modal-label">{snapshot.copy.manualCallbackLabel}</div>
+              <div class="modal-input-row">
+                <input
+                  class="modal-input"
+                  type="text"
+                  value={oauthCallbackUrl}
+                  placeholder={snapshot.copy.manualCallbackPlaceholder}
+                  onInput={(event) => setOauthCallbackUrl(event.currentTarget.value)}
+                />
+                <button
+                  class="modal-secondary-btn"
+                  type="button"
+                  disabled={!oauthSession || !oauthCallbackUrl.trim() || completeOAuthPending}
+                  onClick={() => {
+                    if (!oauthSession) {
+                      return;
+                    }
+                    setOauthError(undefined);
+                    sendAction("completeOAuthSession", undefined, {
+                      oauthSessionId: oauthSession.sessionId,
+                      callbackUrl: oauthCallbackUrl
+                    });
+                  }}
+                >
+                  {completeOAuthPending ? "..." : snapshot.copy.authorizedContinue}
+                </button>
+              </div>
+            </div>
+            <div class="modal-note">{snapshot.copy.oauthReadyHint}</div>
+            {oauthError ? <div class="modal-error">{oauthError}</div> : null}
+          </div>
+        ) : (
+          <div class="modal-stack">
+            <div class="modal-note">{snapshot.copy.importJsonHint}</div>
+            <details class="modal-disclosure">
+              <summary>{snapshot.copy.importJsonExamplesSummary}</summary>
+              <div class="modal-disclosure-body">
+                <div class="modal-note">{snapshot.copy.importJsonExamplesHint}</div>
+                <div class="modal-example-block">
+                  <div class="modal-example-label">{snapshot.copy.importJsonSingleExampleLabel}</div>
+                  <pre class="modal-example-code">{importSingleExample}</pre>
+                </div>
+                <div class="modal-example-block">
+                  <div class="modal-example-label">{snapshot.copy.importJsonBatchExampleLabel}</div>
+                  <pre class="modal-example-code">{importBatchExample}</pre>
+                </div>
+              </div>
+            </details>
+            <input
+              ref={importFileInputRef}
+              class="modal-file-input"
+              type="file"
+              accept=".json,application/json"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (!file) {
+                  return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = () => {
+                  setImportJsonError(undefined);
+                  setImportJsonText(typeof reader.result === "string" ? reader.result : "");
+                };
+                reader.onerror = () => {
+                  setImportJsonError(snapshot.copy.importJsonFileReadError);
+                };
+                reader.readAsText(file);
+                event.currentTarget.value = "";
+              }}
+            />
+            <textarea
+              class="modal-textarea"
+              value={importJsonText}
+              placeholder={snapshot.copy.importJsonPlaceholder}
+              onInput={(event) => setImportJsonText(event.currentTarget.value)}
+            />
+            {importJsonError ? <div class="modal-error">{importJsonError}</div> : null}
+            <div class="modal-actions">
+              <button
+                class="modal-secondary-btn"
+                type="button"
+                onClick={() => importFileInputRef.current?.click()}
+              >
+                <span class="modal-btn-icon" aria-hidden="true">
+                  <ImportIcon />
+                </span>
+                {snapshot.copy.importJsonChooseFile}
+              </button>
+              <button
+                class="modal-primary-btn"
+                type="button"
+                disabled={!importJsonText.trim() || importSharedPending}
+                onClick={() => {
+                  setImportJsonError(undefined);
+                  sendAction("importSharedJson", undefined, { jsonText: importJsonText });
+                }}
+                >
+                  {!importSharedPending ? (
+                    <span class="modal-btn-icon" aria-hidden="true">
+                      <ImportIcon />
+                    </span>
+                  ) : null}
+                  {importSharedPending ? "..." : snapshot.copy.importJsonSubmit}
+                </button>
+            </div>
+          </div>
+        )}
+      </ModalShell>
+
+      <ModalShell
+        open={shareModalOpen}
+        title={snapshot.copy.shareTokenModalTitle}
+        closeLabel={snapshot.copy.closeModal}
+        className="dashboard-modal-wide"
+        onClose={() => setShareModalOpen(false)}
+      >
+        <div class="modal-stack">
+          <div class="modal-toolbar">
+            <button
+              class={`modal-toolbar-btn ${sharePreviewExpanded ? "active" : ""}`}
+              type="button"
+              onClick={() => setSharePreviewExpanded((current) => !current)}
+            >
+              <span class="modal-btn-icon" aria-hidden="true">
+                {sharePreviewExpanded ? <EyeOffIcon /> : <EyeIcon />}
+              </span>
+              {snapshot.copy.jsonPreview}
+            </button>
+            <button
+              class={`modal-toolbar-btn ${copyFeedbackKey === "share-json" ? "is-success" : ""}`}
+              type="button"
+              onClick={() => {
+                sendAction("copyText", undefined, { text: shareModalJson });
+                showCopyFeedback("share-json");
+              }}
+            >
+              <span class="modal-btn-icon" aria-hidden="true">
+                {copyFeedbackKey === "share-json" ? <SuccessIcon /> : <CopyIcon />}
+              </span>
+              {copyFeedbackKey === "share-json" ? snapshot.copy.copySuccess : snapshot.copy.copyJson}
+            </button>
+            <button
+              class="modal-toolbar-btn"
+              type="button"
+              disabled={downloadSharePending}
+              onClick={() =>
+                sendAction("downloadJsonFile", undefined, {
+                  filename: createShareFileName(),
+                  text: shareModalJson
+                })
+              }
+            >
+              <span class="modal-btn-icon" aria-hidden="true">
+                <DownloadIcon />
+              </span>
+              {snapshot.copy.downloadJson}
+            </button>
+          </div>
+          <div class="modal-note">
+            {formatTemplate(snapshot.copy.shareSelectedCount, {
+              count: selectedCount
+            })}
+          </div>
+          <textarea class="modal-textarea share-preview" readOnly value={sharePreviewValue} />
+        </div>
+      </ModalShell>
     </>
   );
 }
@@ -651,9 +1055,12 @@ function OverviewSection(props: {
   addPending: boolean;
   importPending: boolean;
   refreshAllPending: boolean;
+  sharePending: boolean;
+  selectedCount: number;
   onAddAccount: () => void;
   onImportCurrent: () => void;
   onRefreshAll: () => void;
+  onShareTokens: () => void;
 }) {
   const { account, copy, settings, now, hasAccounts, privacyMode } = props;
   const emptyTitle = hasAccounts ? copy.noActiveAccountTitle : copy.empty;
@@ -663,17 +1070,15 @@ function OverviewSection(props: {
     <div class="overview-shell">
       {account ? (
         <div class="overview-account">
-          <div class="overview-account-top">
-            <div class="overview-account-name">{getSensitiveDisplayValue(account.displayName, privacyMode, "name")}</div>
-            {account.hasQuota402 ? <div class="pill error">402</div> : null}
-          </div>
-          <div class="saved-meta">
-            <span class="pill active">{copy.primaryAccount}</span>
-            <span class="pill plan">{account.planTypeLabel}</span>
-          </div>
           <div class="overview-account-email">{getSensitiveDisplayValue(account.email, privacyMode, "email")}</div>
-          <div class="overview-account-meta">
-            {account.authProviderLabel} · {account.accountStructureLabel}
+          <div class="overview-account-workspace">
+            {getSensitiveDisplayValue(account.accountName, privacyMode, "name", copy.unknown)}
+          </div>
+          <div class="overview-account-tags">
+            <span class="pill active">{copy.primaryAccount}</span>
+            {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
+            <span class="pill plan">{account.planTypeLabel}</span>
+            {renderQuotaIssuePill(account, copy)}
           </div>
           <div class="overview-meta">
             <div class="overview-meta-item">
@@ -760,6 +1165,20 @@ function OverviewSection(props: {
           >
             {copy.refreshAll}
           </ActionButton>
+          <ActionButton
+            class={`toolbar-btn ${props.selectedCount === 0 ? "disabled-like" : ""}`}
+            pending={props.sharePending}
+            disabled={props.disabled}
+            onClick={() => {
+              if (props.selectedCount === 0) {
+                return;
+              }
+              props.onShareTokens();
+            }}
+            tooltip={props.selectedCount === 0 ? copy.shareTokenDisabledTip : undefined}
+          >
+            {copy.shareToken}
+          </ActionButton>
         </div>
       </div>
     </div>
@@ -774,42 +1193,70 @@ function SavedAccountCard(props: {
   now: number;
   privacyMode: boolean;
   busy: boolean;
+  reloadPromptPending: boolean;
   switchPending: boolean;
+  reauthorizePending: boolean;
   refreshPending: boolean;
   detailsPending: boolean;
   removePending: boolean;
   togglePending: boolean;
-  onAction: (action: "details" | "switch" | "refresh" | "remove" | "toggleStatusBar", accountId?: string) => void;
+  selected: boolean;
+  onToggleSelected: () => void;
+  onAction: (
+    action: "details" | "switch" | "reloadPrompt" | "reauthorize" | "refresh" | "remove" | "toggleStatusBar",
+    accountId?: string
+  ) => void;
 }) {
   const { account, copy, settings, now, onAction, privacyMode } = props;
   const userIdDisplay = getSensitiveDisplayValue(account.userId ?? account.accountId, privacyMode, "id", "-");
+  const selectionLabel = props.selected ? copy.deselectAccount : copy.selectAccount;
 
   return (
-    <article class={`saved-card ${account.isActive ? "active" : ""} ${props.busy ? "is-busy" : ""}`}>
+    <article
+      class={`saved-card ${account.isActive ? "active" : ""} ${props.busy ? "is-busy" : ""} ${props.selected ? "selected" : ""}`}
+    >
       <div class="saved-head">
         {!account.isActive ? (
-          <label
-            class={`saved-toggle ${account.canToggleStatusBar ? "" : "disabled"} ${props.togglePending ? "is-pending" : ""}`}
-            title={account.statusToggleTitle}
+          <button
+            class={`saved-control saved-status-toggle ${account.canToggleStatusBar ? "" : "disabled"} ${props.togglePending ? "is-pending" : ""} ${account.showInStatusBar ? "is-checked" : ""}`}
+            type="button"
             aria-label={account.statusToggleTitle}
+            aria-pressed={account.showInStatusBar}
+            aria-disabled={!account.canToggleStatusBar || props.busy}
+            onClick={() => {
+              if (!account.canToggleStatusBar || props.busy) {
+                return;
+              }
+              onAction("toggleStatusBar", account.id);
+            }}
           >
-            <input
-              type="checkbox"
-              checked={account.showInStatusBar}
-              disabled={!account.canToggleStatusBar || props.busy}
-              onChange={() => onAction("toggleStatusBar", account.id)}
-            />
-            <span class="saved-toggle-mark"></span>
-            <span class="saved-toggle-text">{copy.statusShort}</span>
+            <span class="saved-control-label">{copy.statusShort}</span>
+            <span class="saved-status-toggle-indicator" aria-hidden="true">
+              <span></span>
+            </span>
             {props.togglePending ? <span class="saved-toggle-spinner" aria-hidden="true"></span> : null}
-          </label>
+            <span class="saved-control-tip align-right" aria-hidden="true">
+              {account.statusToggleTitle}
+            </span>
+          </button>
         ) : null}
         <div class="saved-title">
-          <h3>{getSensitiveDisplayValue(account.displayName, privacyMode, "name")}</h3>
-          <div class="saved-sub">{getSensitiveDisplayValue(account.email, privacyMode, "email")}</div>
-          <div class="saved-sub">
-            {account.accountStructureLabel}: {getSensitiveDisplayValue(account.accountName, privacyMode, "name", copy.unknown)}
-          </div>
+          <h3>
+            <button
+              class={`saved-select-toggle ${props.selected ? "selected" : ""}`}
+              type="button"
+              aria-pressed={props.selected}
+              aria-label={selectionLabel}
+              onClick={props.onToggleSelected}
+            >
+              <span class="saved-select-toggle-mark" aria-hidden="true"></span>
+              <span class="saved-control-tip align-left below" aria-hidden="true">
+                {selectionLabel}
+              </span>
+            </button>
+            <span class="saved-title-text">{getSensitiveDisplayValue(account.email, privacyMode, "email")}</span>
+          </h3>
+          <div class="saved-sub">{getSensitiveDisplayValue(account.accountName, privacyMode, "name", copy.unknown)}</div>
           <div class="saved-sub">
             {copy.login}: {account.authProviderLabel}
           </div>
@@ -820,8 +1267,7 @@ function SavedAccountCard(props: {
             {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
             {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
             <span class="pill plan">{account.planTypeLabel}</span>
-            {account.hasQuota402 ? <span class="pill error">402</span> : null}
-            <span class="pill">{account.accountStructureLabel}</span>
+            {renderQuotaIssuePill(account, copy)}
           </div>
         </div>
       </div>
@@ -836,34 +1282,58 @@ function SavedAccountCard(props: {
         {copy.lastRefresh}: {formatTimestamp(account.lastQuotaAt, copy.never)}
       </div>
       <div class="saved-actions">
+        {account.isActive && !account.isCurrentWindowAccount ? (
+          <ActionButton
+            icon={renderReloadIcon()}
+            iconOnly
+            label={copy.reloadBtn}
+            pending={props.reloadPromptPending}
+            disabled={props.busy}
+            onClick={() => onAction("reloadPrompt", account.id)}
+          />
+        ) : null}
+        {account.quotaIssueKind === "auth" ? (
+          <ActionButton
+            icon={renderReauthorizeIcon()}
+            iconOnly
+            label={copy.reauthorizeBtn}
+            pending={props.reauthorizePending}
+            disabled={props.busy}
+            onClick={() => onAction("reauthorize", account.id)}
+          />
+        ) : null}
         <ActionButton
+          icon={renderSwitchIcon()}
+          iconOnly
+          label={copy.switchBtn}
           pending={props.switchPending}
           disabled={props.busy}
           onClick={() => onAction("switch", account.id)}
-        >
-          {copy.switchBtn}
-        </ActionButton>
+        />
         <ActionButton
+          icon={renderRefreshIcon()}
+          iconOnly
+          label={copy.refreshBtn}
           pending={props.refreshPending}
           disabled={props.busy}
           onClick={() => onAction("refresh", account.id)}
-        >
-          {copy.refreshBtn}
-        </ActionButton>
+        />
         <ActionButton
+          icon={renderDetailsIcon()}
+          iconOnly
+          label={copy.detailsBtn}
           pending={props.detailsPending}
           disabled={props.busy}
           onClick={() => onAction("details", account.id)}
-        >
-          {copy.detailsBtn}
-        </ActionButton>
+        />
         <ActionButton
+          icon={renderRemoveIcon()}
+          iconOnly
+          label={copy.removeBtn}
           pending={props.removePending}
           disabled={props.busy}
           onClick={() => onAction("remove", account.id)}
-        >
-          {copy.removeBtn}
-        </ActionButton>
+        />
       </div>
     </article>
   );
@@ -874,18 +1344,229 @@ function ActionButton(props: {
   pending?: boolean;
   disabled?: boolean;
   onClick: () => void;
-  children: ComponentChildren;
+  icon?: ComponentChildren;
+  iconOnly?: boolean;
+  label?: string;
+  tooltip?: string;
+  children?: ComponentChildren;
 }) {
-  const className = [props.class, "action-btn", props.pending ? "is-pending" : ""].filter(Boolean).join(" ");
+  const className = [props.class, "action-btn", props.pending ? "is-pending" : "", props.iconOnly ? "icon-only" : ""]
+    .filter(Boolean)
+    .join(" ");
+  const accessibleLabel =
+    props.label ?? (typeof props.children === "string" ? props.children : typeof props.children === "number" ? String(props.children) : undefined);
 
   return (
-    <button class={className} type="button" disabled={props.disabled} aria-busy={props.pending} onClick={props.onClick}>
+    <button
+      class={className}
+      type="button"
+      disabled={props.disabled}
+      aria-busy={props.pending}
+      aria-label={accessibleLabel}
+      onClick={props.onClick}
+    >
       <span class="button-face">
         {props.pending ? <span class="button-spinner" aria-hidden="true"></span> : null}
-        <span class="button-label">{props.children}</span>
+        {!props.pending && props.icon ? <span class="button-icon">{props.icon}</span> : null}
+        {!props.iconOnly ? <span class="button-label">{props.children}</span> : null}
       </span>
+      {props.iconOnly && accessibleLabel ? (
+        <span class="button-tip" aria-hidden="true">
+          {accessibleLabel}
+        </span>
+      ) : null}
+      {!props.iconOnly && props.tooltip ? (
+        <span class="button-tip button-tip-inline" aria-hidden="true">
+          {props.tooltip}
+        </span>
+      ) : null}
     </button>
   );
+}
+
+function ModalShell(props: {
+  open: boolean;
+  title: string;
+  closeLabel: string;
+  className?: string;
+  onClose: () => void;
+  children: ComponentChildren;
+}) {
+  return (
+    <div class={`overlay ${props.open ? "open" : ""}`} onClick={props.onClose}>
+      <div class={`settings-modal dashboard-modal ${props.className ?? ""}`.trim()} onClick={(event) => event.stopPropagation()}>
+        <div class="settings-modal-head">
+          <div class="settings-modal-title">{props.title}</div>
+          <button class="settings-close" type="button" aria-label={props.closeLabel} onClick={props.onClose}>
+            ×
+          </button>
+        </div>
+        <div class="settings-modal-body dashboard-modal-body">{props.children}</div>
+      </div>
+    </div>
+  );
+}
+
+function createShareFileName(): string {
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hour = String(now.getHours()).padStart(2, "0");
+  const minute = String(now.getMinutes()).padStart(2, "0");
+  const second = String(now.getSeconds()).padStart(2, "0");
+  return `codex-accounts-share-${year}${month}${day}-${hour}${minute}${second}.json`;
+}
+
+function maskSharedJson(raw: string): string {
+  if (!raw.trim()) {
+    return raw;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return JSON.stringify(maskSharedValue(parsed), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+function maskSharedValue(value: unknown, parentKey?: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => maskSharedValue(item, parentKey));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, maskSharedValue(item, key)])
+    );
+  }
+
+  if (typeof value !== "string" || !value) {
+    return value;
+  }
+
+  const sensitiveKeys = new Set([
+    "email",
+    "user_id",
+    "account_id",
+    "organization_id",
+    "account_name",
+    "id_token",
+    "access_token",
+    "refresh_token",
+    "id"
+  ]);
+
+  if (parentKey && sensitiveKeys.has(parentKey)) {
+    return maskSensitiveString(value);
+  }
+
+  return value;
+}
+
+function maskSensitiveString(value: string): string {
+  if (value.length <= 8) {
+    return `${value.slice(0, 1)}***${value.slice(-1)}`;
+  }
+
+  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+function renderSwitchIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <path
+        d="M575.914667 725.333333a21.397333 21.397333 0 0 1-21.248-21.162666V319.829333A21.184 21.184 0 0 1 576 298.666667c11.776 0 21.333333 9.706667 21.333333 21.162666v333.909334l85.568-85.568a21.226667 21.226667 0 0 1 30.101334 0.064c8.32 8.32 8.213333 21.973333 0.085333 30.101333l-120.832 120.810667a21.141333 21.141333 0 0 1-16.341333 6.186666z m-152.789334-426.325333a21.418667 21.418667 0 0 1 24.896 20.864V704.213333a21.205333 21.205333 0 0 1-21.333333 21.162667c-11.797333 0-21.354667-9.706667-21.354667-21.162667V364.266667l-91.669333 91.605333a21.248 21.248 0 0 1-30.122667-0.064 21.418667 21.418667 0 0 1-0.064-30.101333l120.896-120.810667a21.184 21.184 0 0 1 18.752-5.888z m252.202667-181.290667A425.429333 425.429333 0 0 0 512 85.333333C276.352 85.333333 85.333333 276.352 85.333333 512s191.018667 426.666667 426.666667 426.666667 426.666667-191.018667 426.666667-426.666667c0-56.746667-11.093333-112-32.384-163.328a21.333333 21.333333 0 0 0-39.402667 16.341333A382.762667 382.762667 0 0 1 896 512c0 212.074667-171.925333 384-384 384S128 724.074667 128 512 299.925333 128 512 128c51.114667 0 100.8 9.984 146.986667 29.12a21.333333 21.333333 0 0 0 16.341333-39.402667z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function renderRefreshIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <path
+        d="M989.311588 512.085547a36.053318 36.053318 0 0 0-38.613317 33.194652 438.570484 438.570484 0 0 1-138.794609 288.63988A438.186484 438.186484 0 0 1 511.999787 951.978697c-87.039964 0-171.093262-25.258656-243.199899-73.258636a439.63715 439.63715 0 0 1-148.778605-166.698598h99.967959a35.967985 35.967985 0 1 0 0-72.021303H36.010652a35.967985 35.967985 0 0 0-36.010652 36.010652v183.97859a35.967985 35.967985 0 1 0 72.021303 0v-85.973298A513.066453 513.066453 0 0 0 228.863905 938.666702C312.917203 994.517346 410.666496 1024 511.999787 1024c130.005279 0 253.994561-48.810646 349.013188-137.386609a509.653121 509.653121 0 0 0 161.493266-335.914527 35.967985 35.967985 0 0 0-33.194653-38.613317zM988.031588 128.000373a35.967985 35.967985 0 0 0-36.053318 36.010652v85.973298A512.298453 512.298453 0 0 0 795.007669 85.333724 509.439788 509.439788 0 0 0 511.999787 0.000427a510.122454 510.122454 0 0 0-349.013188 137.386609 510.207787 510.207787 0 0 0-161.5786 335.914527 36.053318 36.053318 0 0 0 33.194653 38.613317 36.053318 36.053318 0 0 0 38.613317-33.194653 438.570484 438.570484 0 0 1 138.794609-288.63988A438.613151 438.613151 0 0 1 511.999787 71.979063c87.039964 0 171.093262 25.301323 243.199898 73.301303a439.63715 439.63715 0 0 1 148.821272 166.741264h-100.010625a35.967985 35.967985 0 1 0 0 71.978637h183.97859A35.967985 35.967985 0 0 0 1023.999573 347.989615V164.011025A35.967985 35.967985 0 0 0 987.988922 128.000373z"
+        fill="currentColor"
+        opacity="0.65"
+      />
+    </svg>
+  );
+}
+
+function renderDetailsIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <path
+        d="M451.53430187 887.898112h-281.509888c-17.51668053 0-31.28142507-14.39061333-31.28142507-31.28142507V168.47557973c0-17.51668053 13.76474453-31.28142507 31.28142507-31.28142506H795.60704c16.89081173 0 31.27596373 13.76474453 31.27596373 31.28142506v281.509888c0 17.2785664 14.00832 31.28142507 31.28142507 31.28142507s31.28142507-14.00395093 31.28142507-31.28142507v-312.79240533c0-34.40749227-28.15535787-62.5573888-62.56285014-62.5573888H138.74189653c-34.40749227 0-62.5573888 28.14989653-62.5573888 62.5573888v750.70395733c0 34.40749227 28.14989653 62.5573888 62.5573888 62.5573888h312.79240534c17.2785664 0 31.28142507-14.00395093 31.28142506-31.28142506 0-17.27092053-14.00395093-31.27487147-31.28142506-31.27487147z m485.95490133 5.6885248l-81.32471467-81.32471467c-6.25759573-6.25759573-12.5140992-6.25759573-18.77169493-6.25759573-18.7662336 0-31.277056 12.5140992-31.277056 31.28142507 0 6.25759573 0 12.50973013 6.25759573 18.7662336l81.32471467 81.32471466c6.25650347 6.25759573 12.50973013 12.5140992 25.02382933 12.5140992 18.76732587 0 31.277056-12.5140992 31.277056-31.28142506-0.00109227-6.25104213-6.25322667-18.76514133-12.50973013-25.02273707z"
+        fill="currentColor"
+      />
+      <path
+        d="M693.05849173 511.16878507c-103.6517376 0-187.6721664 84.02589013-187.6721664 187.67762773 0 103.64627627 84.02152107 187.6721664 187.6721664 187.6721664 103.6517376 0 187.67653547-84.02589013 187.67653547-187.6721664 0-103.6517376-84.02479787-187.67762773-187.67653547-187.67762773z m0 312.79131306c-45.35637333 1.02673067-87.7101056-22.57933653-110.6968576-61.69340586-22.98565973-39.1118848-22.9998592-87.605248-0.032768-126.7269632 22.9670912-39.12389973 65.31099307-62.7539968 110.6673664-61.75238827 67.99469227 1.5040512 122.33168213 57.0458112 122.35134294 125.05797973 0.01529173 68.00889173-54.29548373 123.57905067-122.28908374 125.1147776z m31.72051627-499.71418453H223.3073664c-16.98146987-0.032768-30.74184533-13.79314347-30.7789824-30.7789824v-1.0027008c0-16.95307093 13.82591147-30.77461333 30.7789824-30.77461333h501.4716416c16.95307093 0 30.77461333 13.8215424 30.77461333 30.77461333v1.0027008c0 16.89081173-13.88926293 30.7789824-30.77461333 30.7789824z m-2.0054016 125.11586987H221.36968533c-16.98583893-0.03386027-30.7462144-13.79423573-30.7789824-30.78116694v-0.99723946c0-16.95307093 13.82591147-30.78116693 30.7789824-30.78116694h501.46618027c16.95307093 0 30.78007467 13.828096 30.78007467 30.78116694v0.99723946c0 16.89081173-13.88926293 30.78116693-30.84233387 30.78116694zM411.60977067 574.16526507H222.99716267c-16.98583893-0.032768-30.7462144-13.79314347-30.7789824-30.7789824v-0.99833174c0-16.95853227 13.82591147-30.7789824 30.7789824-30.7789824h188.612608c16.95307093 0 30.78116693 13.8215424 30.78116693 30.7789824v0.99833174c-0.04041387 16.98583893-13.79969707 30.7462144-30.78116693 30.7789824z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function renderRemoveIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <path
+        d="M92.748283 203.507071h838.503434v44.140606H92.748283zM644.402424 115.238788v44.127677h44.127677V115.238788c0-24.384646-19.75596-44.127677-43.998384-44.127677h-265.050505a43.97899 43.97899 0 0 0-31.172525 12.916364 43.918222 43.918222 0 0 0-12.825859 31.211313v44.127677h44.127677V115.238788h264.791919z"
+        fill="currentColor"
+      />
+      <path
+        d="M203.073939 909.614545v-661.979798H158.946263V909.575758c0 24.410505 19.639596 44.179394 44.179394 44.179394h617.761616c24.410505 0 44.179394-19.639596 44.179394-44.179394V247.634747H820.926061v661.979798H203.073939z"
+        fill="currentColor"
+      />
+      <path
+        d="M313.412525 335.90303h44.127677V733.090909h-44.127677V335.90303z m176.523637 0h44.127676V733.090909H489.936162V335.90303z m176.523636 0h44.127677V733.090909h-44.127677V335.90303z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function renderReloadIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <path
+        d="M512 0c281.6 0 509.44 227.84 512 512 0 284.16-230.4 512-512 512C227.84 1024 0 793.6 0 512 0 227.84 230.4 0 512 0z m168.96 468.48c5.12-7.68 5.12-17.92 0-25.6-5.12-7.68-12.8-12.8-23.04-12.8h-84.48l97.28-153.6c5.12-7.68 5.12-17.92 0-28.16-5.12-7.68-12.8-12.8-23.04-12.8h-204.8c-12.8 0-25.6 10.24-25.6 23.04l-53.76 286.72c-2.56 7.68 0 15.36 5.12 23.04 5.12 5.12 12.8 10.24 20.48 10.24h76.8l-25.6 220.16c-2.56 12.8 5.12 25.6 17.92 28.16 12.8 5.12 25.6-2.56 33.28-12.8l189.44-345.6z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function renderReauthorizeIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <path
+        d="M512 4.096l-440.832 184.32v276.48c0 256 202.752 495.104 440.832 552.96 237.568-57.856 440.832-296.96 440.832-552.96v-276.48L512 4.096z m135.168 664.064h-88.064v64.512c0 25.6-20.992 46.592-46.592 46.592s-46.592-20.992-46.592-46.592v-202.752-1.024c-23.04-7.68-44.032-20.48-61.952-37.888-29.184-29.184-45.568-68.608-45.568-110.08s16.384-80.384 45.568-110.08c58.88-58.88 161.28-58.88 220.16 0 29.184 29.184 45.568 68.608 45.568 110.08s-16.384 80.384-45.568 110.08c-18.432 18.432-40.448 31.744-65.024 38.912v45.056h88.064c25.6 0 46.592 20.992 46.592 46.592s-20.992 46.592-46.592 46.592z"
+        fill="currentColor"
+      />
+      <path
+        d="M557.568 336.896c-11.776-11.776-27.136-18.432-44.032-18.432s-32.256 6.656-44.032 18.432-18.432 27.136-18.432 44.032 6.656 32.256 18.432 44.032c23.552 23.552 64.512 23.552 88.064 0 11.776-11.776 18.432-27.136 18.432-44.032s-6.656-32.256-18.432-44.032z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function renderQuotaIssuePill(account: DashboardAccountViewModel, copy: DashboardCopy) {
+  switch (account.quotaIssueKind) {
+    case "disabled":
+      return <span class="pill error">{copy.disabledTag}</span>;
+    case "auth":
+      return <span class="pill error">{copy.authErrorTag}</span>;
+    case "quota":
+      return <span class="pill warning">{copy.quotaErrorTag}</span>;
+    default:
+      return null;
+  }
 }
 
 function MetricGauge(props: {
@@ -1333,16 +2014,21 @@ function formatTemplate(template: string, value: number | Record<string, string 
   );
 }
 
-function formatSavedAccountsSummary(lang: DashboardState["lang"], count: number): string {
+function formatSavedAccountsSummary(
+  lang: DashboardState["lang"],
+  count: number,
+  validCount: number,
+  invalidCount: number
+): string {
   switch (lang) {
     case "zh":
-      return `现有 ${count} 个账号`;
+      return `共 ${count} 个，有效 ${validCount}，失效 ${invalidCount}`;
     case "zh-hant":
-      return `現有 ${count} 個帳號`;
+      return `共 ${count} 個，有效 ${validCount}，失效 ${invalidCount}`;
     case "ja":
-      return `保存中 ${count} 件`;
+      return `合計 ${count} 件・有効 ${validCount}・無効 ${invalidCount}`;
     default:
-      return `${count} account${count === 1 ? "" : "s"} in list`;
+      return `${count} total · ${validCount} valid · ${invalidCount} invalid`;
   }
 }
 
@@ -1402,34 +2088,12 @@ function getSensitiveDisplayValue(
 function maskSensitiveValue(value: string, kind: SensitiveKind): string {
   switch (kind) {
     case "email":
-      return maskEmail(value);
     case "name":
-      return maskSegmentedValue(value);
     case "id":
-      return createMask(value.length, 10, 18);
+      return maskSensitiveString(value);
     default:
-      return createMask(value.length);
+      return maskSensitiveString(value);
   }
-}
-
-function maskEmail(value: string): string {
-  const [localPart, domainPart] = value.split("@");
-  if (!localPart || !domainPart) {
-    return createMask(value.length);
-  }
-
-  return `${createMask(localPart.length, 4, 10)}@${createMask(domainPart.length, 4, 10)}`;
-}
-
-function maskSegmentedValue(value: string): string {
-  return value
-    .split(/(\s+|[._\-\\/]+)/)
-    .map((segment) => (/^(\s+|[._\-\\/]+)$/.test(segment) ? segment : createMask(segment.length, 3, 8)))
-    .join("");
-}
-
-function createMask(length: number, min = 6, max = 12): string {
-  return "*".repeat(Math.max(min, Math.min(max, Math.max(1, length))));
 }
 
 function EyeIcon() {
@@ -1487,6 +2151,134 @@ function EyeOffIcon() {
   );
 }
 
+function GlobeIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path
+        d="M3.5 12h17"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+      <path
+        d="M12 3c2.3 2.5 3.7 5.7 3.7 9s-1.4 6.5-3.7 9c-2.3-2.5-3.7-5.7-3.7-9S9.7 5.5 12 3Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect
+        x="9"
+        y="9"
+        width="10"
+        height="10"
+        rx="2.2"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+      />
+      <path
+        d="M6.2 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1.2"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 4v10"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+      <path
+        d="m8.5 10.8 3.5 3.7 3.5-3.7"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M4 18.5h16"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+    </svg>
+  );
+}
+
+function SuccessIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="m5.5 12.5 4.1 4.1L18.5 7.8"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.9"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ImportIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M14 3v5h5"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linejoin="round"
+      />
+      <path
+        d="m12 10.5-3 3 3 3"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M9 13.5h7"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+      />
+    </svg>
+  );
+}
+
+
 function resolveDiscretePercent(values: number[], currentValue: number): number {
   const first = values[0];
   const last = values[values.length - 1];
@@ -1518,12 +2310,20 @@ function getActionTimeoutMs(action: DashboardActionName): number {
     case "refreshView":
       return 8_000;
     case "details":
+    case "reloadPrompt":
+    case "reauthorize":
     case "switch":
     case "refresh":
     case "remove":
     case "toggleStatusBar":
       return 30_000;
     case "refreshAll":
+      return 120_000;
+    case "shareTokens":
+    case "prepareOAuthSession":
+      return 30_000;
+    case "importSharedJson":
+    case "completeOAuthSession":
       return 120_000;
     case "addAccount":
     case "importCurrent":

@@ -6,6 +6,7 @@ import { getIntlLocale } from "../localization/languages";
 import { detailCopyResources } from "../localization/resources/details";
 import { fetchDailyUsageBreakdown } from "../services";
 import { AccountsRepository } from "../storage";
+import { getQuotaIssueKind } from "../utils/quotaIssue";
 import { colorForPercentage, escapeHtml, escapeHtmlAttr, getLanguage, prettyAuthProvider } from "../utils";
 import { formatRelativeReset, formatTimestamp } from "../utils/time";
 
@@ -175,6 +176,36 @@ function renderHtml(
   const provider = prettyAuthProvider(account.authProvider);
   const identityName = account.accountName?.trim() ?? account.email;
   const workspaceLabel = formatAccountStructure(account.accountStructure, copy.lang);
+  const quotaIssueKind = getQuotaIssueKind(account.quotaError);
+  const quotaCards = [
+    ...(quota?.hourlyWindowPresent
+      ? [
+          `<div class="quota-card">
+        <h2>${escapeHtml(copy.hourlyQuota)}</h2>
+        <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.hourlyPercentage)};">${renderQuotaValue(quota?.hourlyPercentage)}</div>
+        <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.hourlyResetTime, copy)}</div>
+      </div>`
+        ]
+      : []),
+    ...(quota?.weeklyWindowPresent
+      ? [
+          `<div class="quota-card">
+        <h2>${escapeHtml(copy.weeklyQuota)}</h2>
+        <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.weeklyPercentage)};">${renderQuotaValue(quota?.weeklyPercentage)}</div>
+        <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.weeklyResetTime, copy)}</div>
+      </div>`
+        ]
+      : []),
+    ...(showCodeReview && quota?.codeReviewWindowPresent
+      ? [
+          `<div class="quota-card">
+        <h2>${escapeHtml(copy.reviewQuota)}</h2>
+        <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.codeReviewPercentage)};">${renderQuotaValue(quota?.codeReviewPercentage)}</div>
+        <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.codeReviewResetTime, copy)}</div>
+      </div>`
+        ]
+      : [])
+  ].join("");
 
   return `<!DOCTYPE html>
 <html lang="${copy.lang}">
@@ -212,6 +243,7 @@ function renderHtml(
           <div class="badges">
             ${account.isActive ? `<span class="pill active">${escapeHtml(copy.current)}</span>` : `<span class="pill">${escapeHtml(copy.saved)}</span>`}
             <span class="pill plan">${escapeHtml((account.planType ?? "unknown").toUpperCase())}</span>
+            ${renderQuotaIssueBadge(quotaIssueKind, copy)}
           </div>
         </div>
         <div class="summary">
@@ -224,27 +256,7 @@ function renderHtml(
       </div>
     </section>
 
-    <section class="quota-grid">
-      <div class="quota-card">
-        <h2>${escapeHtml(copy.hourlyQuota)}</h2>
-        <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.hourlyPercentage)};">${renderQuotaValue(quota?.hourlyPercentage)}</div>
-        <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.hourlyResetTime, copy)}</div>
-      </div>
-      <div class="quota-card">
-        <h2>${escapeHtml(copy.weeklyQuota)}</h2>
-        <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.weeklyPercentage)};">${renderQuotaValue(quota?.weeklyPercentage)}</div>
-        <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.weeklyResetTime, copy)}</div>
-      </div>
-      ${
-        showCodeReview
-          ? `<div class="quota-card">
-        <h2>${escapeHtml(copy.reviewQuota)}</h2>
-        <div class="quota-value" style="--metric-color:${colorForPercentage(quota?.codeReviewPercentage)};">${renderQuotaValue(quota?.codeReviewPercentage)}</div>
-        <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota?.codeReviewResetTime, copy)}</div>
-      </div>`
-          : ""
-      }
-    </section>
+    <section class="quota-grid">${quotaCards}</section>
 
     <section class="usage-card">
       <div class="usage-head">
@@ -529,6 +541,9 @@ type DetailCopy = {
   detailsSubtitle: string;
   current: string;
   saved: string;
+  disabledTag: string;
+  authErrorTag: string;
+  quotaErrorTag: string;
   showSensitive: string;
   hideSensitive: string;
   currentlyActive: string;
@@ -570,4 +585,20 @@ function getCopy(): DetailCopy {
         maximumFractionDigits: 0
       })}%`
   };
+}
+
+function renderQuotaIssueBadge(
+  quotaIssueKind: ReturnType<typeof getQuotaIssueKind>,
+  copy: Pick<DetailCopy, "disabledTag" | "authErrorTag" | "quotaErrorTag">
+): string {
+  switch (quotaIssueKind) {
+    case "disabled":
+      return `<span class="pill error">${escapeHtml(copy.disabledTag)}</span>`;
+    case "auth":
+      return `<span class="pill error">${escapeHtml(copy.authErrorTag)}</span>`;
+    case "quota":
+      return `<span class="pill warning">${escapeHtml(copy.quotaErrorTag)}</span>`;
+    default:
+      return "";
+  }
 }

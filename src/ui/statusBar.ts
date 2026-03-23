@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { AccountsRepository } from "../storage";
 import { CodexAccountRecord } from "../core/types";
+import { getCurrentWindowRuntimeAccountId } from "../presentation/workbench/windowRuntimeAccount";
 import { formatRelativeReset } from "../utils/time";
 import { t } from "../utils";
 import { escapeMarkdown, quotaMarkerForPercentage } from "../utils";
@@ -34,10 +35,12 @@ export class AccountsStatusBarProvider {
 
   async refresh(): Promise<void> {
     const accounts = await this.repo.listAccounts();
-    const active = accounts.find((item) => item.isActive) ?? accounts[0];
+    const active = accounts.find((item) => item.isActive);
+    const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
+    const primary = accounts.find((item) => item.id === currentWindowAccountId) ?? active ?? accounts[0];
     const _t = t();
 
-    if (!active) {
+    if (!primary) {
       this.item.text = `${STATUS_BAR_ICON} Codex Accounts Manager`;
       const md = new vscode.MarkdownString(undefined, true);
       md.isTrusted = true;
@@ -48,8 +51,8 @@ export class AccountsStatusBarProvider {
       return;
     }
 
-    this.item.text = buildStatusText(active);
-    this.item.tooltip = buildTooltip(active, accounts);
+    this.item.text = buildStatusText(primary);
+    this.item.tooltip = buildTooltip(primary, active, accounts);
     this.item.show();
   }
 }
@@ -63,42 +66,59 @@ function buildStatusText(account: CodexAccountRecord): string {
   return `${STATUS_BAR_ICON} Codex Accounts Manager`;
 }
 
-function buildTooltip(active: CodexAccountRecord, accounts: CodexAccountRecord[]): vscode.MarkdownString {
+function buildTooltip(
+  primary: CodexAccountRecord,
+  active: CodexAccountRecord | undefined,
+  accounts: CodexAccountRecord[]
+): vscode.MarkdownString {
   const _t = t();
   const showCodeReview = vscode.workspace.getConfiguration("codexAccounts").get<boolean>("showCodeReviewQuota", true);
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = true;
+  const fallbackActive = active && active.id !== primary.id ? [active] : [];
   const selectedExtras = accounts
-    .filter((account) => account.id !== active.id && account.showInStatusBar)
+    .filter((account) => account.id !== primary.id && account.id !== active?.id && account.showInStatusBar)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 2);
 
   md.appendMarkdown(`**${_t("panel.dashboard.title")}**\n\n`);
-  md.appendMarkdown(renderAccountPanel(active, true, showCodeReview));
-  for (const account of selectedExtras) {
-    md.appendMarkdown(`\n`);
-    md.appendMarkdown(renderAccountPanel(account, false, showCodeReview));
+  md.appendMarkdown(renderAccountPanel(primary, true, primary.id === active?.id, showCodeReview));
+  for (const account of [...fallbackActive, ...selectedExtras]) {
+    md.appendMarkdown(`\n---\n\n`);
+    md.appendMarkdown(renderAccountPanel(account, false, account.id === active?.id, showCodeReview));
   }
 
   md.appendMarkdown(`\n\n---\n${_t("status.tooltip")}`);
   return md;
 }
 
-function renderAccountPanel(account: CodexAccountRecord, current: boolean, showCodeReview: boolean): string {
+function renderAccountPanel(
+  account: CodexAccountRecord,
+  current: boolean,
+  primary: boolean,
+  showCodeReview: boolean
+): string {
   const _t = t();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
   const plan = (account.planType ?? "team").toUpperCase();
-  const header = current
-    ? `**${escapeMarkdown(title)}**  ${escapeMarkdown(_t("account.current"))} · ${escapeMarkdown(plan)}`
-    : `**${escapeMarkdown(title)}**  ${escapeMarkdown(plan)}`;
+  const markers = [
+    current ? _t("account.current") : undefined,
+    primary ? _t("account.primary") : undefined,
+    plan
+  ].filter((value): value is string => Boolean(value));
+  const header = `**${escapeMarkdown(title)}**  ${markers.map((value) => escapeMarkdown(value)).join(" · ")}`;
 
   const lines = [
     header,
-    renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime),
-    renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime)
+    ...(account.quotaSummary?.hourlyWindowPresent
+      ? [renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime)]
+      : []),
+    ...(account.quotaSummary?.weeklyWindowPresent
+      ? [renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime)]
+      : [])
   ];
 
-  if (showCodeReview) {
+  if (showCodeReview && account.quotaSummary?.codeReviewWindowPresent) {
     lines.push(renderMetricRow(_t("quota.review"), account.quotaSummary?.codeReviewPercentage, account.quotaSummary?.codeReviewResetTime));
   }
 

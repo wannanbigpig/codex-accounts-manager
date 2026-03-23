@@ -40,6 +40,7 @@ export type TranslationKey =
   | "common.never"
   // Account
   | "account.current"
+  | "account.primary"
   | "account.saved"
   | "account.active"
   | "account.switch"
@@ -93,6 +94,15 @@ export type TranslationKey =
   | "message.accountNotFound"
   | "message.networkError"
   | "message.apiError"
+  | "message.oauthManualCallbackOffer"
+  | "message.shareTokensReady"
+  | "message.shareTokensFailed"
+  | "message.importSharedJsonSuccess"
+  | "message.importSharedJsonFailed"
+  | "message.oauthPrepareFailed"
+  | "message.oauthCallbackFailed"
+  | "message.sharedJsonParseFailed"
+  | "message.oauthCompleted"
   // Confirm
   | "confirm.removeAccount"
   | "confirm.removeButton"
@@ -118,6 +128,7 @@ export type TranslationKey =
   | "button.refresh"
   | "button.details"
   | "button.cancel"
+  | "button.pasteCallbackUrl"
   // Panel
   | "panel.quotaSummary.title"
   | "panel.details.title"

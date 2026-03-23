@@ -5,6 +5,7 @@ import { formatAccountStructure, formatAuthProvider, formatPlanType, getDashboar
 import { CodexAccountRecord } from "../../core/types";
 import { resolveCodexAppLaunchPath } from "../../utils/codexApp";
 import { getCurrentWindowRuntimeAccountId } from "../../presentation/workbench/windowRuntimeAccount";
+import { getQuotaIssueKind } from "../../utils/quotaIssue";
 
 export async function buildDashboardState(
   repo: AccountsRepository,
@@ -20,7 +21,7 @@ export async function buildDashboardState(
   const copy = getDashboardCopy(lang);
   const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
   const sortedAccounts = [...(await repo.listAccounts())].sort(
-    (a, b) => Number(b.isActive) - Number(a.isActive) || a.email.localeCompare(b.email)
+    (a, b) => Number(b.isActive) - Number(a.isActive) || b.createdAt - a.createdAt || a.email.localeCompare(b.email)
   );
   const extraSelectedCount = sortedAccounts.filter((account) => !account.isActive && account.showInStatusBar).length;
 
@@ -48,6 +49,7 @@ function mapAccount(
   const canToggleStatusBar = account.isActive ? false : Boolean(account.showInStatusBar) || extraSelectedCount < 2;
 
   return {
+    quotaIssueKind: getQuotaIssueKind(account.quotaError),
     id: account.id,
     displayName: account.accountName?.trim() ?? account.email,
     email: account.email,
@@ -78,36 +80,32 @@ function buildMetrics(
   showCodeReviewQuota: boolean,
   copy: DashboardState["copy"]
 ): DashboardMetricViewModel[] {
+  const quota = account.quotaSummary;
   return [
     {
       key: "hourly",
       label: copy.hourlyLabel,
-      percentage: account.quotaSummary?.hourlyPercentage,
-      resetAt: account.quotaSummary?.hourlyResetTime,
-      visible: true
+      percentage: quota?.hourlyPercentage,
+      resetAt: quota?.hourlyResetTime,
+      visible: quota ? Boolean(quota.hourlyWindowPresent) : true
     },
     {
       key: "weekly",
       label: copy.weeklyLabel,
-      percentage: account.quotaSummary?.weeklyPercentage,
-      resetAt: account.quotaSummary?.weeklyResetTime,
-      visible: true
+      percentage: quota?.weeklyPercentage,
+      resetAt: quota?.weeklyResetTime,
+      visible: quota ? Boolean(quota.weeklyWindowPresent) : true
     },
     {
       key: "review",
       label: copy.reviewLabel,
-      percentage: account.quotaSummary?.codeReviewPercentage,
-      resetAt: account.quotaSummary?.codeReviewResetTime,
-      visible: showCodeReviewQuota
+      percentage: quota?.codeReviewPercentage,
+      resetAt: quota?.codeReviewResetTime,
+      visible: showCodeReviewQuota && (quota ? Boolean(quota.codeReviewWindowPresent) : true)
     }
   ];
 }
 
 function hasQuota402(account: CodexAccountRecord): boolean {
-  const message = account.quotaError?.message ?? "";
-  if (message.includes("API returned 402")) {
-    return true;
-  }
-
-  return account.quotaError?.code === "deactivated_workspace";
+  return getQuotaIssueKind(account.quotaError) === "disabled";
 }

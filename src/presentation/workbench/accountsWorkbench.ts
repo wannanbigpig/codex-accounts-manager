@@ -8,7 +8,7 @@ import { AccountsStatusBarProvider, refreshDetailsPanel } from "../../ui";
 import { getExternalAuthSyncCopy, getLocalAccountCopy, registerDebugOutput } from "../../utils";
 import { getErrorMessage } from "../../core";
 import { readCurrentAuthAccountStorageId } from "../../utils/accountIdentity";
-import { setCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
+import { needsWindowReloadForAccount, setCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
 
 export class AccountsWorkbench {
   private readonly repo: AccountsRepository;
@@ -26,17 +26,35 @@ export class AccountsWorkbench {
     this.lastObservedAuthIdentity = await this.readObservedAuthIdentity();
     setCurrentWindowRuntimeAccountId(this.lastObservedAuthIdentity);
     this.context.subscriptions.push({ dispose: () => this.repo.dispose() });
+    let refreshTimer: NodeJS.Timeout | undefined;
+
+    const flushRefresh = (): void => {
+      refreshTimer = undefined;
+      void this.statusBar.refresh();
+      void refreshDetailsPanel();
+      void refreshQuotaSummaryPanel();
+    };
 
     const refreshers = {
       refresh: (): void => {
-        void this.statusBar.refresh();
-        void refreshDetailsPanel();
-        void refreshQuotaSummaryPanel();
+        if (refreshTimer) {
+          return;
+        }
+        refreshTimer = setTimeout(flushRefresh, 0);
       },
       markObservedAuthIdentity: (accountId?: string): void => {
         this.lastObservedAuthIdentity = accountId;
       }
     };
+
+    this.context.subscriptions.push({
+      dispose(): void {
+        if (refreshTimer) {
+          clearTimeout(refreshTimer);
+          refreshTimer = undefined;
+        }
+      }
+    });
 
     registerCommands(this.context, this.repo, refreshers);
     this.registerAuthFileWatcher(refreshers);
@@ -166,6 +184,10 @@ export class AccountsWorkbench {
       }
 
       if (!nextActive || previousObservedIdentity === nextObservedIdentity) {
+        return;
+      }
+
+      if (!needsWindowReloadForAccount(nextActive.id)) {
         return;
       }
 

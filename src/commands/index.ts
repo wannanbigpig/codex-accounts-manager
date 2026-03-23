@@ -17,6 +17,9 @@ export function registerCommands(
   context.subscriptions.push(
     vscode.commands.registerCommand("codexAccounts.addAccount", () => service.addAccount()),
     vscode.commands.registerCommand("codexAccounts.importCurrentAuth", () => service.importCurrentAuth()),
+    vscode.commands.registerCommand("codexAccounts.reauthorizeAccount", (item?: CodexAccountRecord) =>
+      service.reauthorizeAccount(item)
+    ),
     vscode.commands.registerCommand("codexAccounts.switchAccount", (item?: CodexAccountRecord) => service.switchAccount(item)),
     vscode.commands.registerCommand("codexAccounts.refreshQuota", (item?: CodexAccountRecord) => service.refreshQuota(item)),
     vscode.commands.registerCommand("codexAccounts.refreshAllQuotas", (options?: { silent?: boolean }) => service.refreshAllQuotas(options)),

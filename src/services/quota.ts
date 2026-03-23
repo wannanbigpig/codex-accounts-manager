@@ -177,21 +177,65 @@ function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
   const primary = usage.rate_limit?.primary_window;
   const secondary = usage.rate_limit?.secondary_window;
   const codeReviewPrimary = usage.code_review_rate_limit?.primary_window;
+  const { hourlyWindow, weeklyWindow } = resolveRateLimitWindows(primary, secondary);
 
   return {
-    hourlyPercentage: normalizeRemaining(primary?.used_percent),
-    hourlyResetTime: normalizeReset(primary?.reset_at, primary?.reset_after_seconds),
-    hourlyWindowMinutes: normalizeWindow(primary?.limit_window_seconds),
-    hourlyWindowPresent: Boolean(primary),
-    weeklyPercentage: normalizeRemaining(secondary?.used_percent),
-    weeklyResetTime: normalizeReset(secondary?.reset_at, secondary?.reset_after_seconds),
-    weeklyWindowMinutes: normalizeWindow(secondary?.limit_window_seconds),
-    weeklyWindowPresent: Boolean(secondary),
+    hourlyPercentage: normalizeRemaining(hourlyWindow?.used_percent),
+    hourlyResetTime: normalizeReset(hourlyWindow?.reset_at, hourlyWindow?.reset_after_seconds),
+    hourlyWindowMinutes: normalizeWindow(hourlyWindow?.limit_window_seconds),
+    hourlyWindowPresent: Boolean(hourlyWindow),
+    weeklyPercentage: normalizeRemaining(weeklyWindow?.used_percent),
+    weeklyResetTime: normalizeReset(weeklyWindow?.reset_at, weeklyWindow?.reset_after_seconds),
+    weeklyWindowMinutes: normalizeWindow(weeklyWindow?.limit_window_seconds),
+    weeklyWindowPresent: Boolean(weeklyWindow),
     codeReviewPercentage: normalizeRemaining(codeReviewPrimary?.used_percent),
     codeReviewResetTime: normalizeReset(codeReviewPrimary?.reset_at, codeReviewPrimary?.reset_after_seconds),
     codeReviewWindowMinutes: normalizeWindow(codeReviewPrimary?.limit_window_seconds),
-    codeReviewWindowPresent: Boolean(codeReviewPrimary)
+    codeReviewWindowPresent: Boolean(codeReviewPrimary),
+    rawData: usage
   };
+}
+
+function resolveRateLimitWindows(
+  primary?: CodexUsageResponse["rate_limit"] extends infer R
+    ? R extends { primary_window?: infer W }
+      ? W
+      : never
+    : never,
+  secondary?: CodexUsageResponse["rate_limit"] extends infer R
+    ? R extends { secondary_window?: infer W }
+      ? W
+      : never
+    : never
+): {
+  hourlyWindow?: typeof primary;
+  weeklyWindow?: typeof primary;
+} {
+  const windows = [primary, secondary].filter((window): window is NonNullable<typeof primary> => Boolean(window));
+  if (windows.length === 0) {
+    return {};
+  }
+
+  if (windows.length === 1) {
+    const [onlyWindow] = windows;
+    return isWeeklyQuotaWindow(onlyWindow) ? { weeklyWindow: onlyWindow } : { hourlyWindow: onlyWindow };
+  }
+
+  const sorted = [...windows].sort((left, right) => getWindowSeconds(left) - getWindowSeconds(right));
+  return {
+    hourlyWindow: sorted[0],
+    weeklyWindow: sorted[sorted.length - 1]
+  };
+}
+
+function isWeeklyQuotaWindow(window: NonNullable<CodexUsageResponse["rate_limit"]>["primary_window"]): boolean {
+  const minutes = normalizeWindow(window?.limit_window_seconds);
+  return typeof minutes === "number" && minutes >= 1440;
+}
+
+function getWindowSeconds(window?: NonNullable<CodexUsageResponse["rate_limit"]>["primary_window"]): number {
+  const seconds = window?.limit_window_seconds;
+  return typeof seconds === "number" && seconds > 0 ? seconds : Number.MAX_SAFE_INTEGER;
 }
 
 /**

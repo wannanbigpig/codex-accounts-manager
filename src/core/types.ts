@@ -51,6 +51,8 @@ export interface CodexQuotaSummary {
   codeReviewWindowMinutes?: number;
   /** 是否存在代码审查配额窗口 */
   codeReviewWindowPresent?: boolean;
+  /** 原始接口返回 */
+  rawData?: unknown;
 }
 
 /**
@@ -229,4 +231,45 @@ export interface CodexDailyUsageBreakdown {
   days: number;
   /** 明细点 */
   points: CodexDailyUsagePoint[];
+}
+
+export interface SharedCodexAccountJson {
+  id?: string;
+  email?: string;
+  auth_mode?: string;
+  user_id?: string;
+  plan_type?: string;
+  account_id?: string | null;
+  organization_id?: string | null;
+  account_name?: string | null;
+  account_structure?: string | null;
+  tokens?: {
+    id_token?: string;
+    access_token?: string;
+    refresh_token?: string;
+    account_id?: string | null;
+  };
+  quota?: {
+    hourly_percentage?: number;
+    hourly_reset_time?: number;
+    hourly_window_minutes?: number;
+    hourly_window_present?: boolean;
+    weekly_percentage?: number;
+    weekly_reset_time?: number;
+    weekly_window_minutes?: number;
+    weekly_window_present?: boolean;
+    code_review_percentage?: number;
+    code_review_reset_time?: number;
+    code_review_window_minutes?: number;
+    code_review_window_present?: boolean;
+    raw_data?: unknown;
+  } | null;
+  quota_error?: {
+    code?: string;
+    message?: string;
+    timestamp?: number;
+  } | null;
+  tags?: unknown;
+  created_at?: number;
+  last_used?: number;
 }

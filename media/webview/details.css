@@ -138,6 +138,16 @@ body.privacy-hidden .privacy-sensitive-masked {
   color: #d9c3ff;
   border: 1px solid rgba(139,92,246,0.24);
 }
+.pill.error {
+  background: rgba(239,68,68,0.16);
+  color: #ffc7c7;
+  border: 1px solid rgba(239,68,68,0.26);
+}
+.pill.warning {
+  background: rgba(245,158,11,0.16);
+  color: #ffe2ad;
+  border: 1px solid rgba(245,158,11,0.26);
+}
 .quota-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

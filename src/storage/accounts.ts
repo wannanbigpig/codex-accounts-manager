@@ -16,10 +16,17 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { SecretStore } from "./secrets";
 import { readAuthFile, writeAuthFile } from "../codex";
-import { CodexAccountRecord, CodexAccountsIndex, CodexQuotaSummary, CodexTokens } from "../core/types";
+import {
+  CodexAccountRecord,
+  CodexAccountsIndex,
+  CodexQuotaSummary,
+  CodexTokens,
+  SharedCodexAccountJson
+} from "../core/types";
 import { fetchRemoteAccountProfile } from "../services/profile";
 import { buildAccountStorageId } from "../utils/accountIdentity";
 import { extractClaims } from "../utils/jwt";
+import { normalizeQuotaSummary } from "../utils/quotaWindows";
 import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
 
 /** 缓存失效时间 (毫秒) */
@@ -241,6 +248,76 @@ export class AccountsRepository {
     );
   }
 
+  async exportSharedAccounts(accountIds: string[]): Promise<SharedCodexAccountJson[]> {
+    const uniqueIds = Array.from(new Set(accountIds));
+    if (uniqueIds.length === 0) {
+      return [];
+    }
+
+    const index = await this.readIndex();
+    const accounts = index.accounts.filter((account) => uniqueIds.includes(account.id));
+    const sharedAccounts: SharedCodexAccountJson[] = [];
+
+    for (const account of accounts) {
+      const tokens = await this.secretStore.getTokens(account.id);
+      if (!tokens?.idToken || !tokens.accessToken) {
+        continue;
+      }
+
+      sharedAccounts.push(toSharedAccountJson(account, tokens));
+    }
+
+    return sharedAccounts;
+  }
+
+  async importSharedAccounts(input: SharedCodexAccountJson | SharedCodexAccountJson[]): Promise<CodexAccountRecord[]> {
+    const entries = Array.isArray(input) ? input : [input];
+    const imported: CodexAccountRecord[] = [];
+
+    for (const entry of entries) {
+      const restoredTokens = restoreSharedTokens(entry);
+      const created = await this.upsertFromTokens(restoredTokens, false);
+      const index = await this.readIndex();
+      const account = index.accounts.find((item) => item.id === created.id);
+      if (!account) {
+        continue;
+      }
+
+      account.userId = sanitizeOptionalValue(entry.user_id) ?? account.userId;
+      account.planType = sanitizeOptionalValue(entry.plan_type) ?? account.planType;
+      account.accountId = sanitizeOptionalValue(entry.account_id) ?? account.accountId;
+      account.organizationId = sanitizeOptionalValue(entry.organization_id) ?? account.organizationId;
+      account.accountName = sanitizeOptionalValue(entry.account_name) ?? account.accountName;
+      account.accountStructure = sanitizeOptionalValue(entry.account_structure) ?? account.accountStructure;
+      account.createdAt = normalizeEpochMs(entry.created_at) ?? account.createdAt;
+      account.updatedAt = normalizeEpochMs(entry.last_used) ?? Date.now();
+
+      if (entry.quota !== undefined) {
+        account.quotaSummary = entry.quota ? normalizeQuotaSummary(fromSharedQuota(entry.quota)) : undefined;
+        if (account.quotaSummary) {
+          account.lastQuotaAt = account.updatedAt;
+        }
+      }
+
+      if (entry.quota_error !== undefined) {
+        account.quotaError = fromSharedQuotaError(entry.quota_error);
+        if (account.quotaError) {
+          account.lastQuotaAt = account.updatedAt;
+        }
+      }
+
+      await this.secretStore.setTokens(account.id, {
+        ...restoredTokens,
+        accountId: account.accountId ?? restoredTokens.accountId
+      });
+
+      this.writeIndex(index);
+      imported.push({ ...account });
+    }
+
+    return imported;
+  }
+
   /**
    * 切换账号
    *
@@ -357,7 +434,7 @@ export class AccountsRepository {
 
     account.lastQuotaAt = Date.now();
     account.updatedAt = Date.now();
-    account.quotaSummary = quotaSummary;
+    account.quotaSummary = normalizeQuotaSummary(quotaSummary);
     account.quotaError = quotaError;
 
     if (updatedPlanType) {
@@ -706,7 +783,12 @@ function createEmptyIndex(): CodexAccountsIndex {
 function cloneIndex(index: CodexAccountsIndex): CodexAccountsIndex {
   const normalized: CodexAccountsIndex = {
     currentAccountId: index?.currentAccountId,
-    accounts: Array.isArray(index?.accounts) ? index.accounts : []
+    accounts: Array.isArray(index?.accounts)
+      ? index.accounts.map((account) => ({
+          ...account,
+          quotaSummary: normalizeQuotaSummary(account.quotaSummary)
+        }))
+      : []
   };
   return JSON.parse(JSON.stringify(normalized)) as CodexAccountsIndex;
 }
@@ -760,4 +842,136 @@ function shouldEnableStatusBarByDefault(accounts: CodexAccountRecord[], accountI
     (item) => item.id !== accountId && !item.isActive && item.showInStatusBar
   ).length;
   return enabledCount < 2;
+}
+
+function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTokens): SharedCodexAccountJson {
+  return {
+    id: account.id,
+    email: account.email,
+    auth_mode: "oauth",
+    user_id: account.userId,
+    plan_type: account.planType,
+    account_id: account.accountId ?? null,
+    organization_id: account.organizationId ?? null,
+    account_name: account.accountName ?? null,
+    account_structure: account.accountStructure ?? null,
+    tokens: {
+      id_token: tokens.idToken,
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
+      account_id: account.accountId ?? tokens.accountId ?? null
+    },
+    quota: toSharedQuota(account.quotaSummary),
+    quota_error: account.quotaError
+      ? {
+          code: account.quotaError.code,
+          message: account.quotaError.message,
+          timestamp: account.quotaError.timestamp
+        }
+      : null,
+    tags: null,
+    created_at: Math.floor(account.createdAt / 1000),
+    last_used: Math.floor(account.updatedAt / 1000)
+  };
+}
+
+function toSharedQuota(summary?: CodexQuotaSummary): SharedCodexAccountJson["quota"] {
+  if (!summary) {
+    return null;
+  }
+
+  return {
+    hourly_percentage: summary.hourlyPercentage,
+    hourly_reset_time: summary.hourlyResetTime,
+    hourly_window_minutes: summary.hourlyWindowMinutes,
+    hourly_window_present: summary.hourlyWindowPresent,
+    weekly_percentage: summary.weeklyPercentage,
+    weekly_reset_time: summary.weeklyResetTime,
+    weekly_window_minutes: summary.weeklyWindowMinutes,
+    weekly_window_present: summary.weeklyWindowPresent,
+    code_review_percentage: summary.codeReviewPercentage,
+    code_review_reset_time: summary.codeReviewResetTime,
+    code_review_window_minutes: summary.codeReviewWindowMinutes,
+    code_review_window_present: summary.codeReviewWindowPresent,
+    raw_data: summary.rawData ?? null
+  };
+}
+
+function restoreSharedTokens(entry: SharedCodexAccountJson): CodexTokens {
+  const idToken = sanitizeOptionalValue(entry.tokens?.id_token);
+  const accessToken = sanitizeOptionalValue(entry.tokens?.access_token);
+  if (!idToken || !accessToken) {
+    throw new AccountError("Shared account JSON does not include valid tokens", {
+      code: ErrorCode.AUTH_TOKEN_MISSING
+    });
+  }
+
+  return {
+    idToken,
+    accessToken,
+    refreshToken: sanitizeOptionalValue(entry.tokens?.refresh_token),
+    accountId: sanitizeOptionalValue(entry.tokens?.account_id) ?? sanitizeOptionalValue(entry.account_id)
+  };
+}
+
+function fromSharedQuota(quota: NonNullable<SharedCodexAccountJson["quota"]>): CodexQuotaSummary {
+  return {
+    hourlyPercentage: normalizeQuotaNumber(quota.hourly_percentage),
+    hourlyResetTime: normalizeOptionalNumber(quota.hourly_reset_time),
+    hourlyWindowMinutes: normalizeOptionalNumber(quota.hourly_window_minutes),
+    hourlyWindowPresent: Boolean(quota.hourly_window_present),
+    weeklyPercentage: normalizeQuotaNumber(quota.weekly_percentage),
+    weeklyResetTime: normalizeOptionalNumber(quota.weekly_reset_time),
+    weeklyWindowMinutes: normalizeOptionalNumber(quota.weekly_window_minutes),
+    weeklyWindowPresent: Boolean(quota.weekly_window_present),
+    codeReviewPercentage: normalizeQuotaNumber(quota.code_review_percentage),
+    codeReviewResetTime: normalizeOptionalNumber(quota.code_review_reset_time),
+    codeReviewWindowMinutes: normalizeOptionalNumber(quota.code_review_window_minutes),
+    codeReviewWindowPresent: Boolean(quota.code_review_window_present),
+    rawData: quota.raw_data ?? undefined
+  };
+}
+
+function fromSharedQuotaError(
+  quotaError: SharedCodexAccountJson["quota_error"]
+): CodexAccountRecord["quotaError"] | undefined {
+  if (!quotaError?.message) {
+    return undefined;
+  }
+
+  return {
+    code: sanitizeOptionalValue(quotaError.code),
+    message: quotaError.message,
+    timestamp: normalizeEpochSeconds(quotaError.timestamp) ?? Math.floor(Date.now() / 1000)
+  };
+}
+
+function sanitizeOptionalValue(value: unknown): string | undefined {
+  const normalized = typeof value === "string" ? value : value == null ? undefined : String(value);
+  const trimmed = normalized?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeEpochMs(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return value < 1_000_000_000_000 ? value * 1000 : value;
+}
+
+function normalizeEpochSeconds(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return value > 1_000_000_000_000 ? Math.floor(value / 1000) : Math.floor(value);
+}
+
+function normalizeOptionalNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeQuotaNumber(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
