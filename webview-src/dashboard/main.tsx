@@ -13,6 +13,7 @@ import type {
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
+import type { CodexImportPreviewSummary, CodexImportResultSummary } from "../../src/core/types";
 import {
   DASHBOARD_LANGUAGE_OPTIONS,
   DASHBOARD_LANGUAGE_OPTION_LABELS,
@@ -26,6 +27,7 @@ declare function acquireVsCodeApi(): {
 
 const AUTO_REFRESH_VALUES = [5, 10, 15, 30, 60];
 const AUTO_SWITCH_VALUES = Array.from({ length: 20 }, (_, index) => index + 1);
+const AUTO_SWITCH_LOCK_VALUES = [0, 5, 10, 15, 30, 60, 120];
 const WARNING_VALUES = Array.from({ length: 18 }, (_, index) => 5 + index * 5);
 const WARNING_SCALE_VALUES = [5, 20, 35, 50, 65, 80, 90];
 type PendingActionRequest = {
@@ -69,8 +71,12 @@ const BLOCKING_GLOBAL_ACTIONS = new Set<DashboardActionName>([
   "addAccount",
   "importCurrent",
   "refreshAll",
+  "batchRefresh",
+  "batchResyncProfile",
+  "batchRemove",
+  "restoreFromBackup",
+  "restoreFromAuthJson",
   "importSharedJson",
-  "completeOAuthSession",
   "downloadJsonFile"
 ]);
 
@@ -175,10 +181,15 @@ function App() {
   const [addAccountModalOpen, setAddAccountModalOpen] = useState(false);
   const [addAccountTab, setAddAccountTab] = useState<"oauth" | "import">("oauth");
   const [oauthSession, setOauthSession] = useState<DashboardOAuthSessionDescriptor | undefined>();
+  const [oauthFlowStarted, setOauthFlowStarted] = useState(false);
+  const [confirmCancelOauthOpen, setConfirmCancelOauthOpen] = useState(false);
   const [oauthCallbackUrl, setOauthCallbackUrl] = useState("");
   const [oauthError, setOauthError] = useState<string | undefined>();
   const [importJsonText, setImportJsonText] = useState("");
   const [importJsonError, setImportJsonError] = useState<string | undefined>();
+  const [importPreview, setImportPreview] = useState<CodexImportPreviewSummary | undefined>();
+  const [importResult, setImportResult] = useState<CodexImportResultSummary | undefined>();
+  const [importRecoveryMode, setImportRecoveryMode] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [shareModalJson, setShareModalJson] = useState("");
   const [sharePreviewExpanded, setSharePreviewExpanded] = useState(false);
@@ -197,12 +208,25 @@ function App() {
         case "dashboard:action-result":
           dispatch({ type: "resolve-action", requestId: event.data.requestId });
           if (event.data.status === "failed") {
-            if (event.data.action === "importSharedJson") {
+            if (event.data.action === "importSharedJson" || event.data.action === "previewImportSharedJson") {
               setImportJsonError(event.data.error);
             }
-            if (event.data.action === "prepareOAuthSession" || event.data.action === "completeOAuthSession") {
+            if (
+              event.data.action === "prepareOAuthSession" ||
+              event.data.action === "completeOAuthSession" ||
+              event.data.action === "startOAuthAutoFlow"
+            ) {
+              if (event.data.action === "completeOAuthSession" || event.data.action === "startOAuthAutoFlow") {
+                setOauthFlowStarted(false);
+              }
               setOauthError(event.data.error);
             }
+            return;
+          }
+          if (event.data.action === "previewImportSharedJson" && event.data.payload?.importPreview) {
+            setImportPreview(event.data.payload.importPreview);
+            setImportResult(undefined);
+            setImportJsonError(undefined);
             return;
           }
 
@@ -215,24 +239,31 @@ function App() {
 
           if (event.data.action === "prepareOAuthSession" && event.data.payload?.oauthSession) {
             setOauthSession(event.data.payload.oauthSession);
+            setOauthFlowStarted(false);
             setOauthError(undefined);
             return;
           }
 
-          if (event.data.action === "completeOAuthSession") {
+          if (event.data.action === "completeOAuthSession" || event.data.action === "startOAuthAutoFlow") {
+            setOauthFlowStarted(false);
             setOauthCallbackUrl("");
             setOauthSession(undefined);
             setOauthError(undefined);
             setAddAccountModalOpen(false);
             setAddAccountTab("oauth");
+            setImportRecoveryMode(false);
             return;
           }
 
-          if (event.data.action === "importSharedJson") {
+          if (
+            event.data.action === "importSharedJson" ||
+            event.data.action === "restoreFromBackup" ||
+            event.data.action === "restoreFromAuthJson"
+          ) {
             setImportJsonError(undefined);
-            setImportJsonText("");
-            setAddAccountModalOpen(false);
-            setAddAccountTab("oauth");
+            if (event.data.action === "importSharedJson") {
+              setImportResult(event.data.payload?.importResult);
+            }
           }
           return;
         default:
@@ -246,8 +277,12 @@ function App() {
           setShareModalOpen(false);
           return;
         }
+        if (confirmCancelOauthOpen) {
+          setConfirmCancelOauthOpen(false);
+          return;
+        }
         if (addAccountModalOpen) {
-          setAddAccountModalOpen(false);
+          closeAddAccountModal();
           return;
         }
         dispatch({ type: "close-settings" });
@@ -262,7 +297,7 @@ function App() {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("keydown", onKeydown);
     };
-  }, [addAccountModalOpen, shareModalOpen]);
+  }, [addAccountModalOpen, confirmCancelOauthOpen, shareModalOpen]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -419,12 +454,31 @@ function App() {
     hasGlobalPendingAction || state.pendingActions.some((request) => request.accountId === accountId);
   const privacyToggleLabel = state.privacyMode ? snapshot.copy.showSensitive : snapshot.copy.hideSensitive;
   const prepareOAuthPending = isActionPending("prepareOAuthSession");
+  const startOAuthAutoPending = isActionPending("startOAuthAutoFlow");
   const completeOAuthPending = isActionPending("completeOAuthSession");
   const importSharedPending = isActionPending("importSharedJson");
+  const previewImportPending = isActionPending("previewImportSharedJson");
+  const restoreBackupPending = isActionPending("restoreFromBackup");
+  const restoreAuthPending = isActionPending("restoreFromAuthJson");
   const sharePending = isActionPending("shareTokens");
   const downloadSharePending = isActionPending("downloadJsonFile");
+  const batchRefreshPending = isActionPending("batchRefresh");
+  const batchResyncPending = isActionPending("batchResyncProfile");
+  const batchRemovePending = isActionPending("batchRemove");
+  const batchTagsPending = state.pendingActions.some(
+    (request) => request.action === "updateTags" && request.accountId == null
+  );
   const maskedShareModalJson = maskSharedJson(shareModalJson);
   const sharePreviewValue = sharePreviewExpanded ? shareModalJson : maskedShareModalJson;
+  const invalidAccountCount = snapshot.accounts.filter(
+    (account) =>
+      !account.dismissedHealth &&
+      (account.healthKind === "reauthorize" ||
+        account.healthKind === "refresh_failed" ||
+        account.healthKind === "disabled" ||
+        account.healthKind === "quota")
+  ).length;
+  const validAccountCount = snapshot.accounts.length - invalidAccountCount;
   const importSingleExample = `{
   "tokens": {
     "id_token": "eyJ...",
@@ -449,11 +503,49 @@ function App() {
   const openAddAccountModal = (): void => {
     setAddAccountModalOpen(true);
     setAddAccountTab("oauth");
+    setImportRecoveryMode(false);
     setOauthSession(undefined);
+    setOauthFlowStarted(false);
     setOauthCallbackUrl("");
     setOauthError(undefined);
     setImportJsonError(undefined);
+    setImportPreview(undefined);
+    setImportResult(undefined);
     sendAction("prepareOAuthSession");
+  };
+
+  const performCloseAddAccountModal = (): void => {
+    if (oauthSession) {
+      sendAction("cancelOAuthSession", undefined, {
+        oauthSessionId: oauthSession.sessionId
+      });
+    }
+    setAddAccountModalOpen(false);
+    setImportRecoveryMode(false);
+    setOauthCallbackUrl("");
+    setOauthError(undefined);
+    setOauthSession(undefined);
+    setOauthFlowStarted(false);
+    setImportJsonError(undefined);
+    setImportPreview(undefined);
+    setImportResult(undefined);
+  };
+
+  const closeAddAccountModal = (): void => {
+    if (oauthFlowStarted || completeOAuthPending) {
+      setConfirmCancelOauthOpen(true);
+      return;
+    }
+    performCloseAddAccountModal();
+  };
+
+  const openRecoveryImportModal = (): void => {
+    setAddAccountModalOpen(true);
+    setAddAccountTab("import");
+    setImportRecoveryMode(true);
+    setImportJsonError(undefined);
+    setImportPreview(undefined);
+    setImportResult(undefined);
   };
 
   const handleShareTokens = (): void => {
@@ -463,9 +555,48 @@ function App() {
     sendAction("shareTokens", undefined, { accountIds: state.selectedAccountIds });
   };
 
+  const handleEditAccountTags = (account: DashboardAccountViewModel): void => {
+    sendAction("updateTags", account.id, {
+      mode: "set"
+    });
+  };
+
+  const handleBatchTagMutation = (mode: "add" | "remove"): void => {
+    if (!selectedCount) {
+      return;
+    }
+    sendAction("updateTags", undefined, {
+      accountIds: state.selectedAccountIds,
+      mode
+    });
+  };
+
+  const handleAutoSwitchLock = (): void => {
+    if (!activeAccount) {
+      return;
+    }
+    sendAction("setAutoSwitchLock", activeAccount.id, {
+      lockMinutes: activeAccount.autoSwitchLockedUntil ? 0 : resolveLockMinutes(snapshot.settings.autoSwitchLockMinutes)
+    });
+  };
+
   return (
     <>
       <div class={`panel ${state.privacyMode ? "privacy-hidden" : ""}`}>
+        {snapshot.indexHealth.status !== "healthy" ? (
+          <section class="section">
+            <RecoveryPanel
+              copy={snapshot.copy}
+              health={snapshot.indexHealth}
+              restoreBackupPending={restoreBackupPending}
+              restoreAuthPending={restoreAuthPending}
+              restoreJsonPending={importSharedPending && importRecoveryMode}
+              onRestoreBackup={() => sendAction("restoreFromBackup")}
+              onRestoreAuth={() => sendAction("restoreFromAuthJson")}
+              onImportJson={openRecoveryImportModal}
+            />
+          </section>
+        ) : null}
         <section class="section">
           <div class="hero">
             <div class="brand">
@@ -522,16 +653,14 @@ function App() {
             settings={snapshot.settings}
             now={state.now}
             privacyMode={state.privacyMode}
-            disabled={hasGlobalPendingAction}
+            disabled={hasGlobalPendingAction || snapshot.indexHealth.status === "corrupted_unrecoverable"}
             addPending={prepareOAuthPending}
             importPending={isActionPending("importCurrent")}
             refreshAllPending={isActionPending("refreshAll")}
-            sharePending={sharePending}
-            selectedCount={selectedCount}
+            onToggleAutoSwitchLock={handleAutoSwitchLock}
             onAddAccount={openAddAccountModal}
             onImportCurrent={() => sendAction("importCurrent")}
             onRefreshAll={() => sendAction("refreshAll")}
-            onShareTokens={handleShareTokens}
           />
         </section>
         {snapshot.accounts.length > 0 ? (
@@ -544,13 +673,30 @@ function App() {
                     {formatSavedAccountsSummary(
                       snapshot.lang,
                       snapshot.accounts.length,
-                      snapshot.accounts.filter((account) => !account.quotaIssueKind).length,
-                      snapshot.accounts.filter((account) => Boolean(account.quotaIssueKind)).length
+                      validAccountCount,
+                      invalidAccountCount
                     )}
                   </span>
                 </div>
                 <div class="header-sub">{snapshot.copy.savedAccountsSub}</div>
               </div>
+              {selectedCount > 0 ? (
+                <BatchSelectionBar
+                  copy={snapshot.copy}
+                  selectedCount={selectedCount}
+                  refreshPending={batchRefreshPending}
+                  resyncPending={batchResyncPending}
+                  removePending={batchRemovePending}
+                  sharePending={sharePending}
+                  tagsPending={batchTagsPending}
+                  onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
+                  onResync={() => sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })}
+                  onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
+                  onShare={handleShareTokens}
+                  onAddTags={() => handleBatchTagMutation("add")}
+                  onRemoveTags={() => handleBatchTagMutation("remove")}
+                />
+              ) : null}
             </div>
             <div class="accounts-grid">
               {snapshot.accounts.map((account) => (
@@ -566,12 +712,15 @@ function App() {
                   reloadPromptPending={isActionPending("reloadPrompt", account.id)}
                   switchPending={isActionPending("switch", account.id)}
                   reauthorizePending={isActionPending("reauthorize", account.id)}
+                  resyncProfilePending={isActionPending("resyncProfile", account.id)}
                   refreshPending={isActionPending("refresh", account.id)}
                   detailsPending={isActionPending("details", account.id)}
                   removePending={isActionPending("remove", account.id)}
                   togglePending={isActionPending("toggleStatusBar", account.id)}
+                  updateTagsPending={isActionPending("updateTags", account.id)}
                   selected={selectedAccountIds.has(account.id)}
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
+                  onEditTags={() => handleEditAccountTags(account)}
                   onAction={sendAction}
                 />
               ))}
@@ -706,6 +855,49 @@ function App() {
                     sendSetting("autoSwitchWeeklyThreshold", value);
                   }}
                 />
+                <div class="settings-toggle-list">
+                  <SettingsPreferenceRow
+                    title={snapshot.copy.autoSwitchPreferSameEmailTitle}
+                    sub={snapshot.copy.autoSwitchPreferSameEmailSub}
+                    enabled={snapshot.settings.autoSwitchPreferSameEmail}
+                    onToggle={(enabled) => {
+                      patchSettings({ autoSwitchPreferSameEmail: enabled });
+                      sendSetting("autoSwitchPreferSameEmail", enabled);
+                    }}
+                  />
+                  <SettingsPreferenceRow
+                    title={snapshot.copy.autoSwitchPreferSameTagTitle}
+                    sub={snapshot.copy.autoSwitchPreferSameTagSub}
+                    enabled={snapshot.settings.autoSwitchPreferSameTag}
+                    onToggle={(enabled) => {
+                      patchSettings({ autoSwitchPreferSameTag: enabled });
+                      sendSetting("autoSwitchPreferSameTag", enabled);
+                    }}
+                  />
+                </div>
+                <div class="settings-block-head">
+                  <div class="settings-block-title">{snapshot.copy.autoSwitchLockMinutesTitle}</div>
+                  <div class="settings-block-sub">{snapshot.copy.autoSwitchLockMinutesSub}</div>
+                </div>
+                <SettingsDiscreteSlider
+                  value={snapshot.settings.autoSwitchLockMinutes}
+                  values={AUTO_SWITCH_LOCK_VALUES}
+                  accent="violet"
+                  valueLabel={(value) =>
+                    value === 0 ? snapshot.copy.autoSwitchLockOff : formatTemplate(snapshot.copy.autoSwitchLockValueTemplate, value)
+                  }
+                  description={(value) =>
+                    value === 0
+                      ? snapshot.copy.autoSwitchLockMinutesSub
+                      : formatTemplate(snapshot.copy.autoSwitchLockValueDescTemplate, value)
+                  }
+                  scaleValues={AUTO_SWITCH_LOCK_VALUES}
+                  onPreview={(value) => patchSettings({ autoSwitchLockMinutes: value })}
+                  onCommit={(value) => {
+                    patchSettings({ autoSwitchLockMinutes: value });
+                    sendSetting("autoSwitchLockMinutes", value);
+                  }}
+                />
                 <div class="settings-note">{snapshot.copy.autoSwitchAnyNote}</div>
               </div>
             </SettingsToggleBlock>
@@ -766,6 +958,36 @@ function App() {
                 }
               ]}
             />
+            <SettingsToggleBlock
+              title={snapshot.copy.tokenAutomationTitle}
+              sub={snapshot.copy.tokenAutomationSub}
+              enabled={snapshot.settings.backgroundTokenRefreshEnabled}
+              onToggle={(enabled) => {
+                patchSettings({ backgroundTokenRefreshEnabled: enabled });
+                sendSetting("backgroundTokenRefreshEnabled", enabled);
+              }}
+            >
+              <div class={`settings-stack ${snapshot.settings.backgroundTokenRefreshEnabled ? "" : "is-hidden"}`}>
+                <div class="settings-note-list">
+                  <div class="settings-note-item">
+                    <span>{snapshot.copy.tokenAutomationLastCheck}</span>
+                    <strong>{formatTimestamp(snapshot.tokenAutomation.lastCheckAt, snapshot.copy.never)}</strong>
+                  </div>
+                  <div class="settings-note-item">
+                    <span>{snapshot.copy.tokenAutomationLastRefresh}</span>
+                    <strong>{formatTimestamp(snapshot.tokenAutomation.lastRefreshAt, snapshot.copy.never)}</strong>
+                  </div>
+                  <div class="settings-note-item">
+                    <span>{snapshot.copy.tokenAutomationNextCheck}</span>
+                    <strong>{formatTimestamp(snapshot.tokenAutomation.nextCheckAt, snapshot.copy.never)}</strong>
+                  </div>
+                  <div class="settings-note-item">
+                    <span>{snapshot.copy.tokenAutomationLastFailure}</span>
+                    <strong>{snapshot.tokenAutomation.lastFailureMessage ?? snapshot.copy.never}</strong>
+                  </div>
+                </div>
+              </div>
+            </SettingsToggleBlock>
             <SettingsSegmentBlock
               title={snapshot.copy.debugTitle}
               sub={snapshot.copy.debugSub}
@@ -802,13 +1024,19 @@ function App() {
         title={snapshot.copy.addAccountModalTitle}
         closeLabel={snapshot.copy.closeModal}
         className="dashboard-modal-compact"
-        onClose={() => setAddAccountModalOpen(false)}
+        onClose={closeAddAccountModal}
       >
         <div class="modal-tabs" role="tablist" aria-label={snapshot.copy.addAccountModalTitle}>
           <button
             class={`modal-tab ${addAccountTab === "oauth" ? "active" : ""}`}
             type="button"
-            onClick={() => setAddAccountTab("oauth")}
+            onClick={() => {
+              setAddAccountTab("oauth");
+              setImportRecoveryMode(false);
+              setImportJsonError(undefined);
+              setImportPreview(undefined);
+              setImportResult(undefined);
+            }}
           >
             <span class="modal-tab-icon" aria-hidden="true">
               <GlobeIcon />
@@ -818,7 +1046,10 @@ function App() {
           <button
             class={`modal-tab ${addAccountTab === "import" ? "active" : ""}`}
             type="button"
-            onClick={() => setAddAccountTab("import")}
+            onClick={() => {
+              setAddAccountTab("import");
+              setOauthError(undefined);
+            }}
           >
             <span class="modal-tab-icon" aria-hidden="true">
               <ImportIcon />
@@ -847,6 +1078,7 @@ function App() {
                     if (!oauthSession?.authUrl) {
                       return;
                     }
+                    setOauthFlowStarted(true);
                     sendAction("copyText", undefined, { text: oauthSession.authUrl });
                     showCopyFeedback("oauth-link");
                   }}
@@ -858,18 +1090,22 @@ function App() {
             <button
               class="modal-primary-btn"
               type="button"
-              disabled={!oauthSession?.authUrl}
+              disabled={!oauthSession?.authUrl || startOAuthAutoPending}
               onClick={() => {
                 if (!oauthSession?.authUrl) {
                   return;
                 }
-                sendAction("openExternalUrl", undefined, { url: oauthSession.authUrl });
+                setOauthFlowStarted(true);
+                setOauthError(undefined);
+                sendAction("startOAuthAutoFlow", undefined, {
+                  oauthSessionId: oauthSession.sessionId
+                });
               }}
             >
               <span class="modal-btn-icon" aria-hidden="true">
                 <GlobeIcon />
               </span>
-              {snapshot.copy.openInBrowser}
+              {startOAuthAutoPending ? "..." : snapshot.copy.openInBrowser}
             </button>
             <div class="modal-field">
               <div class="modal-label">{snapshot.copy.manualCallbackLabel}</div>
@@ -889,6 +1125,7 @@ function App() {
                     if (!oauthSession) {
                       return;
                     }
+                    setOauthFlowStarted(true);
                     setOauthError(undefined);
                     sendAction("completeOAuthSession", undefined, {
                       oauthSessionId: oauthSession.sessionId,
@@ -934,6 +1171,8 @@ function App() {
                 const reader = new FileReader();
                 reader.onload = () => {
                   setImportJsonError(undefined);
+                  setImportPreview(undefined);
+                  setImportResult(undefined);
                   setImportJsonText(typeof reader.result === "string" ? reader.result : "");
                 };
                 reader.onerror = () => {
@@ -947,8 +1186,17 @@ function App() {
               class="modal-textarea"
               value={importJsonText}
               placeholder={snapshot.copy.importJsonPlaceholder}
-              onInput={(event) => setImportJsonText(event.currentTarget.value)}
+              onInput={(event) => {
+                setImportJsonText(event.currentTarget.value);
+                setImportJsonError(undefined);
+                setImportPreview(undefined);
+                setImportResult(undefined);
+              }}
             />
+            {importPreview ? (
+              <ImportPreviewPanel copy={snapshot.copy} summary={importPreview} />
+            ) : null}
+            {importResult ? <ImportResultPanel copy={snapshot.copy} summary={importResult} /> : null}
             {importJsonError ? <div class="modal-error">{importJsonError}</div> : null}
             <div class="modal-actions">
               <button
@@ -962,12 +1210,28 @@ function App() {
                 {snapshot.copy.importJsonChooseFile}
               </button>
               <button
-                class="modal-primary-btn"
+                class="modal-secondary-btn"
                 type="button"
-                disabled={!importJsonText.trim() || importSharedPending}
+                disabled={!importJsonText.trim() || previewImportPending}
                 onClick={() => {
                   setImportJsonError(undefined);
-                  sendAction("importSharedJson", undefined, { jsonText: importJsonText });
+                  sendAction("previewImportSharedJson", undefined, {
+                    jsonText: importJsonText
+                  });
+                }}
+              >
+                {previewImportPending ? "..." : snapshot.copy.importJsonValidate}
+              </button>
+              <button
+                class="modal-primary-btn"
+                type="button"
+                disabled={!importJsonText.trim() || !importPreview || importPreview.valid <= 0 || importSharedPending}
+                onClick={() => {
+                  setImportJsonError(undefined);
+                  sendAction("importSharedJson", undefined, {
+                    jsonText: importJsonText,
+                    recoveryMode: importRecoveryMode
+                  });
                 }}
                 >
                   {!importSharedPending ? (
@@ -980,6 +1244,37 @@ function App() {
             </div>
           </div>
         )}
+      </ModalShell>
+
+      <ModalShell
+        open={confirmCancelOauthOpen}
+        title={snapshot.copy.addAccountModalTitle}
+        closeLabel={snapshot.copy.closeModal}
+        className="dashboard-modal-compact dashboard-confirm-modal"
+        onClose={() => setConfirmCancelOauthOpen(false)}
+      >
+        <div class="modal-stack">
+          <div class="modal-note">{snapshot.copy.cancelOauthConfirm}</div>
+          <div class="modal-actions">
+            <button
+              class="modal-secondary-btn"
+              type="button"
+              onClick={() => setConfirmCancelOauthOpen(false)}
+            >
+              {snapshot.copy.continueOauthBtn}
+            </button>
+            <button
+              class="modal-primary-btn"
+              type="button"
+              onClick={() => {
+                setConfirmCancelOauthOpen(false);
+                performCloseAddAccountModal();
+              }}
+            >
+              {snapshot.copy.cancelOauthBtn}
+            </button>
+          </div>
+        </div>
       </ModalShell>
 
       <ModalShell
@@ -1036,6 +1331,7 @@ function App() {
               count: selectedCount
             })}
           </div>
+          <div class="modal-note">{snapshot.copy.shareTokenModeHint}</div>
           <textarea class="modal-textarea share-preview" readOnly value={sharePreviewValue} />
         </div>
       </ModalShell>
@@ -1055,12 +1351,10 @@ function OverviewSection(props: {
   addPending: boolean;
   importPending: boolean;
   refreshAllPending: boolean;
-  sharePending: boolean;
-  selectedCount: number;
+  onToggleAutoSwitchLock: () => void;
   onAddAccount: () => void;
   onImportCurrent: () => void;
   onRefreshAll: () => void;
-  onShareTokens: () => void;
 }) {
   const { account, copy, settings, now, hasAccounts, privacyMode } = props;
   const emptyTitle = hasAccounts ? copy.noActiveAccountTitle : copy.empty;
@@ -1074,17 +1368,30 @@ function OverviewSection(props: {
           <div class="overview-account-workspace">
             {getSensitiveDisplayValue(account.accountName, privacyMode, "name", copy.unknown)}
           </div>
+          {account.tags.length ? (
+            <div class="account-tag-row">{renderTagList(account.tags)}</div>
+          ) : null}
           <div class="overview-account-tags">
             <span class="pill active">{copy.primaryAccount}</span>
             {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
             <span class="pill plan">{account.planTypeLabel}</span>
-            {renderQuotaIssuePill(account, copy)}
+            {renderHealthPill(account)}
+          </div>
+          {account.lastAutoSwitchReason ? (
+            <div class="overview-inline-note">
+              <strong>{copy.autoSwitchReasonTitle}:</strong> {formatAutoSwitchReasonSummary(account.lastAutoSwitchReason, copy)}
+            </div>
+          ) : null}
+          <div class={`overview-inline-note overview-lock-note ${account.autoSwitchLockedUntil ? "" : "is-empty"}`}>
+            {account.autoSwitchLockedUntil ? (
+              <>
+                <strong>{copy.autoSwitchLockedUntil}:</strong> {formatTimestamp(account.autoSwitchLockedUntil, copy.never)}
+              </>
+            ) : (
+              <span aria-hidden="true">&nbsp;</span>
+            )}
           </div>
           <div class="overview-meta">
-            <div class="overview-meta-item">
-              <span class="grid-label">{copy.userId}</span>
-              <span class="meta-value">{getSensitiveDisplayValue(account.userId, privacyMode, "id", copy.unknown)}</span>
-            </div>
             <div class="overview-meta-item">
               <span class="grid-label">{copy.accountId}</span>
               <span class="meta-value">
@@ -1165,22 +1472,160 @@ function OverviewSection(props: {
           >
             {copy.refreshAll}
           </ActionButton>
-          <ActionButton
-            class={`toolbar-btn ${props.selectedCount === 0 ? "disabled-like" : ""}`}
-            pending={props.sharePending}
-            disabled={props.disabled}
-            onClick={() => {
-              if (props.selectedCount === 0) {
-                return;
-              }
-              props.onShareTokens();
-            }}
-            tooltip={props.selectedCount === 0 ? copy.shareTokenDisabledTip : undefined}
-          >
-            {copy.shareToken}
-          </ActionButton>
+          {account ? (
+            <ActionButton class="toolbar-btn" onClick={props.onToggleAutoSwitchLock}>
+              {account.autoSwitchLockedUntil ? copy.unlockAutoSwitchBtn : copy.lockAutoSwitchBtn}
+            </ActionButton>
+          ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function RecoveryPanel(props: {
+  copy: DashboardCopy;
+  health: DashboardState["indexHealth"];
+  restoreBackupPending: boolean;
+  restoreAuthPending: boolean;
+  restoreJsonPending: boolean;
+  onRestoreBackup: () => void;
+  onRestoreAuth: () => void;
+  onImportJson: () => void;
+}) {
+  const description =
+    props.health.status === "restored_from_backup" ? props.copy.recoveryRestored : props.copy.recoveryCorrupted;
+
+  return (
+    <div class={`recovery-banner ${props.health.status === "corrupted_unrecoverable" ? "is-danger" : ""}`}>
+      <div class="recovery-banner-body">
+        <div class="recovery-banner-title">{props.copy.recoveryTitle}</div>
+        <div class="recovery-banner-desc">{description}</div>
+        <div class="recovery-banner-meta">
+          <span>
+            {props.copy.recoveryBackups}: {props.health.availableBackups}
+          </span>
+          {props.health.lastErrorMessage ? (
+            <span>
+              {props.copy.recoveryLastError}: {props.health.lastErrorMessage}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div class="recovery-banner-actions">
+        <ActionButton
+          class="toolbar-btn"
+          pending={props.restoreBackupPending}
+          onClick={props.onRestoreBackup}
+          disabled={props.restoreAuthPending || props.restoreJsonPending}
+        >
+          {props.copy.recoveryRestoreBackupBtn}
+        </ActionButton>
+        <ActionButton
+          class="toolbar-btn"
+          pending={props.restoreAuthPending}
+          onClick={props.onRestoreAuth}
+          disabled={props.restoreBackupPending || props.restoreJsonPending}
+        >
+          {props.copy.recoveryRestoreAuthBtn}
+        </ActionButton>
+        <ActionButton
+          class="toolbar-btn"
+          pending={props.restoreJsonPending}
+          onClick={props.onImportJson}
+          disabled={props.restoreBackupPending || props.restoreAuthPending}
+        >
+          {props.copy.recoveryImportJsonBtn}
+        </ActionButton>
+      </div>
+    </div>
+  );
+}
+
+function BatchSelectionBar(props: {
+  copy: DashboardCopy;
+  selectedCount: number;
+  tagsPending: boolean;
+  refreshPending: boolean;
+  resyncPending: boolean;
+  removePending: boolean;
+  sharePending: boolean;
+  onRefresh: () => void;
+  onResync: () => void;
+  onRemove: () => void;
+  onShare: () => void;
+  onAddTags: () => void;
+  onRemoveTags: () => void;
+}) {
+  return (
+    <div class="batch-bar">
+      <div class="batch-bar-actions">
+        <ActionButton class="toolbar-btn" pending={props.tagsPending} onClick={props.onAddTags}>
+          {props.copy.addTagsBtn}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.tagsPending} onClick={props.onRemoveTags}>
+          {props.copy.removeTagsBtn}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.refreshPending} onClick={props.onRefresh}>
+          {props.copy.batchRefreshBtn}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.resyncPending} onClick={props.onResync}>
+          {props.copy.batchResyncBtn}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.sharePending} onClick={props.onShare}>
+          {props.copy.batchExportBtn}
+        </ActionButton>
+        <ActionButton class="toolbar-btn" pending={props.removePending} onClick={props.onRemove}>
+          {props.copy.batchRemoveBtn}
+        </ActionButton>
+      </div>
+      <div class="batch-bar-count">{formatTemplate(props.copy.batchSelectedCount, { count: props.selectedCount })}</div>
+    </div>
+  );
+}
+
+function ImportPreviewPanel(props: { copy: DashboardCopy; summary: CodexImportPreviewSummary }) {
+  return (
+    <div class="modal-summary-card">
+      <div class="modal-summary-title">{props.copy.importJsonSummaryTitle}</div>
+      <div class="modal-summary-grid">
+        <span>{props.copy.importJsonSummaryTotal}: {props.summary.total}</span>
+        <span>{props.copy.importJsonSummaryValid}: {props.summary.valid}</span>
+        <span>{props.copy.importJsonSummaryOverwrite}: {props.summary.overwriteCount}</span>
+        <span>{props.copy.importJsonSummaryInvalid}: {props.summary.invalidCount}</span>
+      </div>
+      {props.summary.invalidEntries.length ? (
+        <div class="modal-summary-list">
+          <div class="modal-summary-list-title">{props.copy.importJsonSummaryFailures}</div>
+          {props.summary.invalidEntries.map((entry) => (
+            <div key={`${entry.index}-${entry.email ?? entry.accountId ?? entry.message}`} class="modal-summary-item">
+              #{entry.index + 1} {entry.email ?? entry.accountId ?? "unknown"} · {entry.message}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ImportResultPanel(props: { copy: DashboardCopy; summary: CodexImportResultSummary }) {
+  return (
+    <div class="modal-summary-card is-success">
+      <div class="modal-summary-title">{props.copy.importJsonResultsTitle}</div>
+      <div class="modal-summary-grid">
+        <span>{props.copy.importJsonResultsSuccess}: {props.summary.successCount}</span>
+        <span>{props.copy.importJsonResultsOverwrite}: {props.summary.overwriteCount}</span>
+        <span>{props.copy.importJsonResultsFailed}: {props.summary.failedCount}</span>
+      </div>
+      {props.summary.failures.length ? (
+        <div class="modal-summary-list">
+          {props.summary.failures.map((entry) => (
+            <div key={`${entry.index}-${entry.email ?? entry.accountId ?? entry.message}`} class="modal-summary-item">
+              #{entry.index + 1} {entry.email ?? entry.accountId ?? "unknown"} · {entry.message}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1196,19 +1641,30 @@ function SavedAccountCard(props: {
   reloadPromptPending: boolean;
   switchPending: boolean;
   reauthorizePending: boolean;
+  resyncProfilePending: boolean;
   refreshPending: boolean;
   detailsPending: boolean;
   removePending: boolean;
   togglePending: boolean;
+  updateTagsPending: boolean;
   selected: boolean;
   onToggleSelected: () => void;
+  onEditTags: () => void;
   onAction: (
-    action: "details" | "switch" | "reloadPrompt" | "reauthorize" | "refresh" | "remove" | "toggleStatusBar",
+    action:
+      | "details"
+      | "switch"
+      | "reloadPrompt"
+      | "reauthorize"
+      | "resyncProfile"
+      | "refresh"
+      | "remove"
+      | "toggleStatusBar",
     accountId?: string
   ) => void;
 }) {
   const { account, copy, settings, now, onAction, privacyMode } = props;
-  const userIdDisplay = getSensitiveDisplayValue(account.userId ?? account.accountId, privacyMode, "id", "-");
+  const accountIdDisplay = getSensitiveDisplayValue(account.accountId ?? account.userId, privacyMode, "id", "-");
   const selectionLabel = props.selected ? copy.deselectAccount : copy.selectAccount;
 
   return (
@@ -1216,30 +1672,42 @@ function SavedAccountCard(props: {
       class={`saved-card ${account.isActive ? "active" : ""} ${props.busy ? "is-busy" : ""} ${props.selected ? "selected" : ""}`}
     >
       <div class="saved-head">
-        {!account.isActive ? (
+        <div class="saved-top-actions">
+          {!account.isActive ? (
+            <button
+              class={`saved-control saved-status-toggle ${account.canToggleStatusBar ? "" : "disabled"} ${account.showInStatusBar ? "is-checked" : ""}`}
+              type="button"
+              aria-label={account.statusToggleTitle}
+              aria-pressed={account.showInStatusBar}
+              aria-disabled={!account.canToggleStatusBar || props.busy}
+              onClick={() => {
+                if (!account.canToggleStatusBar || props.busy) {
+                  return;
+                }
+                onAction("toggleStatusBar", account.id);
+              }}
+            >
+              <span class="saved-status-toggle-indicator" aria-hidden="true">
+                <span></span>
+              </span>
+              <span class="saved-control-tip align-right" aria-hidden="true">
+                {account.statusToggleTitle}
+              </span>
+            </button>
+          ) : null}
           <button
-            class={`saved-control saved-status-toggle ${account.canToggleStatusBar ? "" : "disabled"} ${props.togglePending ? "is-pending" : ""} ${account.showInStatusBar ? "is-checked" : ""}`}
+            class="saved-control saved-edit-tags-btn"
             type="button"
-            aria-label={account.statusToggleTitle}
-            aria-pressed={account.showInStatusBar}
-            aria-disabled={!account.canToggleStatusBar || props.busy}
-            onClick={() => {
-              if (!account.canToggleStatusBar || props.busy) {
-                return;
-              }
-              onAction("toggleStatusBar", account.id);
-            }}
+            aria-label={copy.editTagsBtn}
+            disabled={props.busy}
+            onClick={props.onEditTags}
           >
-            <span class="saved-control-label">{copy.statusShort}</span>
-            <span class="saved-status-toggle-indicator" aria-hidden="true">
-              <span></span>
-            </span>
-            {props.togglePending ? <span class="saved-toggle-spinner" aria-hidden="true"></span> : null}
+            {props.updateTagsPending ? <span class="saved-toggle-spinner" aria-hidden="true"></span> : <EditTagsIcon />}
             <span class="saved-control-tip align-right" aria-hidden="true">
-              {account.statusToggleTitle}
+              {copy.editTagsBtn}
             </span>
           </button>
-        ) : null}
+        </div>
         <div class="saved-title">
           <h3>
             <button
@@ -1260,15 +1728,23 @@ function SavedAccountCard(props: {
           <div class="saved-sub">
             {copy.login}: {account.authProviderLabel}
           </div>
-          <div class="saved-sub truncate" title={`${copy.userId}: ${userIdDisplay}`}>
-            {copy.userId}: {userIdDisplay}
+          <div class="saved-sub truncate" title={`${copy.accountId}: ${accountIdDisplay}`}>
+            {copy.accountId}: {accountIdDisplay}
           </div>
           <div class="saved-meta">
             {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
             {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
             <span class="pill plan">{account.planTypeLabel}</span>
-            {renderQuotaIssuePill(account, copy)}
+            {renderHealthPill(account)}
           </div>
+          <div class="saved-tags-row">
+            <div class="account-tag-row">{renderTagList(account.tags)}</div>
+          </div>
+          {account.lastAutoSwitchReason ? (
+            <div class="saved-switch-reason">
+              <strong>{copy.autoSwitchReasonTitle}:</strong> {formatAutoSwitchReasonSummary(account.lastAutoSwitchReason, copy)}
+            </div>
+          ) : null}
         </div>
       </div>
       <div class="saved-progress">
@@ -1292,7 +1768,7 @@ function SavedAccountCard(props: {
             onClick={() => onAction("reloadPrompt", account.id)}
           />
         ) : null}
-        {account.quotaIssueKind === "auth" ? (
+        {account.healthKind === "reauthorize" && !account.dismissedHealth ? (
           <ActionButton
             icon={renderReauthorizeIcon()}
             iconOnly
@@ -1300,6 +1776,16 @@ function SavedAccountCard(props: {
             pending={props.reauthorizePending}
             disabled={props.busy}
             onClick={() => onAction("reauthorize", account.id)}
+          />
+        ) : null}
+        {(account.healthKind === "disabled" || account.healthKind === "quota") && !account.dismissedHealth ? (
+          <ActionButton
+            icon={renderRefreshIcon()}
+            iconOnly
+            label={copy.resyncProfileBtn}
+            pending={props.resyncProfilePending}
+            disabled={props.busy}
+            onClick={() => onAction("resyncProfile", account.id)}
           />
         ) : null}
         <ActionButton
@@ -1556,14 +2042,33 @@ function renderReauthorizeIcon() {
   );
 }
 
-function renderQuotaIssuePill(account: DashboardAccountViewModel, copy: DashboardCopy) {
-  switch (account.quotaIssueKind) {
+function EditTagsIcon() {
+  return (
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <path
+        d="M642.62656 458.05056a119.808 119.808 0 0 1-82.06848-32.68608l-0.12288-0.11776a110.9248 110.9248 0 0 1-33.1776-79.55456 117.92896 117.92896 0 0 1 33.03424-81.408l0.128-0.13312a113.1008 113.1008 0 0 1 80.30208-32.81408 120.25856 120.25856 0 0 1 82.18112 32.67584l0.14336 0.13312 0.13824 0.14336c44.11392 46.43328 44.032 117.13536-0.13824 160.96768a113.51552 113.51552 0 0 1-80.41984 32.7936z m-34.0736-146.20672a46.08 46.08 0 0 0 1.31584 64.47616 47.00672 47.00672 0 0 0 64.9472 1.024 45.78304 45.78304 0 0 0 13.62944-32.68608 46.92992 46.92992 0 0 0-79.89248-32.81408z m109.89568-43.14112c-44.2112-41.23136-111.91808-41.23136-153.43104 0-41.6768 43.81184-41.6768 110.84288 0 151.9616 44.032 41.23648 111.76448 41.23648 153.43104 0s41.6256-108.14976 0-151.9616z m-39.12704 113.31072a53.54496 53.54496 0 0 1-74.04544-1.12128 52.66944 52.66944 0 0 1-1.39776-73.54368 53.69856 53.69856 0 0 1 75.4432 0 52.44416 52.44416 0 0 1 0 74.66496zM431.99488 931.84a120.26368 120.26368 0 0 1-82.18112-32.67584l-0.16384-0.15872-265.30304-265.27232A110.87872 110.87872 0 0 1 51.2 554.20928a117.76 117.76 0 0 1 33.03936-81.37728l343.424-340.13696c3.03104-3.00032 5.90848-5.95968 8.704-8.82176C452.87936 106.85952 467.15904 92.16 492.11392 92.16h348.83072l0.3328 0.03072c29.94688 3.072 55.2448 29.66016 55.2448 58.0352v344.99584c0 25.64096-10.30144 35.17952-27.36128 50.97984-4.00896 3.712-8.5504 7.91552-13.52192 12.83584l-23.5008 23.27552-47.88736-47.55968 23.33696-23.33184c17.66912-17.63328 26.624-31.70816 26.624-41.84064V173.39392a19.16416 19.16416 0 0 0-5.70368-13.68064 19.456 19.456 0 0 0-13.7728-5.66272h-290.08384v2.62144H518.144c-10.03008 0-28.99968 10.752-42.27072 23.9104L212.5824 441.30816l334.2848 330.8032 34.69312-34.69312 46.89408 46.592-116.16256 115.02592A113.08544 113.08544 0 0 1 431.99488 931.84z m-299.52-411.3152l-0.0768 0.0768a46.40768 46.40768 0 0 0-13.69088 32.768 45.7728 45.7728 0 0 0 13.69088 32.768l265.38496 265.30816a47.18592 47.18592 0 0 0 66.24768-0.0256l34.34496-34.0224L164.4544 486.656z m622.84288 344.61184L918.0672 703.488 972.8 761.04192l-162.56512 158.63808z m-228.77696-227.24096V476.37504h162.6112l213.76 212.31616-162.61632 161.52064z m213.75488 116.51584l66.16576-65.72032-146.91328-145.92h-66.176v65.72032z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function renderHealthPill(account: DashboardAccountViewModel) {
+  if (account.dismissedHealth) {
+    return null;
+  }
+
+  switch (account.healthKind) {
+    case "healthy":
+      return <span class="pill ok">{account.healthLabel}</span>;
+    case "expiring":
+      return <span class="pill warning">{account.healthLabel}</span>;
+    case "reauthorize":
     case "disabled":
-      return <span class="pill error">{copy.disabledTag}</span>;
-    case "auth":
-      return <span class="pill error">{copy.authErrorTag}</span>;
+    case "refresh_failed":
+      return <span class="pill error">{account.healthLabel}</span>;
     case "quota":
-      return <span class="pill warning">{copy.quotaErrorTag}</span>;
+      return <span class="pill warning">{account.healthLabel}</span>;
     default:
       return null;
   }
@@ -1727,6 +2232,32 @@ function SettingsToggleBlock(props: {
         </button>
       </div>
       {props.children}
+    </div>
+  );
+}
+
+function SettingsPreferenceRow(props: {
+  title: string;
+  sub: string;
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <div class="settings-preference-row">
+      <div class="settings-block-head">
+        <div class="settings-block-title">{props.title}</div>
+        <div class="settings-block-sub">{props.sub}</div>
+      </div>
+      <button
+        class={`settings-inline-toggle ${props.enabled ? "active" : ""}`}
+        type="button"
+        aria-pressed={props.enabled}
+        onClick={() => props.onToggle(!props.enabled)}
+      >
+        <span class="settings-inline-toggle-track">
+          <span class="settings-inline-toggle-thumb"></span>
+        </span>
+      </button>
     </div>
   );
 }
@@ -2044,6 +2575,55 @@ function normalizeThresholds(green: number, yellow: number): { green: number; ye
   };
 }
 
+function renderTagList(tags: string[]): ComponentChildren {
+  if (!tags.length) {
+    return null;
+  }
+
+  const visible = tags.slice(0, 2);
+  const remaining = tags.length - visible.length;
+  return (
+    <>
+      {visible.map((tag) => (
+        <span key={tag} class="tag-pill">
+          {tag}
+        </span>
+      ))}
+      {remaining > 0 ? <span class="tag-pill muted">+{remaining}</span> : null}
+    </>
+  );
+}
+
+function resolveLockMinutes(value: number): number {
+  return value > 0 ? value : 15;
+}
+
+function formatAutoSwitchReasonSummary(
+  reason: NonNullable<DashboardAccountViewModel["lastAutoSwitchReason"]>,
+  copy: DashboardCopy
+): string {
+  const trigger =
+    reason.trigger === "hourly"
+      ? copy.hourlyLabel
+      : reason.trigger === "weekly"
+        ? copy.weeklyLabel
+        : `${copy.hourlyLabel} + ${copy.weeklyLabel}`;
+  const rules = reason.matchedRules.map((rule) => {
+    switch (rule) {
+      case "same_email":
+        return copy.autoSwitchRuleSameEmail;
+      case "same_tag":
+        return copy.autoSwitchRuleSameTag;
+      case "workspace":
+        return copy.autoSwitchRuleWorkspace;
+      default:
+        return copy.autoSwitchRuleQuota;
+    }
+  });
+
+  return `${copy.autoSwitchReasonTrigger}: ${trigger} · ${copy.autoSwitchReasonMatchedRules}: ${rules.join(" / ")}`;
+}
+
 function resolveDiscreteIndex(values: number[], currentValue: number): number {
   const matchedIndex = values.indexOf(currentValue);
   if (matchedIndex >= 0) {
@@ -2312,6 +2892,8 @@ function getActionTimeoutMs(action: DashboardActionName): number {
     case "details":
     case "reloadPrompt":
     case "reauthorize":
+    case "resyncProfile":
+    case "dismissHealthIssue":
     case "switch":
     case "refresh":
     case "remove":
@@ -2319,14 +2901,19 @@ function getActionTimeoutMs(action: DashboardActionName): number {
       return 30_000;
     case "refreshAll":
       return 120_000;
+    case "restoreFromBackup":
+    case "restoreFromAuthJson":
+      return 60_000;
     case "shareTokens":
     case "prepareOAuthSession":
+    case "cancelOAuthSession":
       return 30_000;
     case "importSharedJson":
     case "completeOAuthSession":
       return 120_000;
     case "addAccount":
     case "importCurrent":
+    case "startOAuthAutoFlow":
       return 300_000;
     default:
       return 30_000;

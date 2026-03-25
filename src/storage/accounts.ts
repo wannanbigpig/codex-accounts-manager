@@ -19,6 +19,12 @@ import { readAuthFile, writeAuthFile } from "../codex";
 import {
   CodexAccountRecord,
   CodexAccountsIndex,
+  CodexAccountsRestoreResult,
+  CodexImportPreviewIssue,
+  CodexImportPreviewSummary,
+  CodexImportResultIssue,
+  CodexImportResultSummary,
+  CodexIndexHealthSummary,
   CodexQuotaSummary,
   CodexTokens,
   SharedCodexAccountJson
@@ -27,7 +33,7 @@ import { fetchRemoteAccountProfile } from "../services/profile";
 import { buildAccountStorageId } from "../utils/accountIdentity";
 import { extractClaims } from "../utils/jwt";
 import { normalizeQuotaSummary } from "../utils/quotaWindows";
-import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
+import { AccountError, StorageError, createError, ErrorCode, getErrorMessage } from "../core/errors";
 
 /** 缓存失效时间 (毫秒) */
 const CACHE_TTL_MS = 5000;
@@ -35,6 +41,8 @@ const CACHE_TTL_MS = 5000;
 const DEBOUNCE_DELAY_MS = 100;
 
 const INDEX_FILE = "accounts-index.json";
+const INDEX_TEMP_SUFFIX = ".tmp";
+const INDEX_BACKUP_COUNT = 3;
 
 /**
  * 缓存条目类型
@@ -73,6 +81,12 @@ export class AccountsRepository {
   /** 防止重复释放 */
   private disposed = false;
 
+  /** 索引健康状态 */
+  private indexHealth: CodexIndexHealthSummary = {
+    status: "healthy",
+    availableBackups: 0
+  };
+
   constructor(private readonly context: vscode.ExtensionContext) {
     this.secretStore = new SecretStore(context.secrets);
     this.indexPath = path.join(context.globalStorageUri.fsPath, INDEX_FILE);
@@ -86,9 +100,18 @@ export class AccountsRepository {
   async init(): Promise<void> {
     try {
       await fs.mkdir(this.context.globalStorageUri.fsPath, { recursive: true });
-      await this.syncActiveAccountFromAuthFile();
     } catch (cause) {
       throw createError.storageWriteFailed(this.context.globalStorageUri.fsPath, cause);
+    }
+
+    try {
+      await this.syncActiveAccountFromAuthFile();
+    } catch (cause) {
+      if (isIndexHealthError(cause)) {
+        console.error("[codexAccounts] accounts index init failed:", cause);
+        return;
+      }
+      throw cause;
     }
   }
 
@@ -120,14 +143,111 @@ export class AccountsRepository {
    * 获取所有账号列表
    */
   async listAccounts(): Promise<CodexAccountRecord[]> {
-    return (await this.readIndex()).accounts;
+    try {
+      return (await this.readIndex()).accounts;
+    } catch (error) {
+      if (isIndexHealthError(error)) {
+        return [];
+      }
+      throw error;
+    }
   }
 
   /**
    * 获取单个账号
    */
   async getAccount(accountId: string): Promise<CodexAccountRecord | undefined> {
-    return (await this.readIndex()).accounts.find((item) => item.id === accountId);
+    try {
+      return (await this.readIndex()).accounts.find((item) => item.id === accountId);
+    } catch (error) {
+      if (isIndexHealthError(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  async getIndexHealthSummary(): Promise<CodexIndexHealthSummary> {
+    try {
+      await this.readIndex();
+    } catch (error) {
+      if (!isIndexHealthError(error)) {
+        throw error;
+      }
+    }
+
+    return {
+      ...this.indexHealth,
+      availableBackups: await this.countAvailableBackups()
+    };
+  }
+
+  async restoreIndexFromLatestBackup(): Promise<CodexAccountsRestoreResult> {
+    const restored = await this.tryRestoreFromBackups("backup");
+    if (!restored) {
+      throw createError.storageIndexRecoveryFailed(this.indexPath, this.indexHealth.lastErrorMessage);
+    }
+
+    return {
+      source: "backup",
+      restoredCount: restored.accounts.length,
+      restoredEmails: restored.accounts.map((account) => account.email)
+    };
+  }
+
+  async restoreAccountsFromAuthFile(): Promise<CodexAccountsRestoreResult> {
+    const auth = await readAuthFile();
+    if (!auth) {
+      throw new AccountError("Current auth.json was not found", {
+        code: ErrorCode.NOT_FOUND,
+        i18nKey: "message.accountNotFound"
+      });
+    }
+
+    const restored = await this.upsertFromTokensInternal(
+      {
+        idToken: auth.tokens.id_token,
+        accessToken: auth.tokens.access_token,
+        refreshToken: auth.tokens.refresh_token,
+        accountId: auth.tokens.account_id
+      },
+      true,
+      {
+        allowRecoveryWrite: true,
+        persistImmediately: true,
+        restoreSource: "auth_json"
+      }
+    );
+
+    return {
+      source: "auth_json",
+      restoredCount: 1,
+      restoredEmails: [restored.email]
+    };
+  }
+
+  async restoreAccountsFromSharedJson(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ): Promise<CodexAccountsRestoreResult> {
+    let restored: CodexAccountRecord[];
+    try {
+      restored = await this.importSharedAccountsInternal(input, {
+        allowRecoveryWrite: true,
+        persistImmediately: true,
+        restoreSource: "shared_json"
+      });
+    } catch (error) {
+      this.pendingSave = null;
+      this.isDirty = false;
+      this.cache = this.indexHealth.status === "corrupted_unrecoverable" ? null : this.cache;
+      throw error;
+    }
+
+    return {
+      source: "shared_json",
+      restoredCount: restored.length,
+      restoredEmails: restored.map((account) => account.email)
+    };
   }
 
   /**
@@ -175,6 +295,166 @@ export class AccountsRepository {
     return account;
   }
 
+  async refreshAccountProfileMetadata(accountId: string): Promise<CodexAccountRecord> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      throw createError.accountNotFound(accountId);
+    }
+
+    const tokens = await this.secretStore.getTokens(accountId);
+    if (!tokens) {
+      throw new AccountError(`Tokens missing for account ${account.email}`, {
+        code: ErrorCode.AUTH_TOKEN_MISSING
+      });
+    }
+
+    const claims = extractClaims(tokens.idToken, tokens.accessToken);
+    const remoteProfile = await fetchRemoteAccountProfile(tokens);
+    if (!remoteProfile) {
+      throw new AccountError(`No remote profile returned for ${account.email}`, {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
+      });
+    }
+
+    if (didRemoteAccountMatchClaims(remoteProfile, claims.accountId)) {
+      const sanitizedName = sanitizeWorkspaceName(remoteProfile.accountName, account.planType);
+      if (sanitizedName) {
+        account.accountName = sanitizedName;
+      }
+      account.accountId = remoteProfile.accountId ?? claims.accountId ?? account.accountId;
+      account.organizationId = claims.organizationId ?? account.organizationId;
+      account.accountStructure = resolveAccountStructure(
+        remoteProfile.accountStructure,
+        account.accountStructure,
+        account.planType,
+        account.organizationId
+      );
+      account.updatedAt = Date.now();
+      account.dismissedHealthIssueKey = undefined;
+      this.writeIndex(index);
+    }
+
+    return account;
+  }
+
+  async dismissHealthIssue(accountId: string, issueKey?: string): Promise<CodexAccountRecord> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      throw createError.accountNotFound(accountId);
+    }
+
+    account.dismissedHealthIssueKey = issueKey?.trim() || undefined;
+    account.updatedAt = Date.now();
+    this.writeIndex(index);
+    return account;
+  }
+
+  async setAccountTags(accountId: string, tags: string[]): Promise<CodexAccountRecord> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      throw createError.accountNotFound(accountId);
+    }
+
+    account.tags = normalizeAccountTags(tags);
+    account.updatedAt = Date.now();
+    this.writeIndex(index);
+    return { ...account, tags: [...(account.tags ?? [])] };
+  }
+
+  async addAccountTags(accountIds: string[], tags: string[]): Promise<CodexAccountRecord[]> {
+    const normalizedTags = normalizeAccountTags(tags) ?? [];
+    if (!normalizedTags.length) {
+      return [];
+    }
+
+    const idSet = new Set(accountIds);
+    const index = await this.readIndex();
+    const updated: CodexAccountRecord[] = [];
+
+    for (const account of index.accounts) {
+      if (!idSet.has(account.id)) {
+        continue;
+      }
+      account.tags = normalizeAccountTags([...(account.tags ?? []), ...normalizedTags]);
+      account.updatedAt = Date.now();
+      updated.push({ ...account, tags: [...(account.tags ?? [])] });
+    }
+
+    if (updated.length > 0) {
+      this.writeIndex(index);
+    }
+
+    return updated;
+  }
+
+  async removeAccountTags(accountIds: string[], tags: string[]): Promise<CodexAccountRecord[]> {
+    const normalizedTags = normalizeAccountTags(tags) ?? [];
+    if (!normalizedTags.length) {
+      return [];
+    }
+
+    const removeSet = new Set(normalizedTags.map((tag) => tag.toLowerCase()));
+    const idSet = new Set(accountIds);
+    const index = await this.readIndex();
+    const updated: CodexAccountRecord[] = [];
+
+    for (const account of index.accounts) {
+      if (!idSet.has(account.id)) {
+        continue;
+      }
+
+      const nextTags = (account.tags ?? []).filter((tag) => !removeSet.has(tag.toLowerCase()));
+      account.tags = normalizeAccountTags(nextTags);
+      account.updatedAt = Date.now();
+      updated.push({ ...account, tags: [...(account.tags ?? [])] });
+    }
+
+    if (updated.length > 0) {
+      this.writeIndex(index);
+    }
+
+    return updated;
+  }
+
+  async previewSharedAccountsImport(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ): Promise<CodexImportPreviewSummary> {
+    const entries = Array.isArray(input) ? input : [input];
+    const existing = await this.readIndex().catch(() => createEmptyIndex());
+    const existingIds = new Set(existing.accounts.map((account) => account.id));
+    const invalidEntries: CodexImportPreviewIssue[] = [];
+    let valid = 0;
+    let overwriteCount = 0;
+
+    entries.forEach((entry, index) => {
+      try {
+        const preview = previewSharedEntry(entry);
+        valid += 1;
+        if (preview.storageId && existingIds.has(preview.storageId)) {
+          overwriteCount += 1;
+        }
+      } catch (error) {
+        invalidEntries.push({
+          index,
+          accountId: sanitizeOptionalValue(entry.account_id) ?? sanitizeOptionalValue(entry.id),
+          email: sanitizeOptionalValue(entry.email),
+          message: getErrorMessage(error)
+        });
+      }
+    });
+
+    return {
+      total: entries.length,
+      valid,
+      overwriteCount,
+      invalidCount: invalidEntries.length,
+      invalidEntries
+    };
+  }
+
   /**
    * 插入或更新账号 (从令牌)
    *
@@ -183,6 +463,18 @@ export class AccountsRepository {
    * @returns 账号记录
    */
   async upsertFromTokens(tokens: CodexTokens, forceActive = false): Promise<CodexAccountRecord> {
+    return this.upsertFromTokensInternal(tokens, forceActive);
+  }
+
+  private async upsertFromTokensInternal(
+    tokens: CodexTokens,
+    forceActive = false,
+    options: {
+      allowRecoveryWrite?: boolean;
+      persistImmediately?: boolean;
+      restoreSource?: CodexAccountsRestoreResult["source"];
+    } = {}
+  ): Promise<CodexAccountRecord> {
     const claims = extractClaims(tokens.idToken, tokens.accessToken);
     if (!claims.email) {
       throw new AccountError("Unable to extract email from id_token", {
@@ -198,7 +490,7 @@ export class AccountsRepository {
       remoteProfile = undefined;
     }
 
-    const index = await this.readIndex();
+    const index = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
     const id = buildAccountStorageId(claims.email, claims.accountId, claims.organizationId);
     const existing = index.accounts.find((item) => item.id === id);
     const now = Date.now();
@@ -221,6 +513,7 @@ export class AccountsRepository {
       accountId: remoteAccountIdMatchesClaims ? remoteProfile?.accountId ?? claims.accountId ?? tokens.accountId : claims.accountId ?? tokens.accountId,
       organizationId: claims.organizationId,
       accountName: resolvedAccountName,
+      tags: normalizeAccountTags(existing?.tags),
       accountStructure: resolveAccountStructure(
         remoteAccountStructure,
         existing?.accountStructure,
@@ -229,6 +522,7 @@ export class AccountsRepository {
       ),
       isActive: forceActive,
       showInStatusBar: existing?.showInStatusBar ?? shouldEnableStatusBarByDefault(index.accounts, id),
+      dismissedHealthIssueKey: existing?.dismissedHealthIssueKey,
       lastQuotaAt: existing?.lastQuotaAt,
       quotaSummary: existing?.quotaSummary,
       quotaError: existing?.quotaError,
@@ -250,8 +544,23 @@ export class AccountsRepository {
       accountId: account.accountId ?? tokens.accountId
     });
 
-    // 异步保存索引
-    this.writeIndex(index);
+    if (options.persistImmediately) {
+      await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
+    } else if (options.allowRecoveryWrite) {
+      if (this.saveDebounceTimer) {
+        clearTimeout(this.saveDebounceTimer);
+        this.saveDebounceTimer = null;
+      }
+      const snapshot = cloneIndex(index);
+      this.cache = {
+        data: snapshot,
+        timestamp: Date.now()
+      };
+      this.pendingSave = snapshot;
+      this.isDirty = true;
+    } else {
+      this.writeIndex(index);
+    }
 
     return account;
   }
@@ -302,13 +611,71 @@ export class AccountsRepository {
   }
 
   async importSharedAccounts(input: SharedCodexAccountJson | SharedCodexAccountJson[]): Promise<CodexAccountRecord[]> {
+    return this.importSharedAccountsInternal(input);
+  }
+
+  async importSharedAccountsWithSummary(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[]
+  ): Promise<CodexImportResultSummary> {
+    const entries = Array.isArray(input) ? input : [input];
+    const preview = await this.previewSharedAccountsImport(entries);
+    const failures: CodexImportResultIssue[] = [];
+    const importedEmails: string[] = [];
+    let successCount = 0;
+
+    for (const [index, entry] of entries.entries()) {
+      try {
+        const imported = await this.importSharedAccountsInternal(entry);
+        const first = imported[0];
+        if (!first) {
+          failures.push({
+            index,
+            accountId: sanitizeOptionalValue(entry.account_id) ?? sanitizeOptionalValue(entry.id),
+            email: sanitizeOptionalValue(entry.email),
+            message: "Import returned no account"
+          });
+          continue;
+        }
+        successCount += 1;
+        importedEmails.push(first.email);
+      } catch (error) {
+        failures.push({
+          index,
+          accountId: sanitizeOptionalValue(entry.account_id) ?? sanitizeOptionalValue(entry.id),
+          email: sanitizeOptionalValue(entry.email),
+          message: getErrorMessage(error)
+        });
+      }
+    }
+
+    return {
+      total: entries.length,
+      successCount,
+      overwriteCount: preview.overwriteCount,
+      failedCount: failures.length,
+      importedEmails,
+      failures
+    };
+  }
+
+  private async importSharedAccountsInternal(
+    input: SharedCodexAccountJson | SharedCodexAccountJson[],
+    options: {
+      allowRecoveryWrite?: boolean;
+      persistImmediately?: boolean;
+      restoreSource?: CodexAccountsRestoreResult["source"];
+    } = {}
+  ): Promise<CodexAccountRecord[]> {
     const entries = Array.isArray(input) ? input : [input];
     const imported: CodexAccountRecord[] = [];
 
     for (const entry of entries) {
       const restoredTokens = restoreSharedTokens(entry);
-      const created = await this.upsertFromTokens(restoredTokens, false);
-      const index = await this.readIndex();
+      const created = await this.upsertFromTokensInternal(restoredTokens, false, {
+        allowRecoveryWrite: options.allowRecoveryWrite,
+        persistImmediately: false
+      });
+      const index = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
       const account = index.accounts.find((item) => item.id === created.id);
       if (!account) {
         continue;
@@ -319,6 +686,7 @@ export class AccountsRepository {
       account.accountId = sanitizeOptionalValue(entry.account_id) ?? account.accountId;
       account.organizationId = sanitizeOptionalValue(entry.organization_id) ?? account.organizationId;
       account.accountName = sanitizeOptionalValue(entry.account_name) ?? account.accountName;
+      account.tags = normalizeAccountTags(entry.tags, account.tags);
       account.accountStructure = sanitizeOptionalValue(entry.account_structure) ?? account.accountStructure;
       account.createdAt = normalizeEpochMs(entry.created_at) ?? account.createdAt;
       account.updatedAt = normalizeEpochMs(entry.last_used) ?? Date.now();
@@ -342,7 +710,11 @@ export class AccountsRepository {
         accountId: account.accountId ?? restoredTokens.accountId
       });
 
-      this.writeIndex(index);
+      if (options.persistImmediately) {
+        await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
+      } else {
+        this.writeIndex(index);
+      }
       imported.push({ ...account });
     }
 
@@ -467,6 +839,7 @@ export class AccountsRepository {
     account.updatedAt = Date.now();
     account.quotaSummary = normalizeQuotaSummary(quotaSummary);
     account.quotaError = quotaError;
+    account.dismissedHealthIssueKey = undefined;
 
     if (updatedPlanType) {
       account.planType = updatedPlanType;
@@ -547,6 +920,12 @@ export class AccountsRepository {
    * 读取索引 (带缓存)
    */
   private async readIndex(): Promise<CodexAccountsIndex> {
+    if (this.indexHealth.status === "corrupted_unrecoverable") {
+      throw createError.storageWriteBlocked(
+        "Accounts index is corrupted and must be restored before continuing."
+      );
+    }
+
     if (this.pendingSave) {
       return cloneIndex(this.pendingSave);
     }
@@ -559,20 +938,58 @@ export class AccountsRepository {
       }
     }
 
-    // 缓存无效，从文件读取
     try {
-      const raw = await fs.readFile(this.indexPath, "utf8");
-      const snapshot = cloneIndex(JSON.parse(raw) as CodexAccountsIndex);
-
-      // 更新缓存
+      const snapshot = await this.readIndexSnapshot(this.indexPath);
       this.cache = {
         data: snapshot,
         timestamp: Date.now()
       };
-
+      this.indexHealth = {
+        ...this.indexHealth,
+        status: this.indexHealth.status === "restored_from_backup" ? "restored_from_backup" : "healthy",
+        availableBackups: await this.countAvailableBackups()
+      };
       return cloneIndex(snapshot);
-    } catch {
-      // 文件不存在或解析失败，返回空索引
+    } catch (cause) {
+      if (isFileNotFoundError(cause)) {
+        console.info("[codexAccounts] accounts index not found, using empty index");
+        this.indexHealth = {
+          status: "healthy",
+          availableBackups: await this.countAvailableBackups()
+        };
+        this.cache = {
+          data: createEmptyIndex(),
+          timestamp: Date.now()
+        };
+        return cloneIndex(this.cache.data);
+      }
+
+      console.error("[codexAccounts] failed to read accounts index, attempting recovery:", cause);
+      const restored = await this.tryRestoreFromBackups("backup", cause);
+      if (restored) {
+        return cloneIndex(restored);
+      }
+
+      this.cache = null;
+      this.pendingSave = null;
+      this.indexHealth = {
+        status: "corrupted_unrecoverable",
+        lastRestoreSource: this.indexHealth.lastRestoreSource,
+        availableBackups: await this.countAvailableBackups(),
+        lastErrorMessage: getErrorMessage(cause)
+      };
+      throw createError.storageIndexRecoveryFailed(this.indexPath, cause);
+    }
+  }
+
+  private async readIndexForRecovery(): Promise<CodexAccountsIndex> {
+    try {
+      return await this.readIndex();
+    } catch (error) {
+      if (!isIndexHealthError(error)) {
+        throw error;
+      }
+
       const empty = createEmptyIndex();
       this.cache = {
         data: empty,
@@ -586,6 +1003,7 @@ export class AccountsRepository {
    * 写入索引 (带防抖)
    */
   private writeIndex(index: CodexAccountsIndex): void {
+    this.assertWriteAllowed();
     const snapshot = cloneIndex(index);
 
     // 更新缓存
@@ -609,7 +1027,6 @@ export class AccountsRepository {
 
   private async flushPendingSave(): Promise<void> {
     const snapshot = this.pendingSave;
-    this.pendingSave = null;
     this.saveDebounceTimer = null;
 
     if (!snapshot) {
@@ -625,6 +1042,9 @@ export class AccountsRepository {
 
     try {
       await persistTask;
+      if (this.pendingSave === snapshot) {
+        this.pendingSave = null;
+      }
       if (!this.pendingSave) {
         this.isDirty = false;
       }
@@ -636,7 +1056,19 @@ export class AccountsRepository {
   private async persistIndex(index: CodexAccountsIndex): Promise<void> {
     try {
       await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
-      await fs.writeFile(this.indexPath, JSON.stringify(index, null, 2), "utf8");
+      await this.backupCurrentIndex();
+      await this.writeIndexAtomically(index);
+      if (this.indexHealth.status === "corrupted_unrecoverable") {
+        this.indexHealth = {
+          status: "healthy",
+          availableBackups: await this.countAvailableBackups()
+        };
+      } else {
+        this.indexHealth = {
+          ...this.indexHealth,
+          availableBackups: await this.countAvailableBackups()
+        };
+      }
     } catch (cause) {
       throw createError.storageWriteFailed(this.indexPath, cause);
     }
@@ -648,10 +1080,171 @@ export class AccountsRepository {
   private persistIndexSync(index: CodexAccountsIndex): void {
     try {
       fsSync.mkdirSync(path.dirname(this.indexPath), { recursive: true });
-      fsSync.writeFileSync(this.indexPath, JSON.stringify(index, null, 2), "utf8");
+      this.backupCurrentIndexSync();
+      this.writeIndexAtomicallySync(index);
+      if (this.indexHealth.status === "corrupted_unrecoverable") {
+        this.indexHealth = {
+          status: "healthy",
+          availableBackups: countAvailableBackupsSync(this.indexPath)
+        };
+      } else {
+        this.indexHealth = {
+          ...this.indexHealth,
+          availableBackups: countAvailableBackupsSync(this.indexPath)
+        };
+      }
     } catch (cause) {
       throw createError.storageWriteFailed(this.indexPath, cause);
     }
+  }
+
+  private assertWriteAllowed(): void {
+    if (this.indexHealth.status === "corrupted_unrecoverable") {
+      console.warn("[codexAccounts] blocked write because accounts index is corrupted");
+      throw createError.storageWriteBlocked("Accounts index is corrupted. Restore accounts before writing again.");
+    }
+  }
+
+  private async persistRecoveredIndex(
+    index: CodexAccountsIndex,
+    source: CodexAccountsRestoreResult["source"]
+  ): Promise<void> {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = null;
+    }
+    this.pendingSave = null;
+    await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
+    await this.backupCurrentIndex();
+    await this.writeIndexAtomically(index);
+    this.isDirty = false;
+    this.cache = {
+      data: cloneIndex(index),
+      timestamp: Date.now()
+    };
+    this.indexHealth = {
+      status: source === "backup" ? "restored_from_backup" : "healthy",
+      lastRestoreSource: source,
+      availableBackups: await this.countAvailableBackups(),
+      lastRecoveredAt: Date.now()
+    };
+  }
+
+  private async readIndexSnapshot(filePath: string): Promise<CodexAccountsIndex> {
+    const raw = await fs.readFile(filePath, "utf8");
+    return parseAccountsIndex(raw, filePath);
+  }
+
+  private async tryRestoreFromBackups(
+    source: CodexAccountsRestoreResult["source"],
+    originalError?: unknown
+  ): Promise<CodexAccountsIndex | undefined> {
+    for (let slot = 1; slot <= INDEX_BACKUP_COUNT; slot += 1) {
+      const backupPath = getBackupPath(this.indexPath, slot);
+      try {
+        const snapshot = await this.readIndexSnapshot(backupPath);
+        console.warn(`[codexAccounts] restored accounts index from backup-${slot}`);
+        await this.persistRecoveredIndex(snapshot, source);
+        this.indexHealth = {
+          ...this.indexHealth,
+          status: "restored_from_backup",
+          lastRestoreSource: "backup",
+          lastErrorMessage: originalError ? getErrorMessage(originalError) : undefined
+        };
+        return snapshot;
+      } catch (error) {
+        if (!isFileNotFoundError(error)) {
+          console.error(`[codexAccounts] failed to restore accounts index from backup-${slot}:`, error);
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private async countAvailableBackups(): Promise<number> {
+    let count = 0;
+    for (let slot = 1; slot <= INDEX_BACKUP_COUNT; slot += 1) {
+      try {
+        await fs.access(getBackupPath(this.indexPath, slot));
+        count += 1;
+      } catch {
+        continue;
+      }
+    }
+    return count;
+  }
+
+  private async backupCurrentIndex(): Promise<void> {
+    const current = await this.readCurrentIndexForBackup();
+    if (!current) {
+      return;
+    }
+
+    console.info("[codexAccounts] creating accounts index backup");
+    for (let slot = INDEX_BACKUP_COUNT; slot >= 2; slot -= 1) {
+      const from = getBackupPath(this.indexPath, slot - 1);
+      const to = getBackupPath(this.indexPath, slot);
+      try {
+        await fs.copyFile(from, to);
+      } catch (error) {
+        if (!isFileNotFoundError(error)) {
+          console.error(`[codexAccounts] failed to rotate backup ${slot - 1} -> ${slot}:`, error);
+        }
+      }
+    }
+
+    await fs.writeFile(getBackupPath(this.indexPath, 1), current, "utf8");
+  }
+
+  private backupCurrentIndexSync(): void {
+    const current = readCurrentIndexForBackupSync(this.indexPath);
+    if (!current) {
+      return;
+    }
+
+    for (let slot = INDEX_BACKUP_COUNT; slot >= 2; slot -= 1) {
+      const from = getBackupPath(this.indexPath, slot - 1);
+      const to = getBackupPath(this.indexPath, slot);
+      try {
+        fsSync.copyFileSync(from, to);
+      } catch (error) {
+        if (!isFileNotFoundError(error)) {
+          console.error(`[codexAccounts] failed to rotate backup ${slot - 1} -> ${slot}:`, error);
+        }
+      }
+    }
+
+    fsSync.writeFileSync(getBackupPath(this.indexPath, 1), current, "utf8");
+  }
+
+  private async readCurrentIndexForBackup(): Promise<string | undefined> {
+    try {
+      const raw = await fs.readFile(this.indexPath, "utf8");
+      parseAccountsIndex(raw, this.indexPath);
+      return raw;
+    } catch (error) {
+      if (!isFileNotFoundError(error)) {
+        console.warn("[codexAccounts] skipped index backup because current index is unreadable");
+      }
+      return undefined;
+    }
+  }
+
+  private async writeIndexAtomically(index: CodexAccountsIndex): Promise<void> {
+    const serialized = JSON.stringify(index, null, 2);
+    parseAccountsIndex(serialized, `${this.indexPath}${INDEX_TEMP_SUFFIX}`);
+    const tempPath = `${this.indexPath}${INDEX_TEMP_SUFFIX}`;
+    await fs.writeFile(tempPath, serialized, "utf8");
+    await fs.rename(tempPath, this.indexPath);
+  }
+
+  private writeIndexAtomicallySync(index: CodexAccountsIndex): void {
+    const serialized = JSON.stringify(index, null, 2);
+    parseAccountsIndex(serialized, `${this.indexPath}${INDEX_TEMP_SUFFIX}`);
+    const tempPath = `${this.indexPath}${INDEX_TEMP_SUFFIX}`;
+    fsSync.writeFileSync(tempPath, serialized, "utf8");
+    fsSync.renameSync(tempPath, this.indexPath);
   }
 }
 
@@ -817,11 +1410,95 @@ function cloneIndex(index: CodexAccountsIndex): CodexAccountsIndex {
     accounts: Array.isArray(index?.accounts)
       ? index.accounts.map((account) => ({
           ...account,
+          tags: normalizeAccountTags(account.tags),
           quotaSummary: normalizeQuotaSummary(account.quotaSummary)
         }))
       : []
   };
   return JSON.parse(JSON.stringify(normalized)) as CodexAccountsIndex;
+}
+
+function parseAccountsIndex(raw: string, filePath: string): CodexAccountsIndex {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isValidAccountsIndex(parsed)) {
+      throw new Error("Invalid accounts index structure");
+    }
+    return cloneIndex(parsed as CodexAccountsIndex);
+  } catch (cause) {
+    throw createError.storageIndexCorrupted(filePath, cause);
+  }
+}
+
+function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<CodexAccountsIndex>;
+  if (!Array.isArray(candidate.accounts)) {
+    return false;
+  }
+
+  return candidate.accounts.every((account) => {
+    if (!account || typeof account !== "object") {
+      return false;
+    }
+
+    const record = account as Partial<CodexAccountRecord>;
+    return (
+      typeof record.id === "string" &&
+      typeof record.email === "string" &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number" &&
+      (record.tags === undefined || (Array.isArray(record.tags) && record.tags.every((tag) => typeof tag === "string")))
+    );
+  });
+}
+
+function getBackupPath(indexPath: string, slot: number): string {
+  return indexPath.replace(/\.json$/i, `.backup-${slot}.json`);
+}
+
+function countAvailableBackupsSync(indexPath: string): number {
+  let count = 0;
+  for (let slot = 1; slot <= INDEX_BACKUP_COUNT; slot += 1) {
+    if (fsSync.existsSync(getBackupPath(indexPath, slot))) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function readCurrentIndexForBackupSync(indexPath: string): string | undefined {
+  try {
+    const raw = fsSync.readFileSync(indexPath, "utf8");
+    parseAccountsIndex(raw, indexPath);
+    return raw;
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      console.warn("[codexAccounts] skipped sync index backup because current index is unreadable");
+    }
+    return undefined;
+  }
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "ENOENT"
+  );
+}
+
+function isIndexHealthError(error: unknown): boolean {
+  return (
+    error instanceof StorageError &&
+    (error.code === ErrorCode.STORAGE_INDEX_CORRUPTED ||
+      error.code === ErrorCode.STORAGE_INDEX_RECOVERY_FAILED ||
+      error.code === ErrorCode.STORAGE_WRITE_BLOCKED)
+  );
 }
 
 /**
@@ -900,7 +1577,7 @@ function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTokens): 
           timestamp: account.quotaError.timestamp
         }
       : null,
-    tags: null,
+    tags: account.tags?.length ? [...account.tags] : null,
     created_at: Math.floor(account.createdAt / 1000),
     last_used: Math.floor(account.updatedAt / 1000)
   };
@@ -928,6 +1605,21 @@ function toSharedQuota(summary?: CodexQuotaSummary): SharedCodexAccountJson["quo
   };
 }
 
+function previewSharedEntry(entry: SharedCodexAccountJson): { storageId?: string; email?: string } {
+  const restoredTokens = restoreSharedTokens(entry);
+  const claims = extractClaims(restoredTokens.idToken, restoredTokens.accessToken);
+  if (!claims.email) {
+    throw new AccountError("Shared account JSON does not include a valid email in tokens", {
+      code: ErrorCode.ACCOUNT_INVALID_DATA
+    });
+  }
+
+  return {
+    storageId: buildAccountStorageId(claims.email, claims.accountId, claims.organizationId),
+    email: claims.email
+  };
+}
+
 function restoreSharedTokens(entry: SharedCodexAccountJson): CodexTokens {
   const idToken = sanitizeOptionalValue(entry.tokens?.id_token);
   const accessToken = sanitizeOptionalValue(entry.tokens?.access_token);
@@ -943,6 +1635,24 @@ function restoreSharedTokens(entry: SharedCodexAccountJson): CodexTokens {
     refreshToken: sanitizeOptionalValue(entry.tokens?.refresh_token),
     accountId: sanitizeOptionalValue(entry.tokens?.account_id) ?? sanitizeOptionalValue(entry.account_id)
   };
+}
+
+function normalizeAccountTags(
+  tags: string[] | null | undefined | unknown,
+  fallback?: string[] | null | undefined
+): string[] | undefined {
+  const source = Array.isArray(tags) ? tags : Array.isArray(fallback) ? fallback : [];
+  const normalized = Array.from(
+    new Map(
+      source
+        .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+        .filter(Boolean)
+        .slice(0, 20)
+        .map((tag) => [tag.toLowerCase(), tag.slice(0, 24)])
+    ).values()
+  ).slice(0, 10);
+
+  return normalized.length ? normalized : undefined;
 }
 
 function fromSharedQuota(quota: NonNullable<SharedCodexAccountJson["quota"]>): CodexQuotaSummary {

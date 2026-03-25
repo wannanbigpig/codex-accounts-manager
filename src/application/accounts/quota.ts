@@ -4,12 +4,19 @@ import { CodexAccountRecord } from "../../core/types";
 import { QuotaRefreshResult, refreshQuota } from "../../services";
 import { AccountsRepository } from "../../storage";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
+import {
+  clearAutoSwitchLock,
+  isAutoSwitchLocked,
+  recordAutoSwitchReason
+} from "../../presentation/workbench/autoSwitchState";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
 
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
 const AUTO_SWITCH_HOURLY_THRESHOLD = "autoSwitchHourlyThreshold";
 const AUTO_SWITCH_WEEKLY_THRESHOLD = "autoSwitchWeeklyThreshold";
+const AUTO_SWITCH_PREFER_SAME_EMAIL = "autoSwitchPreferSameEmail";
+const AUTO_SWITCH_PREFER_SAME_TAG = "autoSwitchPreferSameTag";
 const QUOTA_WARNING_ENABLED = "quotaWarningEnabled";
 const QUOTA_WARNING_THRESHOLD = "quotaWarningThreshold";
 const SHOW_CODE_REVIEW_QUOTA = "showCodeReviewQuota";
@@ -134,6 +141,9 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   if (!active?.quotaSummary || active.quotaError) {
     return false;
   }
+  if (isAutoSwitchLocked(active.id)) {
+    return false;
+  }
 
   const activeHourlyTriggered =
     hasComparableHourlyWindow(active) && active.quotaSummary.hourlyPercentage <= hourlyThreshold;
@@ -144,6 +154,8 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
     return false;
   }
 
+  const preferSameEmail = config.get<boolean>(AUTO_SWITCH_PREFER_SAME_EMAIL, true);
+  const preferSameTag = config.get<boolean>(AUTO_SWITCH_PREFER_SAME_TAG, true);
   const candidates = accounts
     .filter(
       (account) =>
@@ -155,14 +167,27 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
         (!activeWeeklyTriggered ||
           (hasComparableWeeklyWindow(account) && account.quotaSummary.weeklyPercentage > weeklyThreshold))
     )
-    .sort(compareAutoSwitchCandidate(hourlyThreshold, weeklyThreshold));
+    .sort(compareAutoSwitchCandidate(active, hourlyThreshold, weeklyThreshold, preferSameEmail, preferSameTag));
 
   const next = candidates[0];
   if (!next) {
     return false;
   }
 
+  const matchedRules = buildMatchedRules(active, next, preferSameEmail, preferSameTag);
   await repo.switchAccount(next.id);
+  clearAutoSwitchLock(active.id);
+  recordAutoSwitchReason({
+    fromAccountId: active.id,
+    fromEmail: active.email,
+    toAccountId: next.id,
+    toEmail: next.email,
+    trigger: activeHourlyTriggered && activeWeeklyTriggered ? "hourly_and_weekly" : activeHourlyTriggered ? "hourly" : "weekly",
+    matchedRules,
+    hourlyThreshold,
+    weeklyThreshold,
+    createdAt: Date.now()
+  });
   view.markObservedAuthIdentity?.(next.id);
   view.refresh();
 
@@ -173,7 +198,10 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   const copy = getDashboardCopy(getLanguage());
   const commandCopy = getCommandCopy();
   const choice = await vscode.window.showInformationMessage(
-    `${copy.autoSwitchToastSwitched.replace("{account}", formatAccountToastLabel(next))} ${commandCopy.switchedAndAskReload(next.email)}`,
+    `${copy.autoSwitchToastSwitched.replace("{account}", formatAccountToastLabel(next))} (${formatAutoSwitchReasonText(
+      matchedRules,
+      copy
+    )}) ${commandCopy.switchedAndAskReload(next.email)}`,
     commandCopy.reloadNow,
     commandCopy.later
   );
@@ -256,15 +284,35 @@ export function formatAccountToastLabel(account: CodexAccountRecord): string {
   return account.email;
 }
 
-function compareAutoSwitchCandidate(hourlyThreshold: number, weeklyThreshold: number) {
+function compareAutoSwitchCandidate(
+  active: CodexAccountRecord,
+  hourlyThreshold: number,
+  weeklyThreshold: number,
+  preferSameEmail: boolean,
+  preferSameTag: boolean
+) {
   return (left: CodexAccountRecord, right: CodexAccountRecord): number => {
-    const leftScore = getAutoSwitchScore(left, hourlyThreshold, weeklyThreshold);
-    const rightScore = getAutoSwitchScore(right, hourlyThreshold, weeklyThreshold);
+    const leftScore = getAutoSwitchScore(left, active, hourlyThreshold, weeklyThreshold, preferSameEmail, preferSameTag);
+    const rightScore = getAutoSwitchScore(
+      right,
+      active,
+      hourlyThreshold,
+      weeklyThreshold,
+      preferSameEmail,
+      preferSameTag
+    );
     return rightScore - leftScore;
   };
 }
 
-function getAutoSwitchScore(account: CodexAccountRecord, hourlyThreshold: number, weeklyThreshold: number): number {
+function getAutoSwitchScore(
+  account: CodexAccountRecord,
+  active: CodexAccountRecord,
+  hourlyThreshold: number,
+  weeklyThreshold: number,
+  preferSameEmail: boolean,
+  preferSameTag: boolean
+): number {
   const quota = account.quotaSummary;
   if (!quota) {
     return Number.NEGATIVE_INFINITY;
@@ -274,9 +322,19 @@ function getAutoSwitchScore(account: CodexAccountRecord, hourlyThreshold: number
   const weeklyMargin = hasComparableWeeklyWindow(account) ? quota.weeklyPercentage - weeklyThreshold : -1000;
   const safetyFloor = Math.min(hourlyMargin, weeklyMargin);
   const workspacePriority = getAutoSwitchWorkspacePriority(account);
+  const sameEmailPriority = preferSameEmail && account.email === active.email ? 1 : 0;
+  const sameTagPriority = preferSameTag && hasSharedTags(account, active) ? 1 : 0;
   const freshness = account.lastQuotaAt ?? 0;
 
-  return workspacePriority * 1_000_000 + safetyFloor * 1000 + hourlyMargin + weeklyMargin + freshness / 1_000_000_000_000;
+  return (
+    workspacePriority * 1_000_000 +
+    sameEmailPriority * 100_000 +
+    sameTagPriority * 10_000 +
+    safetyFloor * 1000 +
+    hourlyMargin +
+    weeklyMargin +
+    freshness / 1_000_000_000_000
+  );
 }
 
 function hasComparableHourlyWindow(account: CodexAccountRecord): boolean {
@@ -311,4 +369,45 @@ function getAutoSwitchWorkspacePriority(account: CodexAccountRecord): number {
     return 0;
   }
   return 1;
+}
+
+function hasSharedTags(left: CodexAccountRecord, right: CodexAccountRecord): boolean {
+  if (!left.tags?.length || !right.tags?.length) {
+    return false;
+  }
+
+  const rightTags = new Set(right.tags.map((tag) => tag.toLowerCase()));
+  return left.tags.some((tag) => rightTags.has(tag.toLowerCase()));
+}
+
+function buildMatchedRules(
+  active: CodexAccountRecord,
+  next: CodexAccountRecord,
+  preferSameEmail: boolean,
+  preferSameTag: boolean
+): string[] {
+  const matched: string[] = ["workspace", "quota"];
+  if (preferSameEmail && active.email === next.email) {
+    matched.push("same_email");
+  }
+  if (preferSameTag && hasSharedTags(active, next)) {
+    matched.push("same_tag");
+  }
+  return matched;
+}
+
+function formatAutoSwitchReasonText(matchedRules: string[], copy: ReturnType<typeof getDashboardCopy>): string {
+  const labels = matchedRules.map((rule) => {
+    switch (rule) {
+      case "same_email":
+        return copy.autoSwitchRuleSameEmail;
+      case "same_tag":
+        return copy.autoSwitchRuleSameTag;
+      case "workspace":
+        return copy.autoSwitchRuleWorkspace;
+      default:
+        return copy.autoSwitchRuleQuota;
+    }
+  });
+  return labels.join(" · ");
 }

@@ -34,6 +34,20 @@ type DetailCopyResource = {
   lastQuotaRefresh: string;
   resetUnknown: string;
   never: string;
+  tagsLabel: string;
+  noTags: string;
+  tagsHelp: string;
+  editTagsBtn: string;
+  lockAutoSwitchBtn: string;
+  unlockAutoSwitchBtn: string;
+  autoSwitchLockedUntil: string;
+  autoSwitchReasonTitle: string;
+  autoSwitchReasonTrigger: string;
+  autoSwitchReasonMatchedRules: string;
+  autoSwitchRuleSameEmail: string;
+  autoSwitchRuleSameTag: string;
+  autoSwitchRuleWorkspace: string;
+  autoSwitchRuleQuota: string;
 };
 
 const en: DetailCopyResource = {
@@ -69,7 +83,21 @@ const en: DetailCopyResource = {
   organizationId: "Organization ID",
   lastQuotaRefresh: "Last quota refresh",
   resetUnknown: "reset unknown",
-  never: "never"
+  never: "never",
+  tagsLabel: "Tags",
+  noTags: "No tags",
+  tagsHelp: "Edit tags with commas. Up to 10 tags, 24 characters each.",
+  editTagsBtn: "Edit Tags",
+  lockAutoSwitchBtn: "Lock Auto Switch",
+  unlockAutoSwitchBtn: "Unlock Auto Switch",
+  autoSwitchLockedUntil: "Locked Until",
+  autoSwitchReasonTitle: "Last Auto Switch",
+  autoSwitchReasonTrigger: "Trigger",
+  autoSwitchReasonMatchedRules: "Matched Rules",
+  autoSwitchRuleSameEmail: "Same Email",
+  autoSwitchRuleSameTag: "Shared Tag",
+  autoSwitchRuleWorkspace: "Workspace First",
+  autoSwitchRuleQuota: "Better Quota"
 };
 
 export const detailCopyResources = defineLocaleResources(en, {
@@ -106,7 +134,21 @@ export const detailCopyResources = defineLocaleResources(en, {
     organizationId: "组织 ID",
     lastQuotaRefresh: "最近刷新",
     resetUnknown: "重置时间未知",
-    never: "从未"
+    never: "从未",
+    tagsLabel: "标签",
+    noTags: "暂无标签",
+    tagsHelp: "请用逗号分隔标签。最多 10 个标签，每个最多 24 个字符。",
+    editTagsBtn: "编辑标签",
+    lockAutoSwitchBtn: "临时锁定自动切号",
+    unlockAutoSwitchBtn: "解除自动切号锁定",
+    autoSwitchLockedUntil: "锁定至",
+    autoSwitchReasonTitle: "最近一次自动切号",
+    autoSwitchReasonTrigger: "触发阈值",
+    autoSwitchReasonMatchedRules: "命中规则",
+    autoSwitchRuleSameEmail: "同邮箱优先",
+    autoSwitchRuleSameTag: "共享标签优先",
+    autoSwitchRuleWorkspace: "团队工作区优先",
+    autoSwitchRuleQuota: "配额更优"
   },
   "zh-hant": {
     detailsSubtitle: "帳號詳情與使用情況",
@@ -137,7 +179,21 @@ export const detailCopyResources = defineLocaleResources(en, {
     organizationId: "組織 ID",
     lastQuotaRefresh: "最近重新整理",
     resetUnknown: "重置時間未知",
-    never: "從未"
+    never: "從未",
+    tagsLabel: "標籤",
+    noTags: "暫無標籤",
+    tagsHelp: "請用逗號分隔標籤。最多 10 個標籤，每個最多 24 個字元。",
+    editTagsBtn: "編輯標籤",
+    lockAutoSwitchBtn: "暫時鎖定自動切換",
+    unlockAutoSwitchBtn: "解除自動切換鎖定",
+    autoSwitchLockedUntil: "鎖定至",
+    autoSwitchReasonTitle: "最近一次自動切換",
+    autoSwitchReasonTrigger: "觸發門檻",
+    autoSwitchReasonMatchedRules: "命中規則",
+    autoSwitchRuleSameEmail: "同信箱優先",
+    autoSwitchRuleSameTag: "共享標籤優先",
+    autoSwitchRuleWorkspace: "團隊工作區優先",
+    autoSwitchRuleQuota: "配額更優"
   },
   ja: {
     detailsSubtitle: "アカウント詳細と使用状況",

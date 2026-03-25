@@ -38,6 +38,9 @@ export enum ErrorCode {
   STORAGE_READ_FAILED = "STORAGE_READ_FAILED",
   STORAGE_WRITE_FAILED = "STORAGE_WRITE_FAILED",
   STORAGE_SECRET_ACCESS_FAILED = "STORAGE_SECRET_ACCESS_FAILED",
+  STORAGE_INDEX_CORRUPTED = "STORAGE_INDEX_CORRUPTED",
+  STORAGE_INDEX_RECOVERY_FAILED = "STORAGE_INDEX_RECOVERY_FAILED",
+  STORAGE_WRITE_BLOCKED = "STORAGE_WRITE_BLOCKED",
 
   // 网络相关错误
   NETWORK_ERROR = "NETWORK_ERROR",
@@ -80,8 +83,11 @@ export class AppError extends Error {
     Object.setPrototypeOf(this, AppError.prototype);
 
     // 捕获堆栈跟踪
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, AppError);
+    const captureStackTrace = (Error as ErrorConstructor & {
+      captureStackTrace?: (targetObject: object, constructorOpt?: Function) => void;
+    }).captureStackTrace;
+    if (captureStackTrace) {
+      captureStackTrace(this, AppError);
     }
   }
 
@@ -299,6 +305,26 @@ export const createError = {
       code: ErrorCode.STORAGE_WRITE_FAILED,
       cause,
       context: { path }
+    }),
+
+  storageIndexCorrupted: (path: string, cause?: unknown): StorageError =>
+    new StorageError(`Accounts index is corrupted: ${path}`, {
+      code: ErrorCode.STORAGE_INDEX_CORRUPTED,
+      cause,
+      context: { path }
+    }),
+
+  storageIndexRecoveryFailed: (path: string, cause?: unknown): StorageError =>
+    new StorageError(`Accounts index is corrupted and could not be recovered: ${path}`, {
+      code: ErrorCode.STORAGE_INDEX_RECOVERY_FAILED,
+      cause,
+      context: { path }
+    }),
+
+  storageWriteBlocked: (message: string, cause?: unknown): StorageError =>
+    new StorageError(message, {
+      code: ErrorCode.STORAGE_WRITE_BLOCKED,
+      cause
     }),
 
   networkError: (message: string, statusCode?: number, responseBody?: string): NetworkError =>

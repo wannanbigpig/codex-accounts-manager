@@ -14,10 +14,14 @@ export class ExtensionSettingsStore {
     return {
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
+      backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
       autoRefreshMinutes: config.get<number>("autoRefreshMinutes", 0),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
       autoSwitchHourlyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchHourlyThreshold", 20)),
       autoSwitchWeeklyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchWeeklyThreshold", 20)),
+      autoSwitchPreferSameEmail: config.get<boolean>("autoSwitchPreferSameEmail", true),
+      autoSwitchPreferSameTag: config.get<boolean>("autoSwitchPreferSameTag", true),
+      autoSwitchLockMinutes: normalizeAutoSwitchLockMinutes(config.get<number>("autoSwitchLockMinutes", 0)),
       codexAppPath: config.get<string>("codexAppPath", ""),
       resolvedCodexAppPath: "",
       showCodeReviewQuota: config.get<boolean>("showCodeReviewQuota", true),
@@ -59,4 +63,12 @@ function normalizeQuotaWarningThreshold(value: number): number {
 
   const snapped = Math.round(value / 5) * 5;
   return Math.max(5, Math.min(90, snapped));
+}
+
+function normalizeAutoSwitchLockMinutes(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(120, Math.round(value)));
 }

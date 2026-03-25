@@ -6,10 +6,20 @@ import { needsRefresh, refreshTokens } from "../../auth/oauth";
 import { AccountsRepository } from "../../storage";
 import { refreshQuotaSummaryPanel } from "../dashboard";
 import { AccountsStatusBarProvider, refreshDetailsPanel } from "../../ui";
-import { getExternalAuthSyncCopy, getLocalAccountCopy, registerDebugOutput } from "../../utils";
+import { getExternalAuthSyncCopy, getLocalAccountCopy, registerDebugOutput, t } from "../../utils";
 import { getErrorMessage } from "../../core";
 import { readCurrentAuthAccountStorageId } from "../../utils/accountIdentity";
 import { needsWindowReloadForAccount, setCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
+import { initAutoSwitchRuntimeState } from "./autoSwitchState";
+import {
+  clearTokenAutomationError,
+  configureTokenAutomation,
+  markTokenAutomationCheck,
+  markTokenAutomationRefreshFailure,
+  markTokenAutomationRefreshSuccess,
+  markTokenAutomationSweepFinished,
+  markTokenAutomationSweepStarted
+} from "./tokenAutomationState";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_SECONDS = 10 * 60;
@@ -27,7 +37,9 @@ export class AccountsWorkbench {
 
   async activate(): Promise<void> {
     registerDebugOutput(this.context);
+    initAutoSwitchRuntimeState(this.context);
     await this.repo.init();
+    await this.notifyIndexHealth();
     this.lastObservedAuthIdentity = await this.readObservedAuthIdentity();
     setCurrentWindowRuntimeAccountId(this.lastObservedAuthIdentity);
     this.context.subscriptions.push({ dispose: () => this.repo.dispose() });
@@ -69,6 +81,19 @@ export class AccountsWorkbench {
 
   dispose(): void {
     this.repo.dispose();
+  }
+
+  private async notifyIndexHealth(): Promise<void> {
+    const summary = await this.repo.getIndexHealthSummary();
+    const translate = t();
+    if (summary.status === "restored_from_backup") {
+      void vscode.window.showInformationMessage(translate("message.indexAutoRestored"));
+      return;
+    }
+
+    if (summary.status === "corrupted_unrecoverable") {
+      void vscode.window.showWarningMessage(translate("message.indexRecoveryFailed"));
+    }
   }
 
   private async refreshViewsIfNeeded(): Promise<void> {
@@ -232,8 +257,10 @@ export class AccountsWorkbench {
 
   private async buildRefreshSignature(): Promise<string> {
     const accounts = await this.repo.listAccounts();
+    const indexHealth = await this.repo.getIndexHealthSummary();
     return JSON.stringify({
       observed: this.lastObservedAuthIdentity,
+      indexHealth,
       accounts: accounts.map((account) => ({
         id: account.id,
         email: account.email,
@@ -320,18 +347,42 @@ export class AccountsWorkbench {
     let timer: NodeJS.Timeout | undefined;
     let inFlight = false;
 
+    const applySchedule = (): void => {
+      const enabled = vscode.workspace.getConfiguration("codexAccounts").get<boolean>("backgroundTokenRefreshEnabled", true);
+      configureTokenAutomation(enabled, TOKEN_REFRESH_CHECK_INTERVAL_MS, TOKEN_REFRESH_SKEW_SECONDS);
+
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+
+      if (!enabled) {
+        view.refresh();
+        return;
+      }
+
+      timer = setInterval(() => {
+        void runTokenRefreshSweep();
+      }, TOKEN_REFRESH_CHECK_INTERVAL_MS);
+      void runTokenRefreshSweep();
+    };
+
     const runTokenRefreshSweep = async (): Promise<void> => {
       if (inFlight) {
         return;
       }
 
       inFlight = true;
+      let lastFailureMessage: string | undefined;
       try {
+        markTokenAutomationSweepStarted();
         const accounts = await this.repo.listAccounts();
         for (const account of accounts) {
           try {
             const tokens = await this.repo.getTokens(account.id);
+            markTokenAutomationCheck(account.id);
             if (!tokens?.accessToken || !tokens.refreshToken || !needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
+              clearTokenAutomationError(account.id);
               continue;
             }
 
@@ -340,20 +391,21 @@ export class AccountsWorkbench {
               ...refreshed,
               accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
             });
+            markTokenAutomationRefreshSuccess(account.id);
           } catch (error) {
+            lastFailureMessage = error instanceof Error ? error.message : String(error);
+            markTokenAutomationRefreshFailure(account.id, lastFailureMessage);
             console.warn(`[codexAccounts] background token refresh failed for ${account.email}:`, error);
           }
         }
       } finally {
         inFlight = false;
+        markTokenAutomationSweepFinished(lastFailureMessage);
         view.refresh();
       }
     };
 
-    timer = setInterval(() => {
-      void runTokenRefreshSweep();
-    }, TOKEN_REFRESH_CHECK_INTERVAL_MS);
-    void runTokenRefreshSweep();
+    applySchedule();
 
     this.context.subscriptions.push({
       dispose(): void {
@@ -362,5 +414,20 @@ export class AccountsWorkbench {
         }
       }
     });
+
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("codexAccounts.backgroundTokenRefreshEnabled")) {
+          applySchedule();
+        }
+      }),
+      {
+        dispose(): void {
+          if (timer) {
+            clearInterval(timer);
+          }
+        }
+      }
+    );
   }
 }

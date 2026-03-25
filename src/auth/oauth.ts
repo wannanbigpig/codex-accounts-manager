@@ -5,7 +5,6 @@ import { CodexTokens } from "../core/types";
 import { isTokenExpired } from "../utils/jwt";
 import { fetchWithTimeout } from "../utils/network";
 import { logNetworkEvent } from "../utils/debug";
-import { t } from "../utils/i18n";
 import { AuthError, ErrorCode, APIError } from "../core/errors";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -35,82 +34,8 @@ export interface PreparedOAuthLoginSession {
 }
 
 export async function loginWithOAuth(cancellationToken?: vscode.CancellationToken): Promise<CodexTokens> {
-  const _t = t();
-  const port = CALLBACK_PORT;
-  const available = await canBindPort(port);
-  const verifier = randomBase64Url();
-  const challenge = sha256Base64Url(verifier);
-  const state = randomBase64Url();
-  const redirectUri = `http://localhost:${port}/auth/callback`;
-  const session = available
-    ? {
-        state,
-        verifier,
-        server: http.createServer(),
-        redirectUri
-      }
-    : undefined;
-  const codeWaiter = session ? createCodeWaiter(session, cancellationToken) : undefined;
-
-  const authUrl =
-    `${AUTH_ENDPOINT}?response_type=code&client_id=${encodeURIComponent(CLIENT_ID)}` +
-    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=${encodeURIComponent(SCOPES)}` +
-    `&code_challenge=${encodeURIComponent(challenge)}` +
-    `&code_challenge_method=S256&id_token_add_organizations=true` +
-    `&codex_cli_simplified_flow=true&state=${encodeURIComponent(state)}` +
-    `&originator=${encodeURIComponent(ORIGINATOR)}`;
-
-  logNetworkEvent("oauth.start", {
-    callbackPort: port,
-    callbackAvailable: available,
-    redirectUri
-  });
-
-  const opened = await vscode.env.openExternal(vscode.Uri.parse(authUrl));
-  if (!opened) {
-    session?.server.close();
-    void vscode.env.clipboard.writeText(authUrl);
-    throw new AuthError("Unable to open the browser automatically. The authorization URL was copied to your clipboard.", {
-      code: ErrorCode.AUTH_OAUTH_FAILED
-    });
-  }
-
-  if (cancellationToken?.isCancellationRequested) {
-    session?.server.close();
-    throw new AuthError("OAuth login cancelled by user.", {
-      code: ErrorCode.AUTH_OAUTH_FAILED
-    });
-  }
-
-  if (!available) {
-    logNetworkEvent("oauth.manual-callback", {
-      reason: "port_unavailable",
-      redirectUri
-    });
-    const code = await promptForManualCallback(authUrl, redirectUri, state, cancellationToken);
-    return exchangeCodeForTokens(code, verifier, redirectUri);
-  }
-
-  let code: string;
-  try {
-    const manualEntry = createManualCallbackOffer(authUrl, redirectUri, state, cancellationToken, _t);
-    try {
-      code = await Promise.race([
-        codeWaiter!.promise,
-        manualEntry.promise.then(async (manualCode) => {
-          codeWaiter?.dispose();
-          return manualCode;
-        })
-      ]);
-    } finally {
-      manualEntry.dispose();
-    }
-  } catch (error) {
-    throw error;
-  }
-
-  return exchangeCodeForTokens(code, verifier, redirectUri);
+  const prepared = prepareOAuthLoginSession();
+  return runPreparedOAuthLoginSession(prepared, cancellationToken);
 }
 
 export async function refreshTokens(refreshToken: string): Promise<CodexTokens> {
@@ -184,6 +109,55 @@ export async function completeOAuthLoginSession(
   callbackUrl: string
 ): Promise<CodexTokens> {
   const code = extractCodeFromCallbackUrl(callbackUrl, session.redirectUri, session.state);
+  return exchangeCodeForTokens(code, session.verifier, session.redirectUri);
+}
+
+export async function runPreparedOAuthLoginSession(
+  session: PreparedOAuthLoginSession,
+  cancellationToken?: vscode.CancellationToken
+): Promise<CodexTokens> {
+  const port = Number(new URL(session.redirectUri).port || CALLBACK_PORT);
+  const available = await canBindPort(port);
+  logNetworkEvent("oauth.start", {
+    callbackPort: port,
+    callbackAvailable: available,
+    redirectUri: session.redirectUri
+  });
+
+  if (!available) {
+    throw new AuthError(
+      `Automatic OAuth callback listener is unavailable on ${session.redirectUri}. Use the Add Account dialog to complete the callback manually.`,
+      {
+        code: ErrorCode.AUTH_OAUTH_FAILED
+      }
+    );
+  }
+
+  const runtimeSession: OAuthSession = {
+    state: session.state,
+    verifier: session.verifier,
+    server: http.createServer(),
+    redirectUri: session.redirectUri
+  };
+  const codeWaiter = createCodeWaiter(runtimeSession, cancellationToken);
+
+  const opened = await vscode.env.openExternal(vscode.Uri.parse(session.authUrl));
+  if (!opened) {
+    codeWaiter.dispose();
+    void vscode.env.clipboard.writeText(session.authUrl);
+    throw new AuthError("Unable to open the browser automatically. The authorization URL was copied to your clipboard.", {
+      code: ErrorCode.AUTH_OAUTH_FAILED
+    });
+  }
+
+  if (cancellationToken?.isCancellationRequested) {
+    codeWaiter.dispose();
+    throw new AuthError("OAuth login cancelled by user.", {
+      code: ErrorCode.AUTH_OAUTH_FAILED
+    });
+  }
+
+  const code = await codeWaiter.promise;
   return exchangeCodeForTokens(code, session.verifier, session.redirectUri);
 }
 
@@ -298,61 +272,6 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
   };
 }
 
-function createManualCallbackOffer(
-  authUrl: string,
-  redirectUri: string,
-  expectedState: string,
-  cancellationToken: vscode.CancellationToken | undefined,
-  translate: ReturnType<typeof t>
-): { promise: Promise<string>; dispose: () => void } {
-  let disposed = false;
-
-  return {
-    promise: new Promise<string>((resolve, reject) => {
-      const cancelDisposable = cancellationToken?.onCancellationRequested(() => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        cancelDisposable?.dispose();
-        reject(
-          new AuthError("OAuth login cancelled by user.", {
-            code: ErrorCode.AUTH_OAUTH_FAILED
-          })
-        );
-      });
-
-      void vscode.window
-        .showInformationMessage(translate("message.oauthManualCallbackOffer"), translate("button.pasteCallbackUrl"))
-        .then(async (choice) => {
-          if (disposed || choice !== translate("button.pasteCallbackUrl")) {
-            return;
-          }
-
-          try {
-            logNetworkEvent("oauth.manual-callback", {
-              reason: "user_action",
-              redirectUri
-            });
-            const code = await promptForManualCallback(authUrl, redirectUri, expectedState, cancellationToken, {
-              showIntro: false
-            });
-            disposed = true;
-            cancelDisposable?.dispose();
-            resolve(code);
-          } catch (error) {
-            disposed = true;
-            cancelDisposable?.dispose();
-            reject(error);
-          }
-        });
-    }),
-    dispose: () => {
-      disposed = true;
-    }
-  };
-}
-
 async function exchangeCodeForTokens(code: string, verifier: string, redirectUri: string): Promise<CodexTokens> {
   const response = await fetchWithTimeout(
     TOKEN_ENDPOINT,
@@ -407,67 +326,6 @@ async function canBindPort(port: number): Promise<boolean> {
       server.close(() => resolve(true));
     });
   });
-}
-
-async function promptForManualCallback(
-  authUrl: string,
-  redirectUri: string,
-  expectedState: string,
-  cancellationToken?: vscode.CancellationToken,
-  options?: {
-    showIntro?: boolean;
-  }
-): Promise<string> {
-  if (cancellationToken?.isCancellationRequested) {
-    throw new AuthError("OAuth login cancelled by user.", {
-      code: ErrorCode.AUTH_OAUTH_FAILED
-    });
-  }
-
-  await vscode.env.clipboard.writeText(authUrl);
-
-  if (options?.showIntro ?? true) {
-    await vscode.window.showInformationMessage(
-      [
-        "Automatic OAuth callback was not completed.",
-        `Finish authorization in the browser, then copy the full address bar URL like ${redirectUri}?code=...&state=...`,
-        "Return to VS Code and paste that URL in the next input box."
-      ].join(" "),
-      { modal: true }
-    );
-  }
-
-  const pasted = await vscode.window.showInputBox({
-    title: "Paste OAuth callback URL",
-    prompt:
-      "Paste the full callback URL from the browser address bar. The authorization URL is already in your clipboard.",
-    placeHolder: redirectUri,
-    ignoreFocusOut: true,
-    validateInput: (value) => validateManualCallback(value, redirectUri, expectedState)
-  });
-
-  if (cancellationToken?.isCancellationRequested) {
-    throw new AuthError("OAuth login cancelled by user.", {
-      code: ErrorCode.AUTH_OAUTH_FAILED
-    });
-  }
-
-  if (!pasted) {
-    throw new AuthError("OAuth login cancelled before callback URL was provided.", {
-      code: ErrorCode.AUTH_OAUTH_FAILED
-    });
-  }
-
-  const url = new URL(pasted.trim());
-  const state = url.searchParams.get("state");
-  const code = url.searchParams.get("code");
-  if (state !== expectedState || !code) {
-    throw new AuthError("Invalid callback URL pasted.", {
-      code: ErrorCode.AUTH_TOKEN_INVALID
-    });
-  }
-
-  return code;
 }
 
 function validateManualCallback(value: string, redirectUri: string, expectedState: string): string | undefined {

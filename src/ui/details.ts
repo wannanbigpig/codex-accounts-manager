@@ -1,12 +1,16 @@
 import * as vscode from "vscode";
-import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
+import { CodexAccountRecord, CodexAutoSwitchReason, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
+import { resolveAccountHealth, isHealthDismissed } from "../application/accounts/health";
 import { formatAccountStructure } from "../application/dashboard/copy";
+import { getDashboardCopy } from "../application/dashboard/copy";
 import type { DashboardLanguage } from "../localization/languages";
 import { getIntlLocale } from "../localization/languages";
 import { detailCopyResources } from "../localization/resources/details";
+import { promptForTags } from "../presentation/tagEditor";
+import { clearAutoSwitchLock, getAutoSwitchRuntimeSnapshot, setAutoSwitchLock } from "../presentation/workbench/autoSwitchState";
+import { getTokenAutomationSnapshot } from "../presentation/workbench/tokenAutomationState";
 import { fetchDailyUsageBreakdown } from "../services";
 import { AccountsRepository } from "../storage";
-import { getQuotaIssueKind } from "../utils/quotaIssue";
 import { colorForPercentage, escapeHtml, escapeHtmlAttr, getLanguage, prettyAuthProvider } from "../utils";
 import { formatRelativeReset, formatTimestamp } from "../utils/time";
 
@@ -58,13 +62,66 @@ export function openDetailsPanel(
       detailsPanel = undefined;
     });
 
+    detailsPanel.webview.onDidReceiveMessage(async (message: { type?: string }) => {
+      if (!detailsPanelState.repo || !detailsPanelState.accountId) {
+        return;
+      }
+
+      const current = await detailsPanelState.repo.getAccount(detailsPanelState.accountId);
+      if (!current) {
+        return;
+      }
+
+      if (message.type === "details:edit-tags") {
+        const copy = getCopy();
+        const dashboardCopy = getDashboardCopy(copy.lang);
+        const tags = await promptForTags({
+          copy: {
+            editTagsBtn: copy.editTagsBtn,
+            addTagsBtn: dashboardCopy.addTagsBtn,
+            removeTagsBtn: dashboardCopy.removeTagsBtn,
+            tagsHelp: copy.tagsHelp,
+            tagsPlaceholder: dashboardCopy.tagsPlaceholder,
+            tagsRequiredError: dashboardCopy.tagsRequiredError,
+            tagsTooManyError: dashboardCopy.tagsTooManyError,
+            tagsTooLongError: dashboardCopy.tagsTooLongError
+          },
+          mode: "set",
+          initialTags: current.tags ?? [],
+          label: current.email
+        });
+        if (tags === undefined) {
+          return;
+        }
+        await detailsPanelState.repo.setAccountTags(current.id, tags);
+        await refreshDetailsPanel();
+        return;
+      }
+
+      if (message.type === "details:toggle-auto-switch-lock") {
+        const runtime = getAutoSwitchRuntimeSnapshot();
+        const isLocked =
+          runtime.lockedAccountId === current.id &&
+          typeof runtime.lockedUntil === "number" &&
+          runtime.lockedUntil > Date.now();
+        if (isLocked) {
+          clearAutoSwitchLock(current.id);
+        } else {
+          const minutes = vscode.workspace.getConfiguration("codexAccounts").get<number>("autoSwitchLockMinutes", 0);
+          setAutoSwitchLock(current.id, minutes > 0 ? minutes : 15);
+        }
+        await refreshDetailsPanel();
+      }
+    });
+
     detailsPanelConfigWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
       if (
         !detailsPanel ||
         (!event.affectsConfiguration("codexAccounts.displayLanguage") &&
           !event.affectsConfiguration("codexAccounts.showCodeReviewQuota") &&
           !event.affectsConfiguration("codexAccounts.quotaGreenThreshold") &&
-          !event.affectsConfiguration("codexAccounts.quotaYellowThreshold"))
+          !event.affectsConfiguration("codexAccounts.quotaYellowThreshold") &&
+          !event.affectsConfiguration("codexAccounts.autoSwitchLockMinutes"))
       ) {
         return;
       }
@@ -85,7 +142,7 @@ export function openDetailsPanel(
   detailsPanelState.usage = undefined;
   detailsPanelState.usageState = "loading";
   const requestId = ++detailsPanelRequestId;
-  renderDetails(account);
+  void refreshDetailsPanel();
 
   void hydrateUsage(repo, account.id, requestId);
 }
@@ -133,17 +190,18 @@ export async function refreshDetailsPanel(): Promise<void> {
     return;
   }
 
-  renderDetails(account);
+  const tokens = await detailsPanelState.repo.getTokens(account.id);
+  renderDetails(account, tokens);
 }
 
-function renderDetails(account: CodexAccountRecord): void {
+function renderDetails(account: CodexAccountRecord, tokens?: Awaited<ReturnType<AccountsRepository["getTokens"]>>): void {
   if (!detailsPanel || !detailsPanelState.styles || !detailsPanelState.scripts) {
     return;
   }
 
   const copy = getCopy();
   detailsPanel.title = `${copy.titlePrefix}: ${account.email}`;
-  detailsPanel.webview.html = renderHtml(account, copy, detailsPanelState.styles, detailsPanelState.scripts, {
+  detailsPanel.webview.html = renderHtml(account, tokens, copy, detailsPanelState.styles, detailsPanelState.scripts, {
     usageState: detailsPanelState.usageState,
     usage: detailsPanelState.usage
   });
@@ -162,6 +220,7 @@ type SensitiveKind = "email" | "id" | "name";
 
 function renderHtml(
   account: CodexAccountRecord,
+  tokens: Awaited<ReturnType<AccountsRepository["getTokens"]>> | undefined,
   copy: DetailCopy,
   styles: WebviewStyles,
   scripts: WebviewScripts,
@@ -176,7 +235,19 @@ function renderHtml(
   const provider = prettyAuthProvider(account.authProvider);
   const identityName = account.accountName?.trim() ?? account.email;
   const workspaceLabel = formatAccountStructure(account.accountStructure, copy.lang);
-  const quotaIssueKind = getQuotaIssueKind(account.quotaError);
+  const dashboardCopy = getDashboardCopy(copy.lang);
+  const health = resolveAccountHealth(account, tokens, getTokenAutomationSnapshot());
+  const dismissedHealth = isHealthDismissed(account, health);
+  const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
+  const autoSwitchLockedUntil =
+    autoSwitchRuntime.lockedAccountId === account.id && typeof autoSwitchRuntime.lockedUntil === "number"
+      ? autoSwitchRuntime.lockedUntil
+      : undefined;
+  const lastAutoSwitchReason =
+    autoSwitchRuntime.lastReason &&
+    (autoSwitchRuntime.lastReason.fromAccountId === account.id || autoSwitchRuntime.lastReason.toAccountId === account.id)
+      ? autoSwitchRuntime.lastReason
+      : undefined;
   const quotaCards = [
     ...(quota?.hourlyWindowPresent
       ? [
@@ -243,7 +314,7 @@ function renderHtml(
           <div class="badges">
             ${account.isActive ? `<span class="pill active">${escapeHtml(copy.current)}</span>` : `<span class="pill">${escapeHtml(copy.saved)}</span>`}
             <span class="pill plan">${escapeHtml((account.planType ?? "unknown").toUpperCase())}</span>
-            ${renderQuotaIssueBadge(quotaIssueKind, copy)}
+            ${renderHealthBadge(health.kind, dismissedHealth, dashboardCopy)}
           </div>
         </div>
         <div class="summary">
@@ -252,6 +323,32 @@ function renderHtml(
           <div class="meta"><strong>${escapeHtml(copy.loginTime)}:</strong> ${renderLiveTimestamp(account.loginAt, copy)}</div>
           <div class="meta"><strong>${escapeHtml(copy.userId)}:</strong> ${renderSensitiveHtml(account.userId ?? account.accountId, "id", "-")}</div>
           <div class="meta"><strong>${escapeHtml(copy.status)}:</strong> ${escapeHtml(accountStatus)}</div>
+        </div>
+        <div class="detail-actions">
+          <div class="detail-actions-head">${escapeHtml(copy.tagsLabel)}</div>
+          <div class="detail-tags-row">
+            <div class="detail-tags">${renderTagListHtml(account.tags, copy.noTags)}</div>
+            <button class="detail-inline-btn" type="button" data-role="details-edit-tags">${escapeHtml(copy.editTagsBtn)}</button>
+          </div>
+          ${
+            account.isActive
+              ? `<div class="detail-lock-row"><button class="detail-inline-btn" type="button" data-role="details-toggle-auto-switch-lock">${
+                  autoSwitchLockedUntil ? escapeHtml(copy.unlockAutoSwitchBtn) : escapeHtml(copy.lockAutoSwitchBtn)
+                }</button></div>`
+              : ""
+          }
+          ${
+            autoSwitchLockedUntil
+              ? `<div class="detail-note"><strong>${escapeHtml(copy.autoSwitchLockedUntil)}:</strong> ${renderLiveTimestamp(autoSwitchLockedUntil, copy)}</div>`
+              : ""
+          }
+          ${
+            lastAutoSwitchReason
+              ? `<div class="detail-note"><strong>${escapeHtml(copy.autoSwitchReasonTitle)}:</strong> ${escapeHtml(
+                  formatAutoSwitchReasonSummary(lastAutoSwitchReason, copy)
+                )}</div>`
+              : ""
+          }
         </div>
       </div>
     </section>
@@ -571,6 +668,20 @@ type DetailCopy = {
   lastQuotaRefresh: string;
   resetUnknown: string;
   never: string;
+  tagsLabel: string;
+  noTags: string;
+  tagsHelp: string;
+  editTagsBtn: string;
+  lockAutoSwitchBtn: string;
+  unlockAutoSwitchBtn: string;
+  autoSwitchLockedUntil: string;
+  autoSwitchReasonTitle: string;
+  autoSwitchReasonTrigger: string;
+  autoSwitchReasonMatchedRules: string;
+  autoSwitchRuleSameEmail: string;
+  autoSwitchRuleSameTag: string;
+  autoSwitchRuleWorkspace: string;
+  autoSwitchRuleQuota: string;
 };
 
 function getCopy(): DetailCopy {
@@ -587,18 +698,67 @@ function getCopy(): DetailCopy {
   };
 }
 
-function renderQuotaIssueBadge(
-  quotaIssueKind: ReturnType<typeof getQuotaIssueKind>,
-  copy: Pick<DetailCopy, "disabledTag" | "authErrorTag" | "quotaErrorTag">
+function renderHealthBadge(
+  kind: ReturnType<typeof resolveAccountHealth>["kind"],
+  dismissed: boolean,
+  copy: ReturnType<typeof getDashboardCopy>
 ): string {
-  switch (quotaIssueKind) {
+  if (dismissed) {
+    return "";
+  }
+
+  switch (kind) {
+    case "healthy":
+      return `<span class="pill ok">${escapeHtml(copy.tokenAutomationHealthy)}</span>`;
+    case "expiring":
+      return `<span class="pill warning">${escapeHtml(copy.tokenAutomationExpiring)}</span>`;
+    case "reauthorize":
+      return `<span class="pill error">${escapeHtml(copy.tokenAutomationReauthorize)}</span>`;
+    case "refresh_failed":
+      return `<span class="pill error">${escapeHtml(copy.tokenAutomationRefreshFailed)}</span>`;
     case "disabled":
-      return `<span class="pill error">${escapeHtml(copy.disabledTag)}</span>`;
-    case "auth":
-      return `<span class="pill error">${escapeHtml(copy.authErrorTag)}</span>`;
+      return `<span class="pill error">${escapeHtml(copy.tokenAutomationDisabled)}</span>`;
     case "quota":
-      return `<span class="pill warning">${escapeHtml(copy.quotaErrorTag)}</span>`;
+      return `<span class="pill warning">${escapeHtml(copy.tokenAutomationQuota)}</span>`;
     default:
       return "";
   }
+}
+
+function renderTagListHtml(tags: string[] | undefined, emptyLabel: string): string {
+  if (!tags?.length) {
+    return `<span class="tag-pill muted">${escapeHtml(emptyLabel)}</span>`;
+  }
+
+  const visible = tags.slice(0, 4);
+  const remaining = tags.length - visible.length;
+  return [
+    ...visible.map((tag) => `<span class="tag-pill">${escapeHtml(tag)}</span>`),
+    remaining > 0 ? `<span class="tag-pill muted">+${remaining}</span>` : ""
+  ]
+    .filter(Boolean)
+    .join("");
+}
+
+function formatAutoSwitchReasonSummary(reason: CodexAutoSwitchReason, copy: DetailCopy): string {
+  const trigger =
+    reason.trigger === "hourly"
+      ? copy.hourlyQuota
+      : reason.trigger === "weekly"
+        ? copy.weeklyQuota
+        : `${copy.hourlyQuota} + ${copy.weeklyQuota}`;
+  const rules = reason.matchedRules.map((rule) => {
+    switch (rule) {
+      case "same_email":
+        return copy.autoSwitchRuleSameEmail;
+      case "same_tag":
+        return copy.autoSwitchRuleSameTag;
+      case "workspace":
+        return copy.autoSwitchRuleWorkspace;
+      default:
+        return copy.autoSwitchRuleQuota;
+    }
+  });
+
+  return `${copy.autoSwitchReasonTrigger}: ${trigger} · ${copy.autoSwitchReasonMatchedRules}: ${rules.join(" / ")}`;
 }

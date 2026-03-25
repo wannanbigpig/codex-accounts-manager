@@ -1,12 +1,22 @@
 import type { DashboardLanguage, DashboardLanguageOption } from "../../localization/languages";
+import type {
+  CodexAutoSwitchReason,
+  CodexImportPreviewSummary,
+  CodexImportResultSummary,
+  CodexIndexHealthSummary
+} from "../../core/types";
 
 export type DashboardSettingKey =
   | "codexAppRestartEnabled"
   | "codexAppRestartMode"
+  | "backgroundTokenRefreshEnabled"
   | "autoRefreshMinutes"
   | "autoSwitchEnabled"
   | "autoSwitchHourlyThreshold"
   | "autoSwitchWeeklyThreshold"
+  | "autoSwitchPreferSameEmail"
+  | "autoSwitchPreferSameTag"
+  | "autoSwitchLockMinutes"
   | "showCodeReviewQuota"
   | "quotaWarningEnabled"
   | "quotaWarningThreshold"
@@ -18,10 +28,14 @@ export type DashboardSettingKey =
 export interface DashboardSettings {
   codexAppRestartEnabled: boolean;
   codexAppRestartMode: "auto" | "manual";
+  backgroundTokenRefreshEnabled: boolean;
   autoRefreshMinutes: number;
   autoSwitchEnabled: boolean;
   autoSwitchHourlyThreshold: number;
   autoSwitchWeeklyThreshold: number;
+  autoSwitchPreferSameEmail: boolean;
+  autoSwitchPreferSameTag: boolean;
+  autoSwitchLockMinutes: number;
   codexAppPath: string;
   resolvedCodexAppPath: string;
   showCodeReviewQuota: boolean;
@@ -42,6 +56,64 @@ export interface DashboardCopy {
   refreshAll: string;
   shareToken: string;
   shareTokenDisabledTip: string;
+  shareTokenModeHint: string;
+  tokenAutomationTitle: string;
+  tokenAutomationSub: string;
+  tokenAutomationOn: string;
+  tokenAutomationOnDesc: string;
+  tokenAutomationOff: string;
+  tokenAutomationOffDesc: string;
+  tokenAutomationLastCheck: string;
+  tokenAutomationLastRefresh: string;
+  tokenAutomationNextCheck: string;
+  tokenAutomationLastFailure: string;
+  tokenAutomationHealthy: string;
+  tokenAutomationExpiring: string;
+  tokenAutomationRefreshFailed: string;
+  tokenAutomationReauthorize: string;
+  tokenAutomationDisabled: string;
+  tokenAutomationQuota: string;
+  resyncProfileBtn: string;
+  editTagsBtn: string;
+  addTagsBtn: string;
+  removeTagsBtn: string;
+  batchActionsTitle: string;
+  batchRefreshBtn: string;
+  batchResyncBtn: string;
+  batchRemoveBtn: string;
+  batchExportBtn: string;
+  batchSelectedCount: string;
+  batchResultTitle: string;
+  batchResultSuccess: string;
+  batchResultFailed: string;
+  batchResultOverwrite: string;
+  batchResultFailures: string;
+  tagsLabel: string;
+  tagsPlaceholder: string;
+  tagsHelp: string;
+  tagsRequiredError: string;
+  tagsTooManyError: string;
+  tagsTooLongError: string;
+  saveTagsBtn: string;
+  clearTagsBtn: string;
+  lockAutoSwitchBtn: string;
+  unlockAutoSwitchBtn: string;
+  autoSwitchLockedUntil: string;
+  autoSwitchReasonTitle: string;
+  autoSwitchReasonTrigger: string;
+  autoSwitchReasonMatchedRules: string;
+  autoSwitchRuleSameEmail: string;
+  autoSwitchRuleSameTag: string;
+  autoSwitchRuleWorkspace: string;
+  autoSwitchRuleQuota: string;
+  recoveryTitle: string;
+  recoveryRestored: string;
+  recoveryCorrupted: string;
+  recoveryBackups: string;
+  recoveryLastError: string;
+  recoveryRestoreBackupBtn: string;
+  recoveryRestoreAuthBtn: string;
+  recoveryImportJsonBtn: string;
   dashboardTitle: string;
   dashboardSub: string;
   empty: string;
@@ -80,6 +152,9 @@ export interface DashboardCopy {
   manualCallbackLabel: string;
   manualCallbackPlaceholder: string;
   authorizedContinue: string;
+  cancelOauthConfirm: string;
+  continueOauthBtn: string;
+  cancelOauthBtn: string;
   oauthReadyHint: string;
   jsonPreview: string;
   copyJson: string;
@@ -89,6 +164,17 @@ export interface DashboardCopy {
   importJsonPlaceholder: string;
   importJsonSubmit: string;
   importJsonHint: string;
+  importJsonValidate: string;
+  importJsonSummaryTitle: string;
+  importJsonSummaryTotal: string;
+  importJsonSummaryValid: string;
+  importJsonSummaryOverwrite: string;
+  importJsonSummaryInvalid: string;
+  importJsonSummaryFailures: string;
+  importJsonResultsTitle: string;
+  importJsonResultsSuccess: string;
+  importJsonResultsOverwrite: string;
+  importJsonResultsFailed: string;
   importJsonExamplesSummary: string;
   importJsonExamplesHint: string;
   importJsonSingleExampleLabel: string;
@@ -123,6 +209,15 @@ export interface DashboardCopy {
   autoSwitchThresholdSuffix: string;
   autoSwitchThresholdDescTemplate: string;
   autoSwitchAnyNote: string;
+  autoSwitchPreferSameEmailTitle: string;
+  autoSwitchPreferSameEmailSub: string;
+  autoSwitchPreferSameTagTitle: string;
+  autoSwitchPreferSameTagSub: string;
+  autoSwitchLockMinutesTitle: string;
+  autoSwitchLockMinutesSub: string;
+  autoSwitchLockOff: string;
+  autoSwitchLockValueTemplate: string;
+  autoSwitchLockValueDescTemplate: string;
   autoSwitchToastSwitched: string;
   appPathTitle: string;
   appPathSub: string;
@@ -188,6 +283,7 @@ export interface DashboardAccountViewModel {
   displayName: string;
   email: string;
   accountName?: string;
+  tags: string[];
   authProviderLabel: string;
   accountStructureLabel: string;
   planTypeLabel: string;
@@ -201,8 +297,48 @@ export interface DashboardAccountViewModel {
   statusToggleTitle: string;
   hasQuota402: boolean;
   quotaIssueKind?: "disabled" | "auth" | "quota";
+  healthKind: "healthy" | "expiring" | "refresh_failed" | "reauthorize" | "disabled" | "quota";
+  healthLabel: string;
+  healthMessage?: string;
+  healthIssueKey?: string;
+  dismissedHealth: boolean;
+  lastTokenCheckAt?: number;
+  lastTokenRefreshAt?: number;
+  lastTokenRefreshError?: string;
   lastQuotaAt?: number;
+  autoSwitchLockedUntil?: number;
+  lastAutoSwitchReason?: CodexAutoSwitchReason;
   metrics: DashboardMetricViewModel[];
+}
+
+export interface DashboardTokenAutomationViewModel {
+  enabled: boolean;
+  lastCheckAt?: number;
+  nextCheckAt?: number;
+  lastRefreshAt?: number;
+  lastFailureMessage?: string;
+}
+
+export type DashboardBatchResultKind =
+  | "tags_set"
+  | "tags_add"
+  | "tags_remove"
+  | "batch_refresh"
+  | "batch_resync"
+  | "batch_remove";
+
+export interface DashboardBatchResultFailure {
+  accountId?: string;
+  email?: string;
+  message: string;
+}
+
+export interface DashboardBatchResult {
+  kind: DashboardBatchResultKind;
+  successCount: number;
+  failedCount: number;
+  overwriteCount?: number;
+  failures: DashboardBatchResultFailure[];
 }
 
 export interface DashboardState {
@@ -212,6 +348,8 @@ export interface DashboardState {
   logoUri: string;
   settings: DashboardSettings;
   copy: DashboardCopy;
+  tokenAutomation: DashboardTokenAutomationViewModel;
+  indexHealth: CodexIndexHealthSummary;
   accounts: DashboardAccountViewModel[];
 }
 
@@ -220,15 +358,27 @@ export type DashboardActionName =
   | "importCurrent"
   | "refreshAll"
   | "shareTokens"
+  | "restoreFromBackup"
+  | "restoreFromAuthJson"
   | "copyText"
   | "openExternalUrl"
   | "downloadJsonFile"
+  | "previewImportSharedJson"
   | "importSharedJson"
   | "prepareOAuthSession"
+  | "cancelOAuthSession"
+  | "startOAuthAutoFlow"
   | "completeOAuthSession"
+  | "updateTags"
+  | "setAutoSwitchLock"
+  | "batchRefresh"
+  | "batchResyncProfile"
+  | "batchRemove"
   | "refreshView"
   | "reloadPrompt"
   | "reauthorize"
+  | "resyncProfile"
+  | "dismissHealthIssue"
   | "details"
   | "switch"
   | "refresh"
@@ -249,14 +399,23 @@ export interface DashboardActionPayload {
   filename?: string;
   oauthSessionId?: string;
   callbackUrl?: string;
+  issueKey?: string;
+  recoveryMode?: boolean;
+  tags?: string[];
+  mode?: "set" | "add" | "remove";
+  lockMinutes?: number;
 }
 
 export interface DashboardActionResultPayload {
   sharedJson?: string;
   oauthSession?: DashboardOAuthSessionDescriptor;
+  importPreview?: CodexImportPreviewSummary;
+  importResult?: CodexImportResultSummary;
+  batchResult?: DashboardBatchResult;
   importedCount?: number;
   importedEmails?: string[];
   email?: string;
+  restoredCount?: number;
 }
 
 export type DashboardHostMessage =

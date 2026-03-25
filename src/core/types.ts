@@ -89,12 +89,16 @@ export interface CodexAccountRecord {
   organizationId?: string;
   /** 账号名称 (团队/工作空间名称) */
   accountName?: string;
+  /** 账号标签 */
+  tags?: string[];
   /** 账号结构类型 (personal/team/organization) */
   accountStructure?: string;
   /** 是否为当前激活账号 */
   isActive: boolean;
   /** 是否在状态栏显示 */
   showInStatusBar?: boolean;
+  /** 忽略中的健康问题键 */
+  dismissedHealthIssueKey?: string;
   /** 最后刷新配额的时间戳 (毫秒) */
   lastQuotaAt?: number;
   /** 配额摘要 */
@@ -115,6 +119,22 @@ export interface CodexAccountsIndex {
   currentAccountId?: string;
   /** 账号列表 */
   accounts: CodexAccountRecord[];
+}
+
+export type CodexIndexHealthStatus = "healthy" | "restored_from_backup" | "corrupted_unrecoverable";
+
+export interface CodexIndexHealthSummary {
+  status: CodexIndexHealthStatus;
+  lastRestoreSource?: "backup" | "auth_json" | "shared_json";
+  availableBackups: number;
+  lastErrorMessage?: string;
+  lastRecoveredAt?: number;
+}
+
+export interface CodexAccountsRestoreResult {
+  source: NonNullable<CodexIndexHealthSummary["lastRestoreSource"]>;
+  restoredCount: number;
+  restoredEmails: string[];
 }
 
 /**
@@ -269,7 +289,50 @@ export interface SharedCodexAccountJson {
     message?: string;
     timestamp?: number;
   } | null;
-  tags?: unknown;
+  tags?: string[] | null;
   created_at?: number;
   last_used?: number;
+}
+
+export interface CodexImportPreviewIssue {
+  index: number;
+  accountId?: string;
+  email?: string;
+  message: string;
+}
+
+export interface CodexImportPreviewSummary {
+  total: number;
+  valid: number;
+  overwriteCount: number;
+  invalidCount: number;
+  invalidEntries: CodexImportPreviewIssue[];
+}
+
+export interface CodexImportResultIssue {
+  index: number;
+  accountId?: string;
+  email?: string;
+  message: string;
+}
+
+export interface CodexImportResultSummary {
+  total: number;
+  successCount: number;
+  overwriteCount: number;
+  failedCount: number;
+  importedEmails: string[];
+  failures: CodexImportResultIssue[];
+}
+
+export interface CodexAutoSwitchReason {
+  fromAccountId: string;
+  fromEmail: string;
+  toAccountId: string;
+  toEmail: string;
+  trigger: "hourly" | "weekly" | "hourly_and_weekly";
+  matchedRules: string[];
+  hourlyThreshold: number;
+  weeklyThreshold: number;
+  createdAt: number;
 }

@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { loginWithOAuth } from "../../auth";
 import { getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
-import { CodexAccountRecord } from "../../core/types";
+import { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
 import { AccountsRepository } from "../../storage";
 import { buildAccountStorageId } from "../../utils/accountIdentity";
 import { extractClaims } from "../../utils/jwt";
@@ -308,6 +308,78 @@ export class AccountsCommandService {
 
   showQuotaSummary(): void {
     openQuotaSummaryPanel(this.context, this.repo);
+  }
+
+  async restoreAccountsFromBackup(): Promise<void> {
+    const translate = t();
+    try {
+      const restored = await this.repo.restoreIndexFromLatestBackup();
+      this.view.refresh();
+      void vscode.window.showInformationMessage(
+        translate("message.restoreFromBackupSuccess", {
+          count: restored.restoredCount
+        })
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        translate("message.restoreFromBackupFailed", {
+          message: getErrorMessage(error)
+        })
+      );
+    }
+  }
+
+  async restoreAccountsFromAuthJson(): Promise<void> {
+    const translate = t();
+    try {
+      const restored = await this.repo.restoreAccountsFromAuthFile();
+      this.view.refresh();
+      void vscode.window.showInformationMessage(
+        translate("message.restoreFromAuthSuccess", {
+          count: restored.restoredCount
+        })
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        translate("message.restoreFromAuthFailed", {
+          message: getErrorMessage(error)
+        })
+      );
+    }
+  }
+
+  async restoreAccountsFromSharedJson(): Promise<void> {
+    const translate = t();
+    try {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: {
+          JSON: ["json"]
+        },
+        openLabel: "Select JSON File"
+      });
+      if (!picked?.[0]) {
+        return;
+      }
+
+      const raw = await vscode.workspace.fs.readFile(picked[0]);
+      const parsed = JSON.parse(Buffer.from(raw).toString("utf8")) as SharedCodexAccountJson | SharedCodexAccountJson[];
+      const restored = await this.repo.restoreAccountsFromSharedJson(parsed);
+      this.view.refresh();
+      void vscode.window.showInformationMessage(
+        translate("message.restoreFromSharedSuccess", {
+          count: restored.restoredCount
+        })
+      );
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        translate("message.restoreFromSharedFailed", {
+          message: getErrorMessage(error)
+        })
+      );
+    }
   }
 
   private async handleCodexAppRestartPreference(): Promise<void> {

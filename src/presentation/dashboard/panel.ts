@@ -1,19 +1,28 @@
 import * as vscode from "vscode";
 import { buildDashboardState } from "../../application/dashboard/buildDashboardState";
+import { refreshImportedAccountQuota, refreshSingleQuota } from "../../application/accounts/quota";
 import { getDashboardCopy } from "../../application/dashboard/copy";
 import {
   DashboardActionName,
   DashboardActionPayload,
+  DashboardBatchResultFailure,
   DashboardClientMessage,
   DashboardHostMessage,
   DashboardSettingKey
 } from "../../domain/dashboard/types";
-import { completeOAuthLoginSession, prepareOAuthLoginSession, PreparedOAuthLoginSession } from "../../auth/oauth";
+import {
+  completeOAuthLoginSession,
+  prepareOAuthLoginSession,
+  PreparedOAuthLoginSession,
+  runPreparedOAuthLoginSession
+} from "../../auth/oauth";
 import type { SharedCodexAccountJson } from "../../core/types";
 import { isDashboardLanguageOption } from "../../localization/languages";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { getCommandCopy, t } from "../../utils";
+import { clearAutoSwitchLock, setAutoSwitchLock } from "../workbench/autoSwitchState";
+import { promptForTags } from "../tagEditor";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 
@@ -27,6 +36,7 @@ class DashboardPanelController {
   private publishTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
   private readonly oauthSessions = new Map<string, PreparedOAuthLoginSession>();
+  private readonly oauthCancellationSources = new Map<string, vscode.CancellationTokenSource>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -51,6 +61,11 @@ class DashboardPanelController {
           clearTimeout(this.publishTimer);
           this.publishTimer = undefined;
         }
+        this.oauthCancellationSources.forEach((source) => {
+          source.cancel();
+          source.dispose();
+        });
+        this.oauthCancellationSources.clear();
         this.configWatcher?.dispose();
         this.configWatcher = undefined;
         this.oauthSessions.clear();
@@ -125,6 +140,8 @@ class DashboardPanelController {
       panelTitle: state.panelTitle,
       brandSub: state.brandSub,
       settings: state.settings,
+      tokenAutomation: state.tokenAutomation,
+      indexHealth: state.indexHealth,
       accounts: state.accounts
     });
     if (signature === this.lastPublishedStateSignature) {
@@ -227,6 +244,46 @@ class DashboardPanelController {
           throw new Error(message);
         }
       }
+      case "restoreFromBackup": {
+        try {
+          const restored = await this.repo.restoreIndexFromLatestBackup();
+          this.schedulePublishState();
+          void vscode.window.showInformationMessage(
+            translate("message.restoreFromBackupSuccess", {
+              count: restored.restoredCount
+            })
+          );
+          return {
+            restoredCount: restored.restoredCount
+          };
+        } catch (error) {
+          const message = translate("message.restoreFromBackupFailed", {
+            message: error instanceof Error ? error.message : String(error)
+          });
+          void vscode.window.showErrorMessage(message);
+          throw new Error(message);
+        }
+      }
+      case "restoreFromAuthJson": {
+        try {
+          const restored = await this.repo.restoreAccountsFromAuthFile();
+          this.schedulePublishState();
+          void vscode.window.showInformationMessage(
+            translate("message.restoreFromAuthSuccess", {
+              count: restored.restoredCount
+            })
+          );
+          return {
+            restoredCount: restored.restoredCount
+          };
+        } catch (error) {
+          const message = translate("message.restoreFromAuthFailed", {
+            message: error instanceof Error ? error.message : String(error)
+          });
+          void vscode.window.showErrorMessage(message);
+          throw new Error(message);
+        }
+      }
       case "copyText": {
         const text = payload?.text ?? "";
         if (!text) {
@@ -286,24 +343,70 @@ class DashboardPanelController {
         }
 
         try {
-          const imported = await this.repo.importSharedAccounts(parsed);
+          const result = payload?.recoveryMode
+            ? await this.repo.restoreAccountsFromSharedJson(parsed)
+            : await this.repo.importSharedAccountsWithSummary(parsed);
+          const importedCount = "successCount" in result ? result.successCount : result.restoredCount;
+          const importedEmails = "importedEmails" in result ? result.importedEmails : result.restoredEmails;
           this.schedulePublishState();
           void vscode.window.showInformationMessage(
-            translate("message.importSharedJsonSuccess", {
-              count: imported.length
-            })
+            translate(
+              payload?.recoveryMode ? "message.restoreFromSharedSuccess" : "message.importSharedJsonSuccess",
+              {
+                count: importedCount
+              }
+            )
           );
           return {
-            importedCount: imported.length,
-            importedEmails: imported.map((item) => item.email)
+            importedCount,
+            importedEmails,
+            importResult:
+              "successCount" in result
+                ? result
+                : {
+                    total: result.restoredCount,
+                    successCount: result.restoredCount,
+                    overwriteCount: 0,
+                    failedCount: 0,
+                    importedEmails: result.restoredEmails,
+                    failures: []
+                  }
           };
         } catch (error) {
-          const message = translate("message.importSharedJsonFailed", {
+          const message = translate(payload?.recoveryMode ? "message.restoreFromSharedFailed" : "message.importSharedJsonFailed", {
             message: error instanceof Error ? error.message : String(error)
           });
           void vscode.window.showErrorMessage(message);
           throw new Error(message);
         }
+      }
+      case "previewImportSharedJson": {
+        const jsonText = payload?.jsonText?.trim();
+        if (!jsonText) {
+          return {
+            importPreview: {
+              total: 0,
+              valid: 0,
+              overwriteCount: 0,
+              invalidCount: 0,
+              invalidEntries: []
+            }
+          };
+        }
+
+        let parsed: SharedCodexAccountJson | SharedCodexAccountJson[];
+        try {
+          parsed = JSON.parse(jsonText) as SharedCodexAccountJson | SharedCodexAccountJson[];
+        } catch (error) {
+          const message = translate("message.sharedJsonParseFailed", {
+            message: error instanceof Error ? error.message : String(error)
+          });
+          throw new Error(message);
+        }
+
+        return {
+          importPreview: await this.repo.previewSharedAccountsImport(parsed)
+        };
       }
       case "prepareOAuthSession": {
         try {
@@ -319,6 +422,72 @@ class DashboardPanelController {
           };
         } catch (error) {
           const message = translate("message.oauthPrepareFailed", {
+            message: error instanceof Error ? error.message : String(error)
+          });
+          void vscode.window.showErrorMessage(message);
+          throw new Error(message);
+        }
+      }
+      case "cancelOAuthSession": {
+        const oauthSessionId = payload?.oauthSessionId;
+        if (!oauthSessionId) {
+          return undefined;
+        }
+
+        const source = this.oauthCancellationSources.get(oauthSessionId);
+        if (source) {
+          source.cancel();
+          source.dispose();
+          this.oauthCancellationSources.delete(oauthSessionId);
+        }
+        this.oauthSessions.delete(oauthSessionId);
+        return undefined;
+      }
+      case "startOAuthAutoFlow": {
+        const oauthSessionId = payload?.oauthSessionId;
+        if (!oauthSessionId) {
+          const message = translate("message.oauthPrepareFailed", {
+            message: "Missing OAuth session"
+          });
+          void vscode.window.showErrorMessage(message);
+          throw new Error(message);
+        }
+
+        const session = this.oauthSessions.get(oauthSessionId);
+        if (!session) {
+          const message = translate("message.oauthPrepareFailed", {
+            message: "OAuth session expired"
+          });
+          void vscode.window.showErrorMessage(message);
+          throw new Error(message);
+        }
+
+        try {
+          const source = new vscode.CancellationTokenSource();
+          this.oauthCancellationSources.set(oauthSessionId, source);
+          const tokens = await runPreparedOAuthLoginSession(session, source.token);
+          const created = await this.repo.upsertFromTokens(tokens, false);
+          await refreshImportedAccountQuota(this.repo, created.id);
+          this.oauthCancellationSources.get(oauthSessionId)?.dispose();
+          this.oauthCancellationSources.delete(oauthSessionId);
+          this.oauthSessions.delete(oauthSessionId);
+          this.schedulePublishState();
+          void vscode.window.showInformationMessage(
+            translate("message.oauthCompleted", {
+              email: created.email
+            })
+          );
+          return {
+            email: created.email
+          };
+        } catch (error) {
+          this.oauthCancellationSources.get(oauthSessionId)?.dispose();
+          this.oauthCancellationSources.delete(oauthSessionId);
+          if (error instanceof Error && error.message === "OAuth login cancelled by user.") {
+            this.oauthSessions.delete(oauthSessionId);
+            return undefined;
+          }
+          const message = translate("message.oauthCallbackFailed", {
             message: error instanceof Error ? error.message : String(error)
           });
           void vscode.window.showErrorMessage(message);
@@ -348,6 +517,8 @@ class DashboardPanelController {
         try {
           const tokens = await completeOAuthLoginSession(session, callbackUrl);
           const created = await this.repo.upsertFromTokens(tokens, false);
+          this.oauthCancellationSources.get(oauthSessionId)?.dispose();
+          this.oauthCancellationSources.delete(oauthSessionId);
           this.oauthSessions.delete(oauthSessionId);
           this.schedulePublishState();
           void vscode.window.showInformationMessage(
@@ -369,6 +540,188 @@ class DashboardPanelController {
       case "refreshView":
         this.reloadShell();
         return undefined;
+      case "updateTags": {
+        const targetIds = payload?.accountIds?.length ? payload.accountIds : account ? [account.id] : [];
+        if (!targetIds.length) {
+          return undefined;
+        }
+        const dashboardCopy = getDashboardCopy(this.settingsStore.resolveLanguage());
+        const targetAccount =
+          targetIds.length === 1 ? account ?? (await this.repo.getAccount(targetIds[0]!)) : undefined;
+        const mode = payload?.mode === "add" || payload?.mode === "remove" ? payload.mode : "set";
+        const tags = await promptForTags({
+          copy: dashboardCopy,
+          mode,
+          initialTags: targetAccount?.tags ?? [],
+          label: targetIds.length === 1 ? targetAccount?.email : undefined
+        });
+        if (tags === undefined) {
+          return undefined;
+        }
+
+        if (mode === "add") {
+          await this.repo.addAccountTags(targetIds, tags);
+        } else if (mode === "remove") {
+          await this.repo.removeAccountTags(targetIds, tags);
+        } else if (targetIds.length === 1) {
+          await this.repo.setAccountTags(targetIds[0]!, tags);
+        } else {
+          await this.repo.addAccountTags(targetIds, tags);
+        }
+        this.schedulePublishState();
+        {
+          const message = translate("message.batchTagsSummary", {
+            count: targetIds.length,
+            action:
+              mode === "add"
+                ? dashboardCopy.addTagsBtn
+                : mode === "remove"
+                  ? dashboardCopy.removeTagsBtn
+                  : dashboardCopy.editTagsBtn
+          });
+          void vscode.window.showInformationMessage(message);
+        }
+        return undefined;
+      }
+      case "setAutoSwitchLock": {
+        const lockAccountId = account?.id ?? payload?.accountIds?.[0];
+        const lockMinutes = typeof payload?.lockMinutes === "number" ? payload.lockMinutes : 0;
+        if (!lockAccountId) {
+          return undefined;
+        }
+
+        if (lockMinutes > 0) {
+          setAutoSwitchLock(lockAccountId, lockMinutes);
+        } else {
+          clearAutoSwitchLock(lockAccountId);
+        }
+        this.schedulePublishState();
+        return undefined;
+      }
+      case "batchRefresh": {
+        const targetIds = payload?.accountIds ?? [];
+        const accountsById = new Map(
+          await Promise.all(
+            targetIds.map(async (id) => [id, await this.repo.getAccount(id)] as const)
+          )
+        );
+        let success = 0;
+        let failed = 0;
+        const failures: DashboardBatchResultFailure[] = [];
+        await runWithConcurrencyLimit(targetIds, 4, async (id) => {
+          try {
+            await refreshSingleQuota(this.repo, { refresh() {} }, id, {
+              announce: false,
+              forceRefresh: true,
+              refreshView: false,
+              warnQuota: false
+            });
+            success += 1;
+          } catch (error) {
+            failed += 1;
+            failures.push({
+              accountId: id,
+              email: accountsById.get(id)?.email,
+              message: toFailureMessage(error)
+            });
+            console.warn(`[codexAccounts] batch quota refresh failed for ${id}:`, error);
+          }
+        });
+        this.schedulePublishState();
+        const message = translate("message.batchRefreshSummary", {
+          success,
+          failed
+        });
+        if (failed > 0) {
+          void vscode.window.showWarningMessage(message);
+        } else {
+          void vscode.window.showInformationMessage(message);
+        }
+        return undefined;
+      }
+      case "batchResyncProfile": {
+        const targetIds = payload?.accountIds ?? [];
+        const accountsById = new Map(
+          await Promise.all(
+            targetIds.map(async (id) => [id, await this.repo.getAccount(id)] as const)
+          )
+        );
+        let success = 0;
+        let failed = 0;
+        const failures: DashboardBatchResultFailure[] = [];
+        await runWithConcurrencyLimit(targetIds, 4, async (id) => {
+          try {
+            await this.repo.refreshAccountProfileMetadata(id);
+            success += 1;
+          } catch (error) {
+            failed += 1;
+            failures.push({
+              accountId: id,
+              email: accountsById.get(id)?.email,
+              message: toFailureMessage(error)
+            });
+            console.warn(`[codexAccounts] batch profile resync failed for ${id}:`, error);
+          }
+        });
+        this.schedulePublishState();
+        const message = translate("message.batchResyncSummary", {
+          success,
+          failed
+        });
+        if (failed > 0) {
+          void vscode.window.showWarningMessage(message);
+        } else {
+          void vscode.window.showInformationMessage(message);
+        }
+        return undefined;
+      }
+      case "batchRemove": {
+        const targetIds = payload?.accountIds ?? [];
+        if (!targetIds.length) {
+          return undefined;
+        }
+        const accountsById = new Map(
+          await Promise.all(
+            targetIds.map(async (id) => [id, await this.repo.getAccount(id)] as const)
+          )
+        );
+        const choice = await vscode.window.showWarningMessage(
+          translate("message.batchRemoveConfirm", { count: targetIds.length }),
+          { modal: true },
+          translate("confirm.removeButton")
+        );
+        if (choice !== translate("confirm.removeButton")) {
+          return undefined;
+        }
+        let removed = 0;
+        let failed = 0;
+        const failures: DashboardBatchResultFailure[] = [];
+        for (const id of targetIds) {
+          try {
+            await this.repo.removeAccount(id);
+            removed += 1;
+          } catch (error) {
+            failed += 1;
+            failures.push({
+              accountId: id,
+              email: accountsById.get(id)?.email,
+              message: toFailureMessage(error)
+            });
+            console.warn(`[codexAccounts] batch remove failed for ${id}:`, error);
+          }
+        }
+        this.schedulePublishState();
+        const message = translate("message.batchRemoveSummary", {
+          count: removed,
+          failed
+        });
+        if (failed > 0) {
+          void vscode.window.showWarningMessage(message);
+        } else {
+          void vscode.window.showInformationMessage(message);
+        }
+        return undefined;
+      }
       case "reloadPrompt":
         if (account) {
           const copy = getCommandCopy();
@@ -385,6 +738,18 @@ class DashboardPanelController {
       case "reauthorize":
         if (account) {
           await vscode.commands.executeCommand("codexAccounts.reauthorizeAccount", account);
+        }
+        return undefined;
+      case "resyncProfile":
+        if (account) {
+          await this.repo.refreshAccountProfileMetadata(account.id);
+          this.schedulePublishState();
+        }
+        return undefined;
+      case "dismissHealthIssue":
+        if (account) {
+          await this.repo.dismissHealthIssue(account.id, payload?.issueKey);
+          this.schedulePublishState();
         }
         return undefined;
       case "details":
@@ -470,10 +835,19 @@ class DashboardPanelController {
         }
         break;
       case "autoSwitchEnabled":
+      case "backgroundTokenRefreshEnabled":
       case "showCodeReviewQuota":
       case "quotaWarningEnabled":
       case "debugNetwork":
+      case "autoSwitchPreferSameEmail":
+      case "autoSwitchPreferSameTag":
         if (typeof value === "boolean") {
+          await config.update(key, value, vscode.ConfigurationTarget.Global);
+          updated = true;
+        }
+        break;
+      case "autoSwitchLockMinutes":
+        if (typeof value === "number") {
           await config.update(key, value, vscode.ConfigurationTarget.Global);
           updated = true;
         }
@@ -542,6 +916,35 @@ class DashboardPanelController {
 </body>
 </html>`;
   }
+}
+
+async function runWithConcurrencyLimit<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+
+  let cursor = 0;
+  const runnerCount = Math.min(limit, items.length);
+  await Promise.allSettled(
+    Array.from({ length: runnerCount }, async () => {
+      while (cursor < items.length) {
+        const index = cursor++;
+        const item = items[index];
+        if (typeof index !== "number" || item === undefined) {
+          return;
+        }
+        await worker(item, index);
+      }
+    })
+  );
+}
+
+function toFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function openQuotaSummaryPanel(context: vscode.ExtensionContext, repo: AccountsRepository): void {

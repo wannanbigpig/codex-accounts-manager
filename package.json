@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -75,6 +75,11 @@
           "default": 0,
           "markdownDescription": "Automatically refresh saved account quotas every N minutes. Set to `0` to disable."
         },
+        "codexAccounts.backgroundTokenRefreshEnabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Automatically refresh saved account tokens in the background before they expire while VS Code is running."
+        },
         "codexAccounts.autoSwitchEnabled": {
           "type": "boolean",
           "default": false,
@@ -93,6 +98,23 @@
           "maximum": 20,
           "default": 20,
           "markdownDescription": "Automatic account switching threshold for the weekly quota. Switching is triggered when the active account drops to or below this percentage."
+        },
+        "codexAccounts.autoSwitchPreferSameEmail": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Prefer candidate accounts with the same email address when automatic account switching evaluates eligible targets."
+        },
+        "codexAccounts.autoSwitchPreferSameTag": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Prefer candidate accounts that share tags with the current account when automatic account switching evaluates eligible targets."
+        },
+        "codexAccounts.autoSwitchLockMinutes": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 120,
+          "default": 0,
+          "markdownDescription": "Default lock duration in minutes when temporarily locking the current account against automatic account switching. Set to `0` to disable locking by default."
         },
         "codexAccounts.codexAppPath": {
           "type": "string",
@@ -167,6 +189,18 @@
       {
         "command": "codexAccounts.refreshAllQuotas",
         "title": "Codex Accounts: Refresh All Quotas"
+      },
+      {
+        "command": "codexAccounts.restoreAccountsFromBackup",
+        "title": "Codex Accounts: Restore Accounts from Backup"
+      },
+      {
+        "command": "codexAccounts.restoreAccountsFromAuthJson",
+        "title": "Codex Accounts: Restore Accounts from auth.json"
+      },
+      {
+        "command": "codexAccounts.restoreAccountsFromSharedJson",
+        "title": "Codex Accounts: Restore Accounts from Shared JSON"
       },
       {
         "command": "codexAccounts.removeAccount",

@@ -1,6 +1,9 @@
 (function () {
+  const vscode = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : undefined;
   const lang = document.documentElement.lang;
   const privacyButton = document.querySelector("[data-role='privacy-toggle']");
+  const editTagsButton = document.querySelector("[data-role='details-edit-tags']");
+  const toggleAutoSwitchLockButton = document.querySelector("[data-role='details-toggle-auto-switch-lock']");
 
   function applyPrivacyMode(hidden) {
     document.body.classList.toggle("privacy-hidden", hidden);
@@ -68,6 +71,18 @@
     privacyButton.addEventListener("click", () => {
       const hidden = !document.body.classList.contains("privacy-hidden");
       applyPrivacyMode(hidden);
+    });
+  }
+
+  if (editTagsButton && vscode) {
+    editTagsButton.addEventListener("click", () => {
+      vscode.postMessage({ type: "details:edit-tags" });
+    });
+  }
+
+  if (toggleAutoSwitchLockButton && vscode) {
+    toggleAutoSwitchLockButton.addEventListener("click", () => {
+      vscode.postMessage({ type: "details:toggle-auto-switch-lock" });
     });
   }
 
