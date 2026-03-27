@@ -4,9 +4,11 @@ import { loginWithOAuth } from "../../auth";
 import { getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
 import { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
+import { getCodexAccountsConfiguration } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { buildAccountStorageId } from "../../utils/accountIdentity";
 import { extractClaims } from "../../utils/jwt";
+import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
 import {
   getCodexAppRestartCopy,
@@ -47,35 +49,35 @@ export class AccountsCommandService {
         copy.progressAddAccount,
         async (_progress, cancellationToken) => {
           const tokens = await loginWithOAuth(cancellationToken);
-        logNetworkEvent("account.add", {
-          step: "oauth-complete",
-          hasRefreshToken: Boolean(tokens.refreshToken),
-          accountId: tokens.accountId
-        });
-        const account = await this.repo.upsertFromTokens(tokens, false);
-        logNetworkEvent("account.add", {
-          step: "account-upserted",
-          storedAccountId: account.accountId,
-          organizationId: account.organizationId,
-          email: account.email,
-          planType: account.planType,
-          accountName: account.accountName,
-          accountStructure: account.accountStructure
-        });
-        const result = await refreshImportedAccountQuota(this.repo, account.id);
-        this.view.refresh();
-        logNetworkEvent("account.add", {
-          step: "initial-refresh-finished",
-          accountId: account.id,
-          quotaOk: !result.error,
-          quotaError: result.error?.message
-        });
+          logNetworkEvent("account.add", {
+            step: "oauth-complete",
+            hasRefreshToken: Boolean(tokens.refreshToken),
+            accountId: tokens.accountId
+          });
+          const account = await this.repo.upsertFromTokens(tokens, false);
+          logNetworkEvent("account.add", {
+            step: "account-upserted",
+            storedAccountId: account.accountId,
+            organizationId: account.organizationId,
+            email: account.email,
+            planType: account.planType,
+            accountName: account.accountName,
+            accountStructure: account.accountStructure
+          });
+          const result = await refreshImportedAccountQuota(this.repo, account.id);
+          this.view.refresh();
+          logNetworkEvent("account.add", {
+            step: "initial-refresh-finished",
+            accountId: account.id,
+            quotaOk: !result.error,
+            quotaError: result.error?.message
+          });
 
-        if (result.error) {
-          void vscode.window.showWarningMessage(copy.addedButQuotaFailed(account.email, result.error.message));
-        } else {
-          void vscode.window.showInformationMessage(copy.addedAndRefreshed(account.email));
-        }
+          if (result.error) {
+            void vscode.window.showWarningMessage(copy.addedButQuotaFailed(account.email, result.error.message));
+          } else {
+            void vscode.window.showInformationMessage(copy.addedAndRefreshed(account.email));
+          }
         },
         { cancellable: true }
       );
@@ -119,46 +121,46 @@ export class AccountsCommandService {
     await this.withProgress(
       copy.progressAddAccount,
       async (_progress, cancellationToken) => {
-      const tokens = await loginWithOAuth(cancellationToken);
-      const claims = extractClaims(tokens.idToken, tokens.accessToken);
-      const authorizedId = claims.email
-        ? buildAccountStorageId(claims.email, claims.accountId, claims.organizationId)
-        : undefined;
+        const tokens = await loginWithOAuth(cancellationToken);
+        const claims = extractClaims(tokens.idToken, tokens.accessToken);
+        const authorizedId = claims.email
+          ? buildAccountStorageId(claims.email, claims.accountId, claims.organizationId)
+          : undefined;
 
-      if (!authorizedId || authorizedId !== account.id) {
-        void vscode.window.showWarningMessage(
-          `Authorized account does not match ${account.email}. No changes were applied.`
-        );
-        return;
-      }
-
-      const updated = await this.repo.upsertFromTokens(tokens, account.isActive);
-      if (account.isActive) {
-        await this.repo.switchAccount(updated.id);
-        this.view.markObservedAuthIdentity?.(updated.id);
-      }
-
-      const result = await refreshImportedAccountQuota(this.repo, updated.id);
-      this.view.refresh();
-
-      if (result.error) {
-        void vscode.window.showWarningMessage(copy.importedButQuotaFailed(updated.email, result.error.message));
-        return;
-      }
-
-      if (account.isActive && needsWindowReloadForAccount(updated.id)) {
-        const choice = await vscode.window.showInformationMessage(
-          copy.switchedAndAskReload(updated.email),
-          copy.reloadNow,
-          copy.later
-        );
-        if (choice === copy.reloadNow) {
-          await vscode.commands.executeCommand("workbench.action.reloadWindow");
+        if (!authorizedId || authorizedId !== account.id) {
+          void vscode.window.showWarningMessage(
+            `Authorized account does not match ${account.email}. No changes were applied.`
+          );
+          return;
         }
-        return;
-      }
 
-      void vscode.window.showInformationMessage(copy.importedAndRefreshed(updated.email));
+        const updated = await this.repo.upsertFromTokens(tokens, account.isActive);
+        if (account.isActive) {
+          await this.repo.switchAccount(updated.id);
+          this.view.markObservedAuthIdentity?.(updated.id);
+        }
+
+        const result = await refreshImportedAccountQuota(this.repo, updated.id);
+        this.view.refresh();
+
+        if (result.error) {
+          void vscode.window.showWarningMessage(copy.importedButQuotaFailed(updated.email, result.error.message));
+          return;
+        }
+
+        if (account.isActive && needsWindowReloadForAccount(updated.id)) {
+          const choice = await vscode.window.showInformationMessage(
+            copy.switchedAndAskReload(updated.email),
+            copy.reloadNow,
+            copy.later
+          );
+          if (choice === copy.reloadNow) {
+            await vscode.commands.executeCommand("workbench.action.reloadWindow");
+          }
+          return;
+        }
+
+        void vscode.window.showInformationMessage(copy.importedAndRefreshed(updated.email));
       },
       { cancellable: true }
     );
@@ -383,7 +385,7 @@ export class AccountsCommandService {
   }
 
   private async handleCodexAppRestartPreference(): Promise<void> {
-    if (!vscode.workspace.getConfiguration("codexAccounts").get<boolean>(CODEX_APP_RESTART_ENABLED, false)) {
+    if (!getCodexAccountsConfiguration().get<boolean>(CODEX_APP_RESTART_ENABLED, false)) {
       return;
     }
 
@@ -392,7 +394,7 @@ export class AccountsCommandService {
       return;
     }
 
-    const config = vscode.workspace.getConfiguration("codexAccounts");
+    const config = getCodexAccountsConfiguration();
     const currentMode = config.get<string>(CODEX_APP_RESTART_MODE);
     const copy = getCodexAppRestartCopy();
 
@@ -492,31 +494,6 @@ function buildSwitchPickerDescription(account: CodexAccountRecord, currentLabel:
   }
 
   return parts.filter(Boolean).join(" · ");
-}
-
-async function runWithConcurrencyLimit<T>(
-  items: readonly T[],
-  limit: number,
-  worker: (item: T, index: number) => Promise<void>
-): Promise<void> {
-  if (items.length === 0) {
-    return;
-  }
-
-  let cursor = 0;
-  const runnerCount = Math.min(limit, items.length);
-  await Promise.allSettled(
-    Array.from({ length: runnerCount }, async () => {
-      while (cursor < items.length) {
-        const index = cursor++;
-        const item = items[index];
-        if (typeof index !== "number" || !item) {
-          return;
-        }
-        await worker(item, index);
-      }
-    })
-  );
 }
 
 function buildSwitchPickerDetail(account: CodexAccountRecord, hourlyLabel: string, weeklyLabel: string): string {

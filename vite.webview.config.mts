@@ -12,7 +12,7 @@ export default defineConfig({
   build: {
     outDir: resolve(rootDir, "media", "webview", "dashboard"),
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: false,
     target: "es2020",
     lib: {
       entry: resolve(rootDir, "webview-src", "dashboard", "main.tsx"),

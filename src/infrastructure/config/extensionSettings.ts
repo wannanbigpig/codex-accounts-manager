@@ -3,9 +3,11 @@ import { DashboardSettings } from "../../domain/dashboard/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
 
+const CODEX_ACCOUNTS_SECTION = "codexAccounts";
+
 export class ExtensionSettingsStore {
   getDashboardSettings(): DashboardSettings {
-    const config = vscode.workspace.getConfiguration("codexAccounts");
+    const config = getCodexAccountsConfiguration();
     const thresholds = normalizeQuotaColorThresholds(
       config.get<number>("quotaGreenThreshold", 60),
       config.get<number>("quotaYellowThreshold", 20)
@@ -35,20 +37,32 @@ export class ExtensionSettingsStore {
   }
 
   resolveLanguage(): DashboardLanguage {
-    const configured = vscode.workspace.getConfiguration("codexAccounts").get<string>("displayLanguage", "auto");
+    const configured = getCodexAccountsConfiguration().get<string>("displayLanguage", "auto");
     return resolveDashboardLanguage(configured, vscode.env.language);
   }
 
   onDidChange(listener: () => void): vscode.Disposable {
     return vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("codexAccounts")) {
+      if (event.affectsConfiguration(CODEX_ACCOUNTS_SECTION)) {
         listener();
       }
     });
   }
 }
 
-function normalizeAutoSwitchThreshold(value: number): number {
+export function getCodexAccountsConfiguration(): vscode.WorkspaceConfiguration {
+  return vscode.workspace.getConfiguration(CODEX_ACCOUNTS_SECTION);
+}
+
+export function getAutoRefreshMinutes(): number {
+  return getCodexAccountsConfiguration().get<number>("autoRefreshMinutes", 0);
+}
+
+export function isBackgroundTokenRefreshEnabled(): boolean {
+  return getCodexAccountsConfiguration().get<boolean>("backgroundTokenRefreshEnabled", true);
+}
+
+export function normalizeAutoSwitchThreshold(value: number): number {
   if (!Number.isFinite(value)) {
     return 20;
   }
@@ -56,7 +70,7 @@ function normalizeAutoSwitchThreshold(value: number): number {
   return Math.max(1, Math.min(20, Math.round(value)));
 }
 
-function normalizeQuotaWarningThreshold(value: number): number {
+export function normalizeQuotaWarningThreshold(value: number): number {
   if (!Number.isFinite(value)) {
     return 20;
   }

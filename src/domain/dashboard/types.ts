@@ -76,6 +76,7 @@ export interface DashboardCopy {
   tokenAutomationDisabled: string;
   tokenAutomationQuota: string;
   resyncProfileBtn: string;
+  syncProfileBtn: string;
   editTagsBtn: string;
   addTagsBtn: string;
   removeTagsBtn: string;

@@ -4,7 +4,7 @@ English · [简体中文](README.md)
 
 VS Code extension for managing multiple Codex accounts, viewing quota usage, and switching the active global `auth.json`.
 
-![Version](https://img.shields.io/badge/version-0.1.1-blue)
+![Version](https://img.shields.io/badge/version-0.1.3-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
 ![License](https://img.shields.io/github/license/wannanbigpig/codex-tools)
 ![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-tools?style=flat)
@@ -105,7 +105,7 @@ You can change these directly from the settings button in the top-right corner o
 
 - `Language`
   - `Auto (follow VS Code)`, `Simplified Chinese`, `English`, and other supported languages
-  - Only affects codex-tools dashboard copy and prompt text
+  - Only affects Codex Accounts Manager dashboard copy and prompt text
 - `Codex App Restart Policy`
   - Disabled by default
   - When enabled, choose:
@@ -226,7 +226,7 @@ npx @vscode/vsce package
 
 ## 💝 Support The Project
 
-Thanks for using `codex-tools`.
+Thanks for using `Codex Accounts Manager`.
 
 If this project helps you, you can support its ongoing development and maintenance.
 

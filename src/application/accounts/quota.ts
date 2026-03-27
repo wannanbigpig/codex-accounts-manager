@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
 import { createError } from "../../core";
 import { CodexAccountRecord } from "../../core/types";
+import {
+  getCodexAccountsConfiguration,
+  normalizeAutoSwitchThreshold,
+  normalizeQuotaWarningThreshold
+} from "../../infrastructure/config/extensionSettings";
 import { QuotaRefreshResult, refreshQuota } from "../../services";
 import { AccountsRepository } from "../../storage";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
@@ -129,7 +134,7 @@ export async function maybeWarnForActiveQuota(repo: AccountsRepository): Promise
 }
 
 export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, view: RefreshView): Promise<boolean> {
-  const config = vscode.workspace.getConfiguration("codexAccounts");
+  const config = getCodexAccountsConfiguration();
   if (!config.get<boolean>(AUTO_SWITCH_ENABLED, false)) {
     return false;
   }
@@ -212,7 +217,7 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
 }
 
 export async function maybeWarnForAccount(repo: AccountsRepository, accountId: string): Promise<void> {
-  const config = vscode.workspace.getConfiguration("codexAccounts");
+  const config = getCodexAccountsConfiguration();
   if (!config.get<boolean>(QUOTA_WARNING_ENABLED, false)) {
     quotaWarningCounts.clear();
     return;
@@ -257,23 +262,6 @@ export async function maybeWarnForAccount(repo: AccountsRepository, accountId: s
         }
       });
   }
-}
-
-function normalizeAutoSwitchThreshold(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 20;
-  }
-
-  return Math.max(1, Math.min(20, Math.round(value)));
-}
-
-function normalizeQuotaWarningThreshold(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 20;
-  }
-
-  const snapped = Math.round(value / 5) * 5;
-  return Math.max(5, Math.min(90, snapped));
 }
 
 export function formatAccountToastLabel(account: CodexAccountRecord): string {

@@ -10,6 +10,7 @@
 
 import { CodexAccountRecord, CodexQuotaErrorInfo, CodexQuotaSummary, CodexTokens, CodexUsageResponse } from "../core/types";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
+import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { extractClaims } from "../utils/jwt";
 import { logNetworkEvent } from "../utils/debug";
 import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
@@ -293,20 +294,6 @@ function extractErrorMessage(status: number, raw: string): string {
   } catch {
     return `API returned ${status} - ${raw.slice(0, 200)}`;
   }
-}
-
-function shouldRetryWithoutWorkspace(status: number, raw: string): boolean {
-  if (![400, 401, 402, 403, 404, 409].includes(status)) {
-    return false;
-  }
-
-  const normalized = raw.toLowerCase();
-  return (
-    normalized.includes("workspace") ||
-    normalized.includes("account") ||
-    normalized.includes("deactivated_workspace") ||
-    normalized.includes("no active workspace")
-  );
 }
 
 /**

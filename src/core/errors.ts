@@ -84,7 +84,7 @@ export class AppError extends Error {
 
     // 捕获堆栈跟踪
     const captureStackTrace = (Error as ErrorConstructor & {
-      captureStackTrace?: (targetObject: object, constructorOpt?: Function) => void;
+      captureStackTrace?: (targetObject: object, constructorOpt?: abstract new (...args: never[]) => unknown) => void;
     }).captureStackTrace;
     if (captureStackTrace) {
       captureStackTrace(this, AppError);

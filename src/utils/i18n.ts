@@ -201,7 +201,7 @@ const translations: TranslationData = messageResources;
  * @param params 参数对象
  * @returns 插值后的文本
  */
-function interpolate(text: string, params?: TranslationParams): string {
+export function interpolate(text: string, params?: TranslationParams): string {
   if (!params) {
     return text;
   }

@@ -1,6 +1,8 @@
 node_modules
 out
+coverage
 *.vsix
 .claude
 .vscode
 .idea
+media/webview/dashboard

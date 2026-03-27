@@ -11,6 +11,7 @@
 
 import { CodexTokens } from "../core/types";
 import { extractClaims } from "../utils/jwt";
+import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
 import { APIError } from "../core/errors";
 import { logNetworkEvent } from "../utils/debug";
@@ -157,20 +158,6 @@ function parseProfilePayload(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
-}
-
-function shouldRetryWithoutWorkspace(status: number, raw: string): boolean {
-  if (![400, 401, 402, 403, 404, 409].includes(status)) {
-    return false;
-  }
-
-  const normalized = raw.toLowerCase();
-  return (
-    normalized.includes("workspace") ||
-    normalized.includes("account") ||
-    normalized.includes("deactivated_workspace") ||
-    normalized.includes("no active workspace")
-  );
 }
 
 /**

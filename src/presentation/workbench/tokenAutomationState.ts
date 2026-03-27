@@ -84,5 +84,5 @@ export function clearTokenAutomationError(accountId: string): void {
 
 function ensureAccountState(accountId: string): AccountAutomationState {
   state.accounts[accountId] ??= {};
-  return state.accounts[accountId]!;
+  return state.accounts[accountId];
 }

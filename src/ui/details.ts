@@ -7,7 +7,7 @@ import type { DashboardLanguage } from "../localization/languages";
 import { getIntlLocale } from "../localization/languages";
 import { detailCopyResources } from "../localization/resources/details";
 import { promptForTags } from "../presentation/tagEditor";
-import { clearAutoSwitchLock, getAutoSwitchRuntimeSnapshot, setAutoSwitchLock } from "../presentation/workbench/autoSwitchState";
+import { getAutoSwitchRuntimeSnapshot } from "../presentation/workbench/autoSwitchState";
 import { getTokenAutomationSnapshot } from "../presentation/workbench/tokenAutomationState";
 import { fetchDailyUsageBreakdown } from "../services";
 import { AccountsRepository } from "../storage";
@@ -98,20 +98,6 @@ export function openDetailsPanel(
         return;
       }
 
-      if (message.type === "details:toggle-auto-switch-lock") {
-        const runtime = getAutoSwitchRuntimeSnapshot();
-        const isLocked =
-          runtime.lockedAccountId === current.id &&
-          typeof runtime.lockedUntil === "number" &&
-          runtime.lockedUntil > Date.now();
-        if (isLocked) {
-          clearAutoSwitchLock(current.id);
-        } else {
-          const minutes = vscode.workspace.getConfiguration("codexAccounts").get<number>("autoSwitchLockMinutes", 0);
-          setAutoSwitchLock(current.id, minutes > 0 ? minutes : 15);
-        }
-        await refreshDetailsPanel();
-      }
     });
 
     detailsPanelConfigWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
@@ -120,8 +106,7 @@ export function openDetailsPanel(
         (!event.affectsConfiguration("codexAccounts.displayLanguage") &&
           !event.affectsConfiguration("codexAccounts.showCodeReviewQuota") &&
           !event.affectsConfiguration("codexAccounts.quotaGreenThreshold") &&
-          !event.affectsConfiguration("codexAccounts.quotaYellowThreshold") &&
-          !event.affectsConfiguration("codexAccounts.autoSwitchLockMinutes"))
+          !event.affectsConfiguration("codexAccounts.quotaYellowThreshold"))
       ) {
         return;
       }
@@ -330,13 +315,6 @@ function renderHtml(
             <div class="detail-tags">${renderTagListHtml(account.tags, copy.noTags)}</div>
             <button class="detail-inline-btn" type="button" data-role="details-edit-tags">${escapeHtml(copy.editTagsBtn)}</button>
           </div>
-          ${
-            account.isActive
-              ? `<div class="detail-lock-row"><button class="detail-inline-btn" type="button" data-role="details-toggle-auto-switch-lock">${
-                  autoSwitchLockedUntil ? escapeHtml(copy.unlockAutoSwitchBtn) : escapeHtml(copy.lockAutoSwitchBtn)
-                }</button></div>`
-              : ""
-          }
           ${
             autoSwitchLockedUntil
               ? `<div class="detail-note"><strong>${escapeHtml(copy.autoSwitchLockedUntil)}:</strong> ${renderLiveTimestamp(autoSwitchLockedUntil, copy)}</div>`
