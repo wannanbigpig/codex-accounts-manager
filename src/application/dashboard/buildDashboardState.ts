@@ -28,7 +28,9 @@ export async function buildDashboardState(
   const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
   const indexHealth = await repo.getIndexHealthSummary();
   const accounts = await repo.listAccounts();
-  const tokenEntries = await Promise.all(accounts.map(async (account) => [account.id, await repo.getTokens(account.id)] as const));
+  const tokenEntries = await Promise.all(
+    accounts.map(async (account) => [account.id, await repo.getTokens(account.id, { syncExternal: false })] as const)
+  );
   const tokensByAccountId = new Map(tokenEntries);
   const accountViewStateById = new Map(
     accounts.map((account) => {
@@ -149,11 +151,6 @@ function mapAccount(
     lastTokenRefreshError: automationState?.lastError,
     lastQuotaAt: account.lastQuotaAt,
     autoSwitchLockedUntil: autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
-    lastAutoSwitchReason:
-      autoSwitchRuntime?.lastReason &&
-      (autoSwitchRuntime.lastReason.fromAccountId === account.id || autoSwitchRuntime.lastReason.toAccountId === account.id)
-        ? autoSwitchRuntime.lastReason
-        : undefined,
     metrics: buildMetrics(account, copy)
   };
 }
@@ -251,7 +248,7 @@ function isTeamWorkspace(account: CodexAccountRecord): boolean {
   return Boolean(structure && structure !== "personal");
 }
 
-function resolveSubscriptionDisplay(
+export function resolveSubscriptionDisplay(
   account: CodexAccountRecord,
   tokens: CodexTokens | undefined,
   copy: DashboardState["copy"],

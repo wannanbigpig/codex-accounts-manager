@@ -32,8 +32,10 @@ import {
 
 const CODEX_APP_RESTART_MODE = "codexAppRestartMode";
 const CODEX_APP_RESTART_ENABLED = "codexAppRestartEnabled";
-const REFRESH_ALL_CONCURRENCY = 1;
-const REFRESH_ALL_DELAY_MS = 300;
+const REFRESH_ALL_SILENT_CONCURRENCY = 1;
+const REFRESH_ALL_MANUAL_CONCURRENCY = 2;
+const REFRESH_ALL_SILENT_DELAY_MS = 300;
+const REFRESH_ALL_MANUAL_DELAY_MS = 150;
 
 export class AccountsCommandService {
   constructor(
@@ -214,11 +216,13 @@ export class AccountsCommandService {
   async refreshAllQuotas(options?: { silent?: boolean; forceRefresh?: boolean }): Promise<void> {
     const copy = getCommandCopy();
     const accounts = await this.repo.listAccounts();
+    let success = 0;
+    let failed = 0;
     const refreshAll = async (progress?: vscode.Progress<{ message?: string; increment?: number }>) => {
       let started = 0;
       await runWithConcurrencyLimit(
         accounts,
-        REFRESH_ALL_CONCURRENCY,
+        options?.silent ? REFRESH_ALL_SILENT_CONCURRENCY : REFRESH_ALL_MANUAL_CONCURRENCY,
         async (account) => {
           started += 1;
           progress?.report({ message: copy.refreshingStep(started, accounts.length, account.email) });
@@ -228,14 +232,20 @@ export class AccountsCommandService {
             });
             return;
           }
-          await refreshSingleQuota(this.repo, this.view, account.id, {
-            announce: false,
-            forceRefresh: options?.forceRefresh ?? true,
-            refreshView: false,
-            warnQuota: false
-          });
+          try {
+            await refreshSingleQuota(this.repo, this.view, account.id, {
+              announce: false,
+              forceRefresh: options?.forceRefresh ?? true,
+              refreshView: false,
+              warnQuota: false
+            });
+            success += 1;
+          } catch (error) {
+            failed += 1;
+            console.warn(`[codexAccounts] refresh all failed for ${account.email}:`, error);
+          }
         },
-        { delayMs: REFRESH_ALL_DELAY_MS }
+        { delayMs: options?.silent ? REFRESH_ALL_SILENT_DELAY_MS : REFRESH_ALL_MANUAL_DELAY_MS }
       );
     };
 
@@ -251,7 +261,12 @@ export class AccountsCommandService {
       await maybeWarnForActiveQuota(this.repo);
     }
     if (!options?.silent) {
-      void vscode.window.showInformationMessage(copy.refreshedCount(accounts.length));
+      const message = failed > 0 ? copy.refreshAllSummary(success, failed) : copy.refreshedCount(success);
+      if (failed > 0) {
+        void vscode.window.showWarningMessage(message);
+      } else {
+        void vscode.window.showInformationMessage(message);
+      }
     }
   }
 
@@ -299,14 +314,14 @@ export class AccountsCommandService {
     }
   }
 
-  async openDetails(item?: CodexAccountRecord): Promise<void> {
+  async openDetails(item?: CodexAccountRecord, options?: { privacyMode?: boolean }): Promise<void> {
     const copy = getCommandCopy();
     const account = item ?? (await this.pickAccount(copy.pickInspectAccount));
     if (!account) {
       return;
     }
 
-    openDetailsPanel(this.context, this.repo, account);
+    openDetailsPanel(this.context, this.repo, account, options);
   }
 
   async openCodexHome(): Promise<void> {

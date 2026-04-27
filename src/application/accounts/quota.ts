@@ -21,8 +21,6 @@ import { getDashboardCopy } from "../dashboard/copy";
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
 const AUTO_SWITCH_HOURLY_THRESHOLD = "autoSwitchHourlyThreshold";
 const AUTO_SWITCH_WEEKLY_THRESHOLD = "autoSwitchWeeklyThreshold";
-const AUTO_SWITCH_PREFER_SAME_EMAIL = "autoSwitchPreferSameEmail";
-const AUTO_SWITCH_PREFER_SAME_TAG = "autoSwitchPreferSameTag";
 const QUOTA_WARNING_ENABLED = "quotaWarningEnabled";
 const QUOTA_WARNING_THRESHOLD = "quotaWarningThreshold";
 const MAX_WARNINGS_PER_CYCLE = 3;
@@ -179,8 +177,6 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
     return false;
   }
 
-  const preferSameEmail = config.get<boolean>(AUTO_SWITCH_PREFER_SAME_EMAIL, true);
-  const preferSameTag = config.get<boolean>(AUTO_SWITCH_PREFER_SAME_TAG, true);
   const candidates = accounts
     .filter(
       (account) =>
@@ -192,14 +188,14 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
         (!activeWeeklyTriggered ||
           (hasComparableWeeklyWindow(account) && account.quotaSummary.weeklyPercentage > weeklyThreshold))
     )
-    .sort(compareAutoSwitchCandidate(active, hourlyThreshold, weeklyThreshold, preferSameEmail, preferSameTag));
+    .sort(compareAutoSwitchCandidate(hourlyThreshold, weeklyThreshold, activeHourlyTriggered, activeWeeklyTriggered));
 
   const next = candidates[0];
   if (!next) {
     return false;
   }
 
-  const matchedRules = buildMatchedRules(active, next, preferSameEmail, preferSameTag);
+  const matchedRules = buildMatchedRules();
   await repo.switchAccount(next.id);
   clearAutoSwitchLock(active.id);
   recordAutoSwitchReason({
@@ -291,56 +287,46 @@ export function formatAccountToastLabel(account: CodexAccountRecord): string {
 }
 
 function compareAutoSwitchCandidate(
-  active: CodexAccountRecord,
   hourlyThreshold: number,
   weeklyThreshold: number,
-  preferSameEmail: boolean,
-  preferSameTag: boolean
+  activeHourlyTriggered: boolean,
+  activeWeeklyTriggered: boolean
 ) {
   return (left: CodexAccountRecord, right: CodexAccountRecord): number => {
-    const leftScore = getAutoSwitchScore(left, active, hourlyThreshold, weeklyThreshold, preferSameEmail, preferSameTag);
-    const rightScore = getAutoSwitchScore(
-      right,
-      active,
-      hourlyThreshold,
-      weeklyThreshold,
-      preferSameEmail,
-      preferSameTag
-    );
+    const leftScore = getAutoSwitchScore(left, hourlyThreshold, weeklyThreshold, activeHourlyTriggered, activeWeeklyTriggered);
+    const rightScore = getAutoSwitchScore(right, hourlyThreshold, weeklyThreshold, activeHourlyTriggered, activeWeeklyTriggered);
     return rightScore - leftScore;
   };
 }
 
 function getAutoSwitchScore(
   account: CodexAccountRecord,
-  active: CodexAccountRecord,
   hourlyThreshold: number,
   weeklyThreshold: number,
-  preferSameEmail: boolean,
-  preferSameTag: boolean
+  activeHourlyTriggered: boolean,
+  activeWeeklyTriggered: boolean
 ): number {
   const quota = account.quotaSummary;
   if (!quota) {
     return Number.NEGATIVE_INFINITY;
   }
 
-  const hourlyMargin = hasComparableHourlyWindow(account) ? quota.hourlyPercentage - hourlyThreshold : -1000;
-  const weeklyMargin = hasComparableWeeklyWindow(account) ? quota.weeklyPercentage - weeklyThreshold : -1000;
-  const safetyFloor = Math.min(hourlyMargin, weeklyMargin);
-  const workspacePriority = getAutoSwitchWorkspacePriority(account);
-  const sameEmailPriority = preferSameEmail && account.email === active.email ? 1 : 0;
-  const sameTagPriority = preferSameTag && hasSharedTags(account, active) ? 1 : 0;
+  const margins: number[] = [];
+  if (activeHourlyTriggered && hasComparableHourlyWindow(account)) {
+    margins.push(quota.hourlyPercentage - hourlyThreshold);
+  }
+  if (activeWeeklyTriggered && hasComparableWeeklyWindow(account)) {
+    margins.push(quota.weeklyPercentage - weeklyThreshold);
+  }
+  if (!margins.length) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const safetyFloor = Math.min(...margins);
+  const quotaTotal = margins.reduce((sum, margin) => sum + margin, 0);
   const freshness = account.lastQuotaAt ?? 0;
 
-  return (
-    workspacePriority * 1_000_000 +
-    sameEmailPriority * 100_000 +
-    sameTagPriority * 10_000 +
-    safetyFloor * 1000 +
-    hourlyMargin +
-    weeklyMargin +
-    freshness / 1_000_000_000_000
-  );
+  return safetyFloor * 1_000_000 + quotaTotal * 1000 + freshness / 1_000_000_000_000;
 }
 
 function hasComparableHourlyWindow(account: CodexAccountRecord): boolean {
@@ -363,57 +349,11 @@ function hasComparableWeeklyWindow(account: CodexAccountRecord): boolean {
   return typeof windowMinutes === "number" && windowMinutes >= 1440;
 }
 
-function getAutoSwitchWorkspacePriority(account: CodexAccountRecord): number {
-  const normalized = account.accountStructure?.trim().toLowerCase();
-  if (normalized === "organization") {
-    return 3;
-  }
-  if (normalized === "team" || normalized === "workspace") {
-    return 2;
-  }
-  if (normalized === "personal") {
-    return 0;
-  }
-  return 1;
-}
-
-function hasSharedTags(left: CodexAccountRecord, right: CodexAccountRecord): boolean {
-  if (!left.tags?.length || !right.tags?.length) {
-    return false;
-  }
-
-  const rightTags = new Set(right.tags.map((tag) => tag.toLowerCase()));
-  return left.tags.some((tag) => rightTags.has(tag.toLowerCase()));
-}
-
-function buildMatchedRules(
-  active: CodexAccountRecord,
-  next: CodexAccountRecord,
-  preferSameEmail: boolean,
-  preferSameTag: boolean
-): string[] {
-  const matched: string[] = ["workspace", "quota"];
-  if (preferSameEmail && active.email === next.email) {
-    matched.push("same_email");
-  }
-  if (preferSameTag && hasSharedTags(active, next)) {
-    matched.push("same_tag");
-  }
-  return matched;
+function buildMatchedRules(): string[] {
+  return ["quota"];
 }
 
 function formatAutoSwitchReasonText(matchedRules: string[], copy: ReturnType<typeof getDashboardCopy>): string {
-  const labels = matchedRules.map((rule) => {
-    switch (rule) {
-      case "same_email":
-        return copy.autoSwitchRuleSameEmail;
-      case "same_tag":
-        return copy.autoSwitchRuleSameTag;
-      case "workspace":
-        return copy.autoSwitchRuleWorkspace;
-      default:
-        return copy.autoSwitchRuleQuota;
-    }
-  });
+  const labels = matchedRules.map(() => copy.autoSwitchRuleQuota);
   return labels.join(" · ");
 }

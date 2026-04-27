@@ -18,12 +18,10 @@ export class ExtensionSettingsStore {
       codexAppRestartEnabled: config.get<boolean>("codexAppRestartEnabled", false),
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
-      autoRefreshMinutes: config.get<number>("autoRefreshMinutes", 0),
+      autoRefreshMinutes: normalizeAutoRefreshMinutes(config.get<number>("autoRefreshMinutes", 0)),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
       autoSwitchHourlyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchHourlyThreshold", 20)),
       autoSwitchWeeklyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchWeeklyThreshold", 20)),
-      autoSwitchPreferSameEmail: config.get<boolean>("autoSwitchPreferSameEmail", true),
-      autoSwitchPreferSameTag: config.get<boolean>("autoSwitchPreferSameTag", true),
       autoSwitchLockMinutes: normalizeAutoSwitchLockMinutes(config.get<number>("autoSwitchLockMinutes", 0)),
       codexAppPath: config.get<string>("codexAppPath", ""),
       resolvedCodexAppPath: "",
@@ -54,12 +52,20 @@ export function normalizeDashboardTheme(value: string | undefined): DashboardThe
   return value === "dark" || value === "light" || value === "auto" ? value : "auto";
 }
 
+export function normalizeAutoRefreshMinutes(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+
+  return Math.max(1, Math.min(60, Math.round(value)));
+}
+
 export function getCodexAccountsConfiguration(): vscode.WorkspaceConfiguration {
   return vscode.workspace.getConfiguration(CODEX_ACCOUNTS_SECTION);
 }
 
 export function getAutoRefreshMinutes(): number {
-  return getCodexAccountsConfiguration().get<number>("autoRefreshMinutes", 0);
+  return normalizeAutoRefreshMinutes(getCodexAccountsConfiguration().get<number>("autoRefreshMinutes", 0));
 }
 
 export function isBackgroundTokenRefreshEnabled(): boolean {
@@ -71,7 +77,7 @@ export function normalizeAutoSwitchThreshold(value: number): number {
     return 20;
   }
 
-  return Math.max(1, Math.min(20, Math.round(value)));
+  return Math.max(0, Math.min(20, Math.round(value)));
 }
 
 export function normalizeQuotaWarningThreshold(value: number): number {

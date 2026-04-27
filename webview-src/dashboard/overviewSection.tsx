@@ -4,12 +4,7 @@ import type {
   DashboardSettings,
   DashboardState
 } from "../../src/domain/dashboard/types";
-import {
-  formatAutoSwitchReasonSummary,
-  formatTimestamp,
-  getSensitiveDisplayValue,
-  renderTagList
-} from "./helpers";
+import { formatTimestamp, getSensitiveDisplayValue, renderTagList } from "./helpers";
 import { ActionButton } from "./primitives";
 import { MetricGauge, renderHealthPill } from "./accountMetricPrimitives";
 
@@ -37,51 +32,55 @@ export function OverviewSection(props: {
     account?.isTeamWorkspace && account.accountName?.trim()
       ? getSensitiveDisplayValue(account.accountName, privacyMode, "name", account.accountName)
       : undefined;
+  const hasOverviewNotes = Boolean(account?.autoSwitchLockedUntil);
 
   return (
     <div class="overview-shell">
       {account ? (
         <div class="overview-account">
-          <div class="overview-account-email">{getSensitiveDisplayValue(account.email, privacyMode, "email")}</div>
-          {teamNameDisplay ? <div class="overview-account-workspace">{teamNameDisplay}</div> : null}
-          {account.tags.length ? <div class="account-tag-row">{renderTagList(account.tags)}</div> : null}
-          <div class="overview-account-tags">
-            <span class="pill active">{copy.primaryAccount}</span>
-            {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
-            <span class="pill plan">{account.planTypeLabel}</span>
-            {renderHealthPill(account)}
-          </div>
-          {account.lastAutoSwitchReason ? (
-            <div class="overview-inline-note">
-              <strong>{copy.autoSwitchReasonTitle}:</strong> {formatAutoSwitchReasonSummary(account.lastAutoSwitchReason, copy)}
+          <div class="overview-account-main">
+            <div class="overview-account-header">
+              <div class="overview-account-email">{getSensitiveDisplayValue(account.email, privacyMode, "email")}</div>
+              {teamNameDisplay ? <div class="overview-account-workspace">{teamNameDisplay}</div> : null}
+              {account.tags.length ? <div class="account-tag-row">{renderTagList(account.tags)}</div> : null}
+              <div class="overview-account-tags">
+                <span class="pill active">{copy.primaryAccount}</span>
+                {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
+                <span class="pill plan">{account.planTypeLabel}</span>
+                {renderHealthPill(account)}
+              </div>
             </div>
-          ) : null}
-          <div class={`overview-inline-note overview-lock-note ${account.autoSwitchLockedUntil ? "" : "is-empty"}`}>
-            {account.autoSwitchLockedUntil ? (
-              <>
-                <strong>{copy.autoSwitchLockedUntil}:</strong> {formatTimestamp(account.autoSwitchLockedUntil, copy.never)}
-              </>
-            ) : (
-              <span aria-hidden="true">&nbsp;</span>
-            )}
-          </div>
-          <div class="overview-meta">
-            <div class="overview-meta-item">
-              <span class="grid-label">{copy.accountId}</span>
-              <span class="meta-value">
-                {getSensitiveDisplayValue(account.accountId, privacyMode, "id", copy.unknown)}
-              </span>
+            <div class="overview-meta">
+              <div class="overview-meta-item overview-meta-item-subscription">
+                <span class="grid-label">{resolveOverviewLabel("subscription", props.lang)}</span>
+                <span class="meta-value" style={account.subscriptionColor ? { color: account.subscriptionColor } : undefined}>
+                  {account.subscriptionText}
+                </span>
+              </div>
+              <div class="overview-meta-item">
+                <span class="grid-label">{resolveOverviewLabel("workspace", props.lang)}</span>
+                <span class="meta-value">{account.workspaceLabel}</span>
+              </div>
+              <div class="overview-meta-item">
+                <span class="grid-label">{copy.lastRefresh}</span>
+                <span class="meta-value">{formatTimestamp(account.lastQuotaAt, copy.never)}</span>
+              </div>
+              <div class="overview-meta-item overview-meta-item-wide">
+                <span class="grid-label">{copy.accountId}</span>
+                <span class="meta-value">
+                  {getSensitiveDisplayValue(account.accountId, privacyMode, "id", copy.unknown)}
+                </span>
+              </div>
             </div>
-            <div class="overview-meta-item">
-              <span class="grid-label">{copy.lastRefresh}</span>
-              <span class="meta-value">{formatTimestamp(account.lastQuotaAt, copy.never)}</span>
-            </div>
-            <div class="overview-meta-item">
-              <span class="grid-label">{copy.organization}</span>
-              <span class="meta-value">
-                {getSensitiveDisplayValue(account.organizationId, privacyMode, "id", copy.unknown)}
-              </span>
-            </div>
+            {hasOverviewNotes ? (
+              <div class="overview-note-stack">
+                {account.autoSwitchLockedUntil ? (
+                  <div class="overview-inline-note overview-inline-card overview-lock-note">
+                    <strong>{copy.autoSwitchLockedUntil}:</strong> {formatTimestamp(account.autoSwitchLockedUntil, copy.never)}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (
@@ -133,4 +132,24 @@ export function OverviewSection(props: {
       </div>
     </div>
   );
+}
+
+function resolveOverviewLabel(key: "subscription" | "workspace", lang: DashboardState["lang"]): string {
+  if (key === "subscription") {
+    if (lang === "zh") {
+      return "订阅到期";
+    }
+    if (lang === "zh-hant") {
+      return "訂閱到期";
+    }
+    return "Subscription";
+  }
+
+  if (lang === "zh") {
+    return "工作空间";
+  }
+  if (lang === "zh-hant") {
+    return "工作空間";
+  }
+  return "Workspace";
 }

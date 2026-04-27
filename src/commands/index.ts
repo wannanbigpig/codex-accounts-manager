@@ -28,7 +28,9 @@ export function registerCommands(
     vscode.commands.registerCommand("codexAccounts.restoreAccountsFromSharedJson", () => service.restoreAccountsFromSharedJson()),
     vscode.commands.registerCommand("codexAccounts.removeAccount", (item?: CodexAccountRecord) => service.removeAccount(item)),
     vscode.commands.registerCommand("codexAccounts.toggleStatusBarAccount", (item?: CodexAccountRecord) => service.toggleStatusBarAccount(item)),
-    vscode.commands.registerCommand("codexAccounts.openDetails", (item?: CodexAccountRecord) => service.openDetails(item)),
+    vscode.commands.registerCommand("codexAccounts.openDetails", (item?: CodexAccountRecord, options?: { privacyMode?: boolean }) =>
+      service.openDetails(item, options)
+    ),
     vscode.commands.registerCommand("codexAccounts.openCodexHome", () => service.openCodexHome()),
     vscode.commands.registerCommand("codexAccounts.showQuotaSummary", () => service.showQuotaSummary())
   );

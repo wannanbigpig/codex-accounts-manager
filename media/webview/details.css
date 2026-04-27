@@ -76,6 +76,25 @@ body.privacy-hidden .privacy-toggle {
   color: #c7ffe4;
   background: rgba(52,211,153,0.10);
 }
+html[data-theme="light"] .privacy-toggle,
+html[data-theme="auto"] body.vscode-light .privacy-toggle {
+  color: #64748b;
+  background: rgba(15, 23, 42, 0.04);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06);
+  opacity: 1;
+}
+html[data-theme="light"] .privacy-toggle:hover,
+html[data-theme="auto"] body.vscode-light .privacy-toggle:hover {
+  color: #1f2937;
+  background: rgba(9, 105, 218, 0.08);
+  box-shadow: 0 0 0 1px rgba(9, 105, 218, 0.16);
+}
+html[data-theme="light"] body.privacy-hidden .privacy-toggle,
+html[data-theme="auto"] body.vscode-light.privacy-hidden .privacy-toggle {
+  color: #17633a;
+  background: rgba(31, 138, 76, 0.1);
+  box-shadow: 0 0 0 1px rgba(31, 138, 76, 0.2);
+}
 body.privacy-hidden .privacy-icon-show {
   display: none;
 }
@@ -196,6 +215,38 @@ body.privacy-hidden .privacy-sensitive-masked {
   background: rgba(245,158,11,0.16);
   color: #ffe2ad;
   border: 1px solid rgba(245,158,11,0.26);
+}
+html[data-theme="light"] .pill,
+html[data-theme="auto"] body.vscode-light .pill {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(241, 245, 249, 0.88);
+  color: #536174;
+}
+html[data-theme="light"] .pill.active,
+html[data-theme="light"] .pill.ok,
+html[data-theme="auto"] body.vscode-light .pill.active,
+html[data-theme="auto"] body.vscode-light .pill.ok {
+  border-color: rgba(31, 138, 76, 0.22);
+  background: rgba(31, 138, 76, 0.1);
+  color: #17633a;
+}
+html[data-theme="light"] .pill.plan,
+html[data-theme="auto"] body.vscode-light .pill.plan {
+  border-color: var(--border-accent);
+  background: rgba(9, 105, 218, 0.08);
+  color: var(--accent-blue);
+}
+html[data-theme="light"] .pill.warning,
+html[data-theme="auto"] body.vscode-light .pill.warning {
+  border-color: rgba(183, 121, 31, 0.22);
+  background: rgba(183, 121, 31, 0.1);
+  color: #83540f;
+}
+html[data-theme="light"] .pill.error,
+html[data-theme="auto"] body.vscode-light .pill.error {
+  border-color: rgba(194, 65, 53, 0.22);
+  background: rgba(194, 65, 53, 0.1);
+  color: #963127;
 }
 .tag-pill {
   display: inline-flex;
@@ -371,6 +422,13 @@ body.privacy-hidden .privacy-sensitive-masked {
   left: auto;
   right: 0;
   transform: none;
+}
+html[data-theme="light"] .usage-bar::after,
+html[data-theme="auto"] body.vscode-light .usage-bar::after {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #1f2937;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
 }
 .usage-axis {
   display: flex;

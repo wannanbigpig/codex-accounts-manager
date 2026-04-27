@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import type {
   DashboardAccountViewModel,
+  DashboardActionPayload,
   DashboardCopy,
   DashboardSettings,
   DashboardState
@@ -8,6 +9,7 @@ import type {
 import { getSensitiveDisplayValue, renderTagList } from "./helpers";
 import {
   EditTagsIcon,
+  renderDetailsIcon,
   renderRefreshIcon,
   renderReauthorizeIcon,
   renderReloadIcon,
@@ -40,7 +42,8 @@ export function SavedAccountCard(props: {
   onEditTags: () => void;
   onAction: (
     action: "details" | "switch" | "reloadPrompt" | "reauthorize" | "resyncProfile" | "refresh" | "remove" | "toggleStatusBar",
-    accountId?: string
+    accountId?: string,
+    payload?: DashboardActionPayload
   ) => void;
 }) {
   const { account, copy, settings, now, onAction, privacyMode } = props;
@@ -55,7 +58,20 @@ export function SavedAccountCard(props: {
     (account.healthKind === "disabled" || account.healthKind === "quota") && !account.dismissedHealth
       ? copy.resyncProfileBtn
       : copy.syncProfileBtn;
-  const cardStateClass = `${account.isActive ? "active" : ""} ${props.busy ? "is-busy" : ""} ${props.selected ? "selected" : ""}`;
+  const hasErrorHealth =
+    !account.dismissedHealth &&
+    (account.healthKind === "reauthorize" ||
+      account.healthKind === "disabled" ||
+      account.healthKind === "refresh_failed" ||
+      account.healthKind === "quota");
+  const cardStateClass = [
+    account.isActive ? "active" : "",
+    props.busy ? "is-busy" : "",
+    props.selected ? "selected" : "",
+    hasErrorHealth ? "health-error" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
   const visibleMetrics = account.metrics.filter((metric) => metric.visible);
   const stopFlip = (event: Event): void => {
     event.stopPropagation();
@@ -162,6 +178,7 @@ export function SavedAccountCard(props: {
             ) : null}
             <ActionButton icon={renderSwitchIcon()} iconOnly label={copy.switchBtn} pending={props.switchPending} disabled={props.busy} onClick={() => onAction("switch", account.id)} />
             <ActionButton icon={renderRefreshIcon()} iconOnly label={copy.refreshBtn} pending={props.refreshPending} disabled={props.busy} onClick={() => onAction("refresh", account.id)} />
+            <ActionButton icon={renderDetailsIcon()} iconOnly label={copy.detailsBtn} pending={props.detailsPending} disabled={props.busy} onClick={() => onAction("details", account.id, { privacyMode })} />
             <ActionButton icon={renderRemoveIcon()} iconOnly label={copy.removeBtn} pending={props.removePending} disabled={props.busy} onClick={() => onAction("remove", account.id)} />
           </div>
         </section>

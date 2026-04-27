@@ -150,7 +150,9 @@ async function runDashboardAction(
       return undefined;
     case "details":
       if (account) {
-        await vscode.commands.executeCommand("codexAccounts.openDetails", account);
+        await vscode.commands.executeCommand("codexAccounts.openDetails", account, {
+          privacyMode: payload?.privacyMode === true
+        });
       }
       return undefined;
     case "switch":

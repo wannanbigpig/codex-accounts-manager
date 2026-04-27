@@ -1,6 +1,5 @@
 import type { DashboardLanguage, DashboardLanguageOption } from "../../localization/languages";
 import type {
-  CodexAutoSwitchReason,
   CodexAnnouncementState,
   CodexImportPreviewSummary,
   CodexImportResultSummary,
@@ -16,8 +15,6 @@ export type DashboardSettingKey =
   | "autoSwitchEnabled"
   | "autoSwitchHourlyThreshold"
   | "autoSwitchWeeklyThreshold"
-  | "autoSwitchPreferSameEmail"
-  | "autoSwitchPreferSameTag"
   | "autoSwitchLockMinutes"
   | "quotaWarningEnabled"
   | "quotaWarningThreshold"
@@ -35,8 +32,6 @@ export interface DashboardSettings {
   autoSwitchEnabled: boolean;
   autoSwitchHourlyThreshold: number;
   autoSwitchWeeklyThreshold: number;
-  autoSwitchPreferSameEmail: boolean;
-  autoSwitchPreferSameTag: boolean;
   autoSwitchLockMinutes: number;
   codexAppPath: string;
   resolvedCodexAppPath: string;
@@ -121,12 +116,6 @@ export interface DashboardCopy {
   lockAutoSwitchBtn: string;
   unlockAutoSwitchBtn: string;
   autoSwitchLockedUntil: string;
-  autoSwitchReasonTitle: string;
-  autoSwitchReasonTrigger: string;
-  autoSwitchReasonMatchedRules: string;
-  autoSwitchRuleSameEmail: string;
-  autoSwitchRuleSameTag: string;
-  autoSwitchRuleWorkspace: string;
   autoSwitchRuleQuota: string;
   recoveryTitle: string;
   recoveryRestored: string;
@@ -231,10 +220,6 @@ export interface DashboardCopy {
   autoSwitchThresholdSuffix: string;
   autoSwitchThresholdDescTemplate: string;
   autoSwitchAnyNote: string;
-  autoSwitchPreferSameEmailTitle: string;
-  autoSwitchPreferSameEmailSub: string;
-  autoSwitchPreferSameTagTitle: string;
-  autoSwitchPreferSameTagSub: string;
   autoSwitchLockMinutesTitle: string;
   autoSwitchLockMinutesSub: string;
   autoSwitchLockOff: string;
@@ -340,7 +325,6 @@ export interface DashboardAccountViewModel {
   lastTokenRefreshError?: string;
   lastQuotaAt?: number;
   autoSwitchLockedUntil?: number;
-  lastAutoSwitchReason?: CodexAutoSwitchReason;
   metrics: DashboardMetricViewModel[];
 }
 
@@ -442,6 +426,7 @@ export interface DashboardActionPayload {
   mode?: "set" | "add" | "remove";
   lockMinutes?: number;
   announcementId?: string;
+  privacyMode?: boolean;
 }
 
 export interface DashboardActionResultPayload {

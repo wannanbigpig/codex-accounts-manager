@@ -83,7 +83,7 @@
   }
 
   updateLiveTimes();
-  applyPrivacyMode(false);
+  applyPrivacyMode(document.body.dataset.privacyHidden === "true");
 
   if (privacyButton) {
     privacyButton.addEventListener("click", () => {

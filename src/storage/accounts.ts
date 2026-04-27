@@ -256,9 +256,16 @@ export class AccountsRepository {
   /**
    * 获取账号的令牌
    */
-  async getTokens(accountId: string): Promise<CodexTokens | undefined> {
+  async getTokens(
+    accountId: string,
+    options: { syncExternal?: boolean } = {}
+  ): Promise<CodexTokens | undefined> {
     try {
       const storedTokens = await this.secretStore.getTokens(accountId);
+      if (options.syncExternal === false) {
+        return storedTokens;
+      }
+
       const aideckTokens = await readAideckCodexTokens(accountId);
       const mergedTokens = mergeExternalTokens(storedTokens, aideckTokens);
 

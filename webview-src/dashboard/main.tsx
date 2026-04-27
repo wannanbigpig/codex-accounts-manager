@@ -1,13 +1,14 @@
 import { render } from "preact";
 import { useEffect, useReducer, useState } from "preact/hooks";
+import packageJson from "../../package.json";
 import type { DashboardAccountViewModel } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
 import { BatchSelectionBar, OverviewSection, RecoveryPanel, SavedAccountCard } from "./components";
 import { postMessageToHost } from "./host";
 import { formatSavedAccountsSummary, normalizeThresholds, resolveLockMinutes } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
-import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon } from "./icons";
-import { AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
+import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
+import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
 
@@ -15,6 +16,7 @@ const GITHUB_PROJECT_URL = "https://github.com/wannanbigpig/codex-tools";
 
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
@@ -257,6 +259,23 @@ function App() {
               >
                 ⚙
               </button>
+              <button
+                id="aboutOpenButton"
+                class="settings-btn action-btn about-btn"
+                type="button"
+                title={resolveAboutTitle(snapshot.lang)}
+                aria-label={resolveAboutTitle(snapshot.lang)}
+                onClick={() => setAboutOpen(true)}
+              >
+                <span class="button-face">
+                  <span class="button-icon">
+                    <InfoIcon />
+                  </span>
+                </span>
+                <span class="button-tip" aria-hidden="true">
+                  {resolveAboutTitle(snapshot.lang)}
+                </span>
+              </button>
             </div>
           </div>
           <OverviewSection
@@ -370,6 +389,15 @@ function App() {
         onAction={sendAction}
       />
 
+      <AboutModal
+        open={aboutOpen}
+        lang={snapshot.lang}
+        logoUri={snapshot.logoUri}
+        version={packageJson.version}
+        onClose={() => setAboutOpen(false)}
+        onOpenExternal={(url) => sendAction("openExternalUrl", undefined, { url })}
+      />
+
       <AddAccountModal
         open={modals.addAccountModalOpen}
         tab={modals.addAccountTab}
@@ -422,5 +450,14 @@ function App() {
   );
 }
 
+function resolveAboutTitle(lang: string): string {
+  if (lang === "zh") {
+    return "关于";
+  }
+  if (lang === "zh-hant") {
+    return "關於";
+  }
+  return "About";
+}
 
 render(<App />, document.getElementById("app")!);

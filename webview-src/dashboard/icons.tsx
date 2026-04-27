@@ -195,6 +195,16 @@ export function BellIcon() {
   );
 }
 
+export function InfoIcon() {
+  return (
+    <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="M12 10.5v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <circle cx="12" cy="7.5" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function GlobeIcon() {
   return (
     <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">

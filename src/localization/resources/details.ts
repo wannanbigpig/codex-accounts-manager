@@ -15,6 +15,7 @@ type DetailCopyResource = {
   teamName: string;
   login: string;
   loginTime: string;
+  subscription: string;
   userId: string;
   status: string;
   hourlyQuota: string;
@@ -41,13 +42,6 @@ type DetailCopyResource = {
   lockAutoSwitchBtn: string;
   unlockAutoSwitchBtn: string;
   autoSwitchLockedUntil: string;
-  autoSwitchReasonTitle: string;
-  autoSwitchReasonTrigger: string;
-  autoSwitchReasonMatchedRules: string;
-  autoSwitchRuleSameEmail: string;
-  autoSwitchRuleSameTag: string;
-  autoSwitchRuleWorkspace: string;
-  autoSwitchRuleQuota: string;
 };
 
 const en: DetailCopyResource = {
@@ -65,6 +59,7 @@ const en: DetailCopyResource = {
   teamName: "Team Name",
   login: "Login",
   loginTime: "Login Time",
+  subscription: "Subscription Expires",
   userId: "User ID",
   status: "Status",
   hourlyQuota: "Hourly quota",
@@ -91,13 +86,6 @@ const en: DetailCopyResource = {
   lockAutoSwitchBtn: "Lock Auto Switch",
   unlockAutoSwitchBtn: "Unlock Auto Switch",
   autoSwitchLockedUntil: "Locked Until",
-  autoSwitchReasonTitle: "Last Auto Switch",
-  autoSwitchReasonTrigger: "Trigger",
-  autoSwitchReasonMatchedRules: "Matched Rules",
-  autoSwitchRuleSameEmail: "Same Email",
-  autoSwitchRuleSameTag: "Shared Tag",
-  autoSwitchRuleWorkspace: "Workspace First",
-  autoSwitchRuleQuota: "Better Quota"
 };
 
 export const detailCopyResources = defineLocaleResources(en, {
@@ -116,6 +104,7 @@ export const detailCopyResources = defineLocaleResources(en, {
     teamName: "团队空间",
     login: "登录方式",
     loginTime: "登录时间",
+    subscription: "订阅到期",
     userId: "用户 ID",
     status: "状态",
     hourlyQuota: "5小时配额",
@@ -142,13 +131,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     lockAutoSwitchBtn: "临时锁定自动切号",
     unlockAutoSwitchBtn: "解除自动切号锁定",
     autoSwitchLockedUntil: "锁定至",
-    autoSwitchReasonTitle: "最近一次自动切号",
-    autoSwitchReasonTrigger: "触发阈值",
-    autoSwitchReasonMatchedRules: "命中规则",
-    autoSwitchRuleSameEmail: "同邮箱优先",
-    autoSwitchRuleSameTag: "共享标签优先",
-    autoSwitchRuleWorkspace: "团队工作区优先",
-    autoSwitchRuleQuota: "配额更优",
   },
   "zh-hant": {
     detailsSubtitle: "帳號詳情與使用情況",
@@ -187,13 +169,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     lockAutoSwitchBtn: "暫時鎖定自動切換",
     unlockAutoSwitchBtn: "解除自動切換鎖定",
     autoSwitchLockedUntil: "鎖定至",
-    autoSwitchReasonTitle: "最近一次自動切換",
-    autoSwitchReasonTrigger: "觸發門檻",
-    autoSwitchReasonMatchedRules: "命中規則",
-    autoSwitchRuleSameEmail: "同信箱優先",
-    autoSwitchRuleSameTag: "共享標籤優先",
-    autoSwitchRuleWorkspace: "團隊工作區優先",
-    autoSwitchRuleQuota: "配額更優",
   
     "titlePrefix": "Codex",
     "showSensitive": "显示隐私信息",
@@ -242,13 +217,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   es: {
     detailsSubtitle: "Detalles de la cuenta y uso",
@@ -292,13 +260,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   de: {
     detailsSubtitle: "Kontodetails und Nutzung",
@@ -342,13 +303,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   fr: {
     detailsSubtitle: "Détails du compte et utilisation",
@@ -392,13 +346,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   "pt-br": {
     detailsSubtitle: "Detalhes da conta e uso",
@@ -442,13 +389,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   ru: {
     detailsSubtitle: "Данные аккаунта и использование",
@@ -492,13 +432,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   ko: {
     detailsSubtitle: "계정 상세 및 사용량",
@@ -542,13 +475,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   it: {
     detailsSubtitle: "Dettagli account e utilizzo",
@@ -592,13 +518,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   tr: {
     detailsSubtitle: "Hesap ayrıntıları ve kullanım",
@@ -642,13 +561,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   pl: {
     detailsSubtitle: "Szczegóły konta i użycia",
@@ -692,13 +604,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   cs: {
     detailsSubtitle: "Detaily účtu a využití",
@@ -742,13 +647,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   ar: {
     detailsSubtitle: "تفاصيل الحساب والاستخدام",
@@ -792,13 +690,6 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
   },
   vi: {
     detailsSubtitle: "Chi tiết tài khoản và mức sử dụng",
@@ -842,12 +733,5 @@ export const detailCopyResources = defineLocaleResources(en, {
     "lockAutoSwitchBtn": "Lock Auto Switch",
     "unlockAutoSwitchBtn": "Unlock Auto Switch",
     "autoSwitchLockedUntil": "Locked Until",
-    "autoSwitchReasonTitle": "Last Auto Switch",
-    "autoSwitchReasonTrigger": "Trigger",
-    "autoSwitchReasonMatchedRules": "Matched Rules",
-    "autoSwitchRuleSameEmail": "Same Email",
-    "autoSwitchRuleSameTag": "Shared Tag",
-    "autoSwitchRuleWorkspace": "Workspace First",
-    "autoSwitchRuleQuota": "Better Quota",
 }
 });

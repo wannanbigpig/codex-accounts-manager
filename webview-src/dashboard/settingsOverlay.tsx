@@ -3,7 +3,6 @@ import {
   SettingsDiscreteSlider,
   SettingsLanguageBlock,
   SettingsPathBlock,
-  SettingsPreferenceRow,
   SettingsSegmentBlock,
   SettingsThemeBlock,
   SettingsThresholdBlock,
@@ -11,8 +10,9 @@ import {
 } from "./components";
 import { formatTemplate, formatTimestamp } from "./helpers";
 
-const AUTO_REFRESH_VALUES = [5, 10, 15, 30, 60];
-const AUTO_SWITCH_VALUES = Array.from({ length: 20 }, (_, index) => index + 1);
+const AUTO_REFRESH_VALUES = Array.from({ length: 60 }, (_, index) => index + 1);
+const AUTO_REFRESH_SCALE_VALUES = [1, 15, 30, 45, 60];
+const AUTO_SWITCH_VALUES = Array.from({ length: 21 }, (_, index) => index);
 const AUTO_SWITCH_LOCK_VALUES = [0, 5, 10, 15, 30, 60, 120];
 const WARNING_VALUES = Array.from({ length: 18 }, (_, index) => 5 + index * 5);
 const WARNING_SCALE_VALUES = [5, 20, 35, 50, 65, 80, 90];
@@ -111,6 +111,7 @@ export function SettingsOverlay(props: {
                 value={props.settings.autoRefreshMinutes}
                 values={AUTO_REFRESH_VALUES}
                 accent="violet"
+                scaleValues={AUTO_REFRESH_SCALE_VALUES}
                 valueLabel={(value) => formatTemplate(props.copy.autoRefreshValueTemplate, value)}
                 description={(value) => formatTemplate(props.copy.autoRefreshValueDescTemplate, value)}
                 onPreview={(value) => props.onPatchSettings({ autoRefreshMinutes: value })}
@@ -155,20 +156,6 @@ export function SettingsOverlay(props: {
                 onPreview={(value) => props.onPatchSettings({ autoSwitchWeeklyThreshold: value })}
                 onCommit={(value) => patchAndSend("autoSwitchWeeklyThreshold", value)}
               />
-              <div class="settings-toggle-list">
-                <SettingsPreferenceRow
-                  title={props.copy.autoSwitchPreferSameEmailTitle}
-                  sub={props.copy.autoSwitchPreferSameEmailSub}
-                  enabled={props.settings.autoSwitchPreferSameEmail}
-                  onToggle={(enabled) => patchAndSend("autoSwitchPreferSameEmail", enabled)}
-                />
-                <SettingsPreferenceRow
-                  title={props.copy.autoSwitchPreferSameTagTitle}
-                  sub={props.copy.autoSwitchPreferSameTagSub}
-                  enabled={props.settings.autoSwitchPreferSameTag}
-                  onToggle={(enabled) => patchAndSend("autoSwitchPreferSameTag", enabled)}
-                />
-              </div>
               <div class="settings-block-head">
                 <div class="settings-block-title">{props.copy.autoSwitchLockMinutesTitle}</div>
                 <div class="settings-block-sub">{props.copy.autoSwitchLockMinutesSub}</div>

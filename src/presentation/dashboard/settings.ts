@@ -4,6 +4,7 @@ import type { DashboardSettingKey } from "../../domain/dashboard/types";
 import {
   ExtensionSettingsStore,
   getCodexAccountsConfiguration,
+  normalizeAutoRefreshMinutes,
   normalizeDashboardTheme
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
@@ -27,8 +28,6 @@ export async function handleDashboardSettingUpdate(
     case "backgroundTokenRefreshEnabled":
     case "quotaWarningEnabled":
     case "debugNetwork":
-    case "autoSwitchPreferSameEmail":
-    case "autoSwitchPreferSameTag":
       if (typeof value === "boolean") {
         await config.update(key, value, vscode.ConfigurationTarget.Global);
         updated = true;
@@ -40,7 +39,6 @@ export async function handleDashboardSettingUpdate(
         updated = true;
       }
       break;
-    case "autoRefreshMinutes":
     case "autoSwitchHourlyThreshold":
     case "autoSwitchWeeklyThreshold":
     case "quotaWarningThreshold":
@@ -49,6 +47,12 @@ export async function handleDashboardSettingUpdate(
     case "autoSwitchLockMinutes":
       if (typeof value === "number") {
         await config.update(key, value, vscode.ConfigurationTarget.Global);
+        updated = true;
+      }
+      break;
+    case "autoRefreshMinutes":
+      if (typeof value === "number") {
+        await config.update(key, normalizeAutoRefreshMinutes(value), vscode.ConfigurationTarget.Global);
         updated = true;
       }
       break;

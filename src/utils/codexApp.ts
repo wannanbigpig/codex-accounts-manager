@@ -39,6 +39,15 @@ const LINUX_APP_CANDIDATES = [
 const MAC_PROCESS_CANDIDATES = ["Codex", "OpenAI Codex"];
 const WINDOWS_PROCESS_CANDIDATES = ["Codex.exe"];
 const LINUX_PROCESS_CANDIDATES = ["codex"];
+const CODEX_APP_PATH_CACHE_TTL_MS = 30_000;
+
+let launchPathCache:
+  | {
+      key: string;
+      value?: string;
+      checkedAt: number;
+    }
+  | undefined;
 
 export async function restartCodexAppIfInstalled(): Promise<boolean> {
   const state = await getCodexAppState();
@@ -69,10 +78,24 @@ export async function getCodexAppState(): Promise<{
 export async function resolveCodexAppLaunchPath(customPathInput?: string): Promise<string | undefined> {
   const customPath =
     customPathInput?.trim() ?? vscode.workspace.getConfiguration("codexAccounts").get<string>("codexAppPath")?.trim();
+  const cacheKey = `${process.platform}:${customPath ?? ""}`;
+  if (launchPathCache?.key === cacheKey && Date.now() - launchPathCache.checkedAt < CODEX_APP_PATH_CACHE_TTL_MS) {
+    return launchPathCache.value;
+  }
+
+  const remember = (value: string | undefined): string | undefined => {
+    launchPathCache = {
+      key: cacheKey,
+      value,
+      checkedAt: Date.now()
+    };
+    return value;
+  };
+
   if (customPath) {
     try {
       await fs.access(customPath);
-      return customPath;
+      return remember(customPath);
     } catch {
       // Fall back to built-in detection when the custom path is invalid.
     }
@@ -82,12 +105,12 @@ export async function resolveCodexAppLaunchPath(customPathInput?: string): Promi
   for (const candidate of candidates) {
     try {
       await fs.access(candidate);
-      return candidate;
+      return remember(candidate);
     } catch {
       // Keep checking remaining candidates.
     }
   }
-  return undefined;
+  return remember(undefined);
 }
 
 function getAppCandidates(): string[] {

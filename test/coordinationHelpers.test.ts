@@ -9,6 +9,8 @@ import { ErrorCode, StorageError } from "../src/core/errors";
 import { parseSharedJsonInput, toImportActionPayload } from "../src/presentation/dashboard/actionUtils";
 import { buildWorkbenchRefreshSignature, shouldRunAccountScheduler } from "../src/presentation/workbench/refreshSignature";
 import { buildDashboardStateSignature } from "../src/presentation/dashboard/signature";
+import { runWithConcurrencyLimit } from "../src/utils/concurrency";
+import { normalizeAutoRefreshMinutes } from "../src/infrastructure/config/extensionSettings";
 
 describe("accountsWriteCoordinator helpers", () => {
   it("prefers pending saves over cache and schedules a flush", () => {
@@ -73,6 +75,29 @@ describe("dashboard action utils", () => {
   });
 });
 
+describe("scheduler settings helpers", () => {
+  it("normalizes auto refresh minutes to off or 1-60", () => {
+    expect(normalizeAutoRefreshMinutes(-1)).toBe(0);
+    expect(normalizeAutoRefreshMinutes(0)).toBe(0);
+    expect(normalizeAutoRefreshMinutes(0.4)).toBe(1);
+    expect(normalizeAutoRefreshMinutes(1.4)).toBe(1);
+    expect(normalizeAutoRefreshMinutes(59.6)).toBe(60);
+    expect(normalizeAutoRefreshMinutes(90)).toBe(60);
+  });
+});
+
+describe("runWithConcurrencyLimit", () => {
+  it("propagates unexpected worker failures", async () => {
+    await expect(
+      runWithConcurrencyLimit([1, 2, 3], 2, async (value) => {
+        if (value === 2) {
+          throw new Error("boom");
+        }
+      })
+    ).rejects.toThrow("boom");
+  });
+});
+
 describe("workbench refresh signature helpers", () => {
   it("builds a stable signature from account and health state", () => {
     const signature = buildWorkbenchRefreshSignature({
@@ -124,8 +149,6 @@ describe("workbench refresh signature helpers", () => {
         autoSwitchEnabled: false,
         autoSwitchHourlyThreshold: 20,
         autoSwitchWeeklyThreshold: 20,
-        autoSwitchPreferSameEmail: true,
-        autoSwitchPreferSameTag: true,
         autoSwitchLockMinutes: 0,
         codexAppPath: "",
         resolvedCodexAppPath: "",
@@ -187,8 +210,6 @@ describe("workbench refresh signature helpers", () => {
         autoSwitchEnabled: false,
         autoSwitchHourlyThreshold: 20,
         autoSwitchWeeklyThreshold: 20,
-        autoSwitchPreferSameEmail: true,
-        autoSwitchPreferSameTag: true,
         autoSwitchLockMinutes: 0,
         codexAppPath: "",
         resolvedCodexAppPath: "",

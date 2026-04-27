@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import type { DashboardAccountViewModel, DashboardCopy, DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
+import type { DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
 import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
 type SensitiveKind = "email" | "id" | "name";
@@ -150,32 +150,6 @@ export function renderTagList(tags: string[]): ComponentChildren {
 
 export function resolveLockMinutes(value: number): number {
   return value > 0 ? value : 15;
-}
-
-export function formatAutoSwitchReasonSummary(
-  reason: NonNullable<DashboardAccountViewModel["lastAutoSwitchReason"]>,
-  copy: DashboardCopy
-): string {
-  const trigger =
-    reason.trigger === "hourly"
-      ? copy.hourlyLabel
-      : reason.trigger === "weekly"
-        ? copy.weeklyLabel
-        : `${copy.hourlyLabel} + ${copy.weeklyLabel}`;
-  const rules = reason.matchedRules.map((rule) => {
-    switch (rule) {
-      case "same_email":
-        return copy.autoSwitchRuleSameEmail;
-      case "same_tag":
-        return copy.autoSwitchRuleSameTag;
-      case "workspace":
-        return copy.autoSwitchRuleWorkspace;
-      default:
-        return copy.autoSwitchRuleQuota;
-    }
-  });
-
-  return `${copy.autoSwitchReasonTrigger}: ${trigger} · ${copy.autoSwitchReasonMatchedRules}: ${rules.join(" / ")}`;
 }
 
 export function resolveDiscreteIndex(values: number[], currentValue: number): number {

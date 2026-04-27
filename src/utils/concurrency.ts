@@ -12,7 +12,7 @@ export async function runWithConcurrencyLimit<T>(
   const runnerCount = Math.min(limit, items.length);
   const delayMs = Math.max(0, options.delayMs ?? 0);
 
-  await Promise.allSettled(
+  await Promise.all(
     Array.from({ length: runnerCount }, async () => {
       while (cursor < items.length) {
         const index = cursor++;

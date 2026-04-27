@@ -23,6 +23,7 @@ export class AccountsStatusBarProvider {
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (
           event.affectsConfiguration("codexAccounts.displayLanguage") ||
+          event.affectsConfiguration("codexAccounts.dashboardTheme") ||
           event.affectsConfiguration("codexAccounts.quotaGreenThreshold") ||
           event.affectsConfiguration("codexAccounts.quotaYellowThreshold")
         ) {
@@ -127,10 +128,10 @@ function renderAccountPanel(
   return `${lines.join("  \n")}\n`;
 }
 
-function renderMetricRow(label: string, percent?: number, resetAt?: number): string {
+export function renderMetricRow(label: string, percent?: number, resetAt?: number): string {
   const value = typeof percent === "number" ? `${percent}%` : "--";
   const reset = resetAt ? `${formatRelativeReset(resetAt)} (${formatResetClock(resetAt)})` : t()("quota.resetUnknown");
-  return `${quotaMarker(percent)} \`${padLabel(label, 5)} ${buildThinBar(percent, 10)}\` ${value.padStart(6, " ")}  ${escapeMarkdown(reset)}`;
+  return `${quotaMarker(percent)} ${escapeMarkdown(padLabel(label, 5))} ${buildThinBar(percent, 10)} ${escapeMarkdown(value)}  ${escapeMarkdown(reset)}`;
 }
 
 function padLabel(label: string, width: number): string {

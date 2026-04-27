@@ -1,9 +1,12 @@
 import * as vscode from "vscode";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
-import { CodexAccountRecord, CodexAutoSwitchReason, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
+import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
 import { resolveAccountHealth, isHealthDismissed } from "../application/accounts/health";
+import { resolveSubscriptionDisplay } from "../application/dashboard/buildDashboardState";
 import { formatAccountStructure } from "../application/dashboard/copy";
 import { getDashboardCopy } from "../application/dashboard/copy";
+import type { DashboardThemeOption } from "../domain/dashboard/types";
+import { getCodexAccountsConfiguration, normalizeDashboardTheme } from "../infrastructure/config/extensionSettings";
 import type { DashboardLanguage } from "../localization/languages";
 import { getIntlLocale } from "../localization/languages";
 import { detailCopyResources } from "../localization/resources/details";
@@ -28,16 +31,19 @@ type DetailsPanelState = {
   scripts?: WebviewScripts;
   usageState: DetailsUsageState;
   usage?: CodexDailyUsageBreakdown;
+  privacyMode: boolean;
 };
 
 const detailsPanelState: DetailsPanelState = {
-  usageState: "loading"
+  usageState: "loading",
+  privacyMode: false
 };
 
 export function openDetailsPanel(
   context: vscode.ExtensionContext,
   repo: AccountsRepository,
-  account: CodexAccountRecord
+  account: CodexAccountRecord,
+  options?: { privacyMode?: boolean }
 ): void {
   const copy = getCopy();
   if (!detailsPanel) {
@@ -60,6 +66,7 @@ export function openDetailsPanel(
       detailsPanelState.scripts = undefined;
       detailsPanelState.usage = undefined;
       detailsPanelState.usageState = "loading";
+      detailsPanelState.privacyMode = false;
       detailsPanel = undefined;
     });
 
@@ -103,8 +110,9 @@ export function openDetailsPanel(
 
     detailsPanelConfigWatcher = vscode.workspace.onDidChangeConfiguration((event) => {
       if (
-        !detailsPanel ||
-        (!event.affectsConfiguration("codexAccounts.displayLanguage") &&
+          !detailsPanel ||
+          (!event.affectsConfiguration("codexAccounts.displayLanguage") &&
+          !event.affectsConfiguration("codexAccounts.dashboardTheme") &&
           !event.affectsConfiguration("codexAccounts.quotaGreenThreshold") &&
           !event.affectsConfiguration("codexAccounts.quotaYellowThreshold"))
       ) {
@@ -126,6 +134,7 @@ export function openDetailsPanel(
   detailsPanelState.scripts = scripts;
   detailsPanelState.usage = undefined;
   detailsPanelState.usageState = "loading";
+  detailsPanelState.privacyMode = options?.privacyMode === true;
   const requestId = ++detailsPanelRequestId;
   void refreshDetailsPanel();
 
@@ -211,8 +220,11 @@ function renderDetails(account: CodexAccountRecord, tokens?: Awaited<ReturnType<
   }
 
   const copy = getCopy();
+  const theme = getDetailsThemePreference();
   detailsPanel.title = `${copy.titlePrefix}: ${account.email}`;
   detailsPanel.webview.html = renderHtml(account, tokens, copy, detailsPanelState.styles, detailsPanelState.scripts, {
+    theme,
+    privacyMode: detailsPanelState.privacyMode,
     usageState: detailsPanelState.usageState,
     usage: detailsPanelState.usage
   });
@@ -236,6 +248,8 @@ function renderHtml(
   styles: WebviewStyles,
   scripts: WebviewScripts,
   options: {
+    theme: DashboardThemeOption;
+    privacyMode: boolean;
     usageState: "loading" | "ready" | "empty" | "error";
     usage?: CodexDailyUsageBreakdown;
   }
@@ -245,18 +259,16 @@ function renderHtml(
   const provider = prettyAuthProvider(account.authProvider);
   const identityName = account.accountName?.trim() ?? account.email;
   const workspaceLabel = formatAccountStructure(account.accountStructure, copy.lang);
+  const workspaceValue = getDetailsWorkspaceValue(account, workspaceLabel);
   const dashboardCopy = getDashboardCopy(copy.lang);
+  const subscription = resolveSubscriptionDisplay(account, tokens, dashboardCopy, copy.lang);
+  const subscriptionStyle = subscription.color ? ` style="color:${escapeHtmlAttr(subscription.color)};"` : "";
   const health = resolveAccountHealth(account, tokens, getTokenAutomationSnapshot());
   const dismissedHealth = isHealthDismissed(account, health);
   const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
   const autoSwitchLockedUntil =
     autoSwitchRuntime.lockedAccountId === account.id && typeof autoSwitchRuntime.lockedUntil === "number"
       ? autoSwitchRuntime.lockedUntil
-      : undefined;
-  const lastAutoSwitchReason =
-    autoSwitchRuntime.lastReason &&
-    (autoSwitchRuntime.lastReason.fromAccountId === account.id || autoSwitchRuntime.lastReason.toAccountId === account.id)
-      ? autoSwitchRuntime.lastReason
       : undefined;
   const quotaCards = [
     ...(quota?.hourlyWindowPresent
@@ -298,14 +310,14 @@ function renderHtml(
   ].join("");
 
   return `<!DOCTYPE html>
-<html lang="${copy.lang}">
+<html lang="${copy.lang}" ${renderDetailsThemeAttributes(options.theme)}>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="${styles.shared}" />
   <link rel="stylesheet" href="${styles.page}" />
 </head>
-<body>
+<body ${renderDetailsBodyAttributes(options.privacyMode)}>
   <div class="shell">
     <section class="panel">
       <div class="panel-inner hero">
@@ -337,9 +349,10 @@ function renderHtml(
           </div>
         </div>
         <div class="summary">
-          <div class="meta"><strong>${escapeHtml(workspaceLabel)}:</strong> ${renderSensitiveHtml(account.accountName, "name", "-")}</div>
+          <div class="meta"><strong>${escapeHtml(workspaceLabel)}:</strong> ${renderSensitiveHtml(workspaceValue, "name", "-")}</div>
           <div class="meta"><strong>${escapeHtml(copy.login)}:</strong> ${escapeHtml(provider)}</div>
           <div class="meta"><strong>${escapeHtml(copy.loginTime)}:</strong> ${renderLiveTimestamp(account.loginAt, copy)}</div>
+          <div class="meta"><strong>${escapeHtml(copy.subscription)}:</strong> <span${subscriptionStyle} title="${escapeHtmlAttr(subscription.title)}">${escapeHtml(subscription.text)}</span></div>
           <div class="meta"><strong>${escapeHtml(copy.userId)}:</strong> ${renderSensitiveHtml(account.userId ?? account.accountId, "id", "-")}</div>
           <div class="meta"><strong>${escapeHtml(copy.status)}:</strong> ${escapeHtml(accountStatus)}</div>
         </div>
@@ -352,13 +365,6 @@ function renderHtml(
           ${
             autoSwitchLockedUntil
               ? `<div class="detail-note"><strong>${escapeHtml(copy.autoSwitchLockedUntil)}:</strong> ${renderLiveTimestamp(autoSwitchLockedUntil, copy)}</div>`
-              : ""
-          }
-          ${
-            lastAutoSwitchReason
-              ? `<div class="detail-note"><strong>${escapeHtml(copy.autoSwitchReasonTitle)}:</strong> ${escapeHtml(
-                  formatAutoSwitchReasonSummary(lastAutoSwitchReason, copy)
-                )}</div>`
               : ""
           }
         </div>
@@ -405,6 +411,29 @@ function renderHtml(
   <script src="${scripts.page}"></script>
 </body>
 </html>`;
+}
+
+export function getDetailsThemePreference(): DashboardThemeOption {
+  return normalizeDashboardTheme(getCodexAccountsConfiguration().get<string>("dashboardTheme", "auto"));
+}
+
+export function renderDetailsThemeAttributes(theme: DashboardThemeOption): string {
+  return `data-theme="${theme}" data-theme-preference="${theme}"`;
+}
+
+export function renderDetailsBodyAttributes(privacyMode: boolean): string {
+  const classAttr = privacyMode ? ' class="privacy-hidden"' : "";
+  return `${classAttr} data-privacy-hidden="${privacyMode ? "true" : "false"}"`;
+}
+
+export function getDetailsWorkspaceValue(account: Pick<CodexAccountRecord, "accountName" | "accountStructure">, fallback: string): string {
+  const name = account.accountName?.trim();
+  if (name) {
+    return name;
+  }
+
+  const structure = account.accountStructure?.trim().toLowerCase();
+  return !structure || structure === "personal" ? fallback : "";
 }
 
 function getWebviewStyles(webview: vscode.Webview, extensionUri: vscode.Uri, pageStylesheet: string): WebviewStyles {
@@ -660,6 +689,7 @@ type DetailCopy = {
   teamName: string;
   login: string;
   loginTime: string;
+  subscription: string;
   userId: string;
   status: string;
   hourlyQuota: string;
@@ -687,13 +717,6 @@ type DetailCopy = {
   lockAutoSwitchBtn: string;
   unlockAutoSwitchBtn: string;
   autoSwitchLockedUntil: string;
-  autoSwitchReasonTitle: string;
-  autoSwitchReasonTrigger: string;
-  autoSwitchReasonMatchedRules: string;
-  autoSwitchRuleSameEmail: string;
-  autoSwitchRuleSameTag: string;
-  autoSwitchRuleWorkspace: string;
-  autoSwitchRuleQuota: string;
 };
 
 function getCopy(): DetailCopy {
@@ -750,27 +773,4 @@ function renderTagListHtml(tags: string[] | undefined, emptyLabel: string): stri
   ]
     .filter(Boolean)
     .join("");
-}
-
-function formatAutoSwitchReasonSummary(reason: CodexAutoSwitchReason, copy: DetailCopy): string {
-  const trigger =
-    reason.trigger === "hourly"
-      ? copy.hourlyQuota
-      : reason.trigger === "weekly"
-        ? copy.weeklyQuota
-        : `${copy.hourlyQuota} + ${copy.weeklyQuota}`;
-  const rules = reason.matchedRules.map((rule) => {
-    switch (rule) {
-      case "same_email":
-        return copy.autoSwitchRuleSameEmail;
-      case "same_tag":
-        return copy.autoSwitchRuleSameTag;
-      case "workspace":
-        return copy.autoSwitchRuleWorkspace;
-      default:
-        return copy.autoSwitchRuleQuota;
-    }
-  });
-
-  return `${copy.autoSwitchReasonTrigger}: ${trigger} · ${copy.autoSwitchReasonMatchedRules}: ${rules.join(" / ")}`;
 }

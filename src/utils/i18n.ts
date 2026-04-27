@@ -113,6 +113,7 @@ export type TranslationKey =
   | "message.restoreFromSharedSuccess"
   | "message.restoreFromSharedFailed"
   | "message.batchRemoveConfirm"
+  | "message.refreshAllSummary"
   | "message.batchRefreshSummary"
   | "message.batchResyncSummary"
   | "message.batchRemoveSummary"
@@ -283,6 +284,7 @@ export function getCommandCopy(): {
   importedAndRefreshed: (email: string) => string;
   importedButQuotaFailed: (email: string, message: string) => string;
   refreshedCount: (count: number) => string;
+  refreshAllSummary: (success: number, failed: number) => string;
   confirmRemove: (email: string) => string;
   addedToStatus: (email: string) => string;
   removedFromStatus: (email: string) => string;
@@ -315,6 +317,7 @@ export function getCommandCopy(): {
     importedButQuotaFailed: (email: string, message: string) =>
       _t("message.importedButQuotaFailed", { email, message }),
     refreshedCount: (count: number) => _t("quota.refreshedCount", { count }),
+    refreshAllSummary: (success: number, failed: number) => _t("message.refreshAllSummary", { success, failed }),
     confirmRemove: (email: string) => _t("confirm.removeAccount", { email }),
     addedToStatus: (email: string) => _t("statusToggle.added", { email }),
     removedFromStatus: (email: string) => _t("statusToggle.removed", { email }),
