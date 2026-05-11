@@ -5,7 +5,7 @@ import type { DashboardAccountViewModel } from "../../src/domain/dashboard/types
 import { AnnouncementCenter } from "./announcementCenter";
 import { BatchSelectionBar, OverviewSection, RecoveryPanel, SavedAccountCard } from "./components";
 import { postMessageToHost } from "./host";
-import { formatSavedAccountsSummary, normalizeThresholds, resolveLockMinutes } from "./helpers";
+import { formatSavedAccountsSummary, normalizeThresholds, resolveLockMinutes, resolveOverviewAccount } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
 import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
@@ -63,6 +63,7 @@ function App() {
   }
 
   const activeAccount = snapshot.accounts.find((account) => account.isActive);
+  const overviewAccount = resolveOverviewAccount(snapshot.accounts);
 
   const handleAutoRefreshToggle = (enabled: boolean): void => {
     const nextMinutes = enabled ? state.lastEnabledAutoRefreshMinutes || 15 : 0;
@@ -279,7 +280,7 @@ function App() {
             </div>
           </div>
           <OverviewSection
-            account={activeAccount}
+            account={overviewAccount}
             hasAccounts={snapshot.accounts.length > 0}
             lang={snapshot.lang}
             copy={snapshot.copy}
@@ -422,6 +423,9 @@ function App() {
         onCompleteOAuth={modals.handleCompleteOAuth}
         onImportFileSelected={modals.handleImportFileSelected}
         onImportTextChange={modals.handleImportTextChange}
+        onOpenSessionTokenPage={() =>
+          sendAction("openExternalUrl", undefined, { url: "https://chatgpt.com/api/auth/session" })
+        }
         onPreviewImport={modals.handlePreviewImport}
         onSubmitImport={modals.handleSubmitImport}
       />

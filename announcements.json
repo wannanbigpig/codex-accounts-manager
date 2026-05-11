@@ -2,6 +2,127 @@
   "version": "1.0",
   "announcements": [
     {
+      "id": "ann-2026-05-codex-tools-0-1-10-session-import-dashboard",
+      "type": "feature",
+      "priority": 520,
+      "releaseVersion": "0.1.10",
+      "title": "Codex Accounts Manager 0.1.10 免重复授权导入与总览修复",
+      "summary": "本次更新支持通过已登录 ChatGPT session 导入账号，免去重复 Codex 授权和手机号验证，并修复顶部总览展示。",
+      "content": "本次更新聚焦账号导入、跨设备迁移说明和 Dashboard 展示一致性。\n1. 添加账号增强：导入 JSON 支持 ChatGPT session 返回数据，可复用浏览器中已登录的 ChatGPT 会话，免去重复进行 Codex 授权和手机号验证。\n2. 快速获取 Token：添加账号窗口提供打开当前登录 Token 页面入口，复制返回的 session JSON 后即可导入。\n3. 账号迁移说明：README 新增如何导出选中账号 JSON，并在另一台电脑导入恢复的步骤。\n4. 顶部总览修复：没有全局激活账号但当前窗口已有账号时，顶部总览会显示当前窗口账号，不再误提示没有激活账号。\n5. 导入兼容性增强：兼容 session JSON 中的 user、account 和 accessToken 数据，并从更多 JWT profile claim 兜底提取邮箱。\n6. 扩展能力提示：如需更完整的会话管理、CLI 启动和多实例调度，可安装 uTools 插件 AiDeck。\n\nAiDeck 项目地址：https://github.com/wannanbigpig/aideck",
+      "action": {
+        "type": "url",
+        "target": "https://github.com/wannanbigpig/codex-tools",
+        "label": "查看项目"
+      },
+      "targetVersions": "*",
+      "targetLanguages": [
+        "*"
+      ],
+      "showOnce": true,
+      "popup": true,
+      "pinned": true,
+      "createdAt": "2026-05-11T08:30:00Z",
+      "expiresAt": null,
+      "locales": {
+        "en": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "zh": {
+          "title": "Codex Accounts Manager 0.1.10 免重复授权导入与总览修复",
+          "summary": "本次更新支持通过已登录 ChatGPT session 导入账号，免去重复 Codex 授权和手机号验证，并修复顶部总览展示。",
+          "content": "本次更新聚焦账号导入、跨设备迁移说明和 Dashboard 展示一致性。\n1. 添加账号增强：导入 JSON 支持 ChatGPT session 返回数据，可复用浏览器中已登录的 ChatGPT 会话，免去重复进行 Codex 授权和手机号验证。\n2. 快速获取 Token：添加账号窗口提供打开当前登录 Token 页面入口，复制返回的 session JSON 后即可导入。\n3. 账号迁移说明：README 新增如何导出选中账号 JSON，并在另一台电脑导入恢复的步骤。\n4. 顶部总览修复：没有全局激活账号但当前窗口已有账号时，顶部总览会显示当前窗口账号，不再误提示没有激活账号。\n5. 导入兼容性增强：兼容 session JSON 中的 user、account 和 accessToken 数据，并从更多 JWT profile claim 兜底提取邮箱。\n6. 扩展能力提示：如需更完整的会话管理、CLI 启动和多实例调度，可安装 uTools 插件 AiDeck。\n\nAiDeck 项目地址：https://github.com/wannanbigpig/aideck",
+          "actionLabel": "查看项目"
+        },
+        "ja": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "es": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "de": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "fr": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "pt-br": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "ru": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "ko": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "it": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "zh-hant": {
+          "title": "Codex Accounts Manager 0.1.10 免重複授權匯入與總覽修復",
+          "summary": "本次更新支援透過已登入 ChatGPT session 匯入帳號，免去重複 Codex 授權和手機號驗證，並修復頂部總覽顯示。",
+          "content": "本次更新聚焦帳號匯入、跨裝置遷移說明和 Dashboard 顯示一致性。\n1. 添加帳號增強：匯入 JSON 支援 ChatGPT session 返回資料，可複用瀏覽器中已登入的 ChatGPT 會話，免去重複進行 Codex 授權和手機號驗證。\n2. 快速取得 Token：添加帳號視窗提供開啟目前登入 Token 頁面入口，複製返回的 session JSON 後即可匯入。\n3. 帳號遷移說明：README 新增如何匯出選中帳號 JSON，並在另一台電腦匯入恢復的步驟。\n4. 頂部總覽修復：沒有全域激活帳號但目前視窗已有帳號時，頂部總覽會顯示目前視窗帳號，不再誤提示沒有激活帳號。\n5. 匯入相容性增強：相容 session JSON 中的 user、account 和 accessToken 資料，並從更多 JWT profile claim 兜底提取信箱。\n6. 擴充能力提示：如需更完整的會話管理、CLI 啟動和多實例調度，可安裝 uTools 外掛 AiDeck。\n\nAiDeck 專案地址：https://github.com/wannanbigpig/aideck",
+          "actionLabel": "查看專案"
+        },
+        "tr": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "pl": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "cs": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "ar": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        },
+        "vi": {
+          "title": "Codex Accounts Manager 0.1.10 session import and overview fixes",
+          "summary": "This update imports accounts from an already signed-in ChatGPT session, avoiding repeated Codex authorization and phone verification, and fixes the top overview.",
+          "content": "This update focuses on account import, cross-device migration guidance, and Dashboard display consistency.\n1. Better account import: JSON import now supports ChatGPT session response data, so you can reuse an already signed-in ChatGPT browser session and avoid repeating Codex authorization and phone verification.\n2. Faster token access: the add-account window includes an entry to open the current login token page; copy the returned session JSON and import it directly.\n3. Account migration guidance: README now explains how to export selected accounts as JSON and restore them on another computer.\n4. Top overview fix: when no global active account is marked but the current window has an account, the top overview now shows that current window account instead of saying no active account exists.\n5. Import compatibility: session JSON user, account, and accessToken data are supported, with extra JWT profile claim fallbacks for email detection.\n6. Extended workspace hint: for fuller session management, CLI launch, and multi-instance scheduling, install the AiDeck uTools plugin.\n\nAiDeck project: https://github.com/wannanbigpig/aideck",
+          "actionLabel": "View project"
+        }
+      }
+    },
+    {
       "id": "ann-2026-04-codex-tools-0-1-9-package-size-optimization",
       "type": "feature",
       "priority": 450,

@@ -50,6 +50,7 @@ export function AddAccountModal(props: {
   onCompleteOAuth: () => void;
   onImportFileSelected: (file: File) => void;
   onImportTextChange: (value: string) => void;
+  onOpenSessionTokenPage: () => void;
   onPreviewImport: () => void;
   onSubmitImport: () => void;
 }) {
@@ -143,6 +144,13 @@ export function AddAccountModal(props: {
       ) : (
         <div class="modal-stack">
           <div class="modal-note">{props.copy.importJsonHint}</div>
+          <button class="modal-secondary-btn" type="button" onClick={props.onOpenSessionTokenPage}>
+            <span class="modal-btn-icon" aria-hidden="true">
+              <GlobeIcon />
+            </span>
+            {props.copy.importJsonOpenSessionToken}
+          </button>
+          <div class="modal-note">{props.copy.importJsonSessionHint}</div>
           <details class="modal-disclosure">
             <summary>{props.copy.importJsonExamplesSummary}</summary>
             <div class="modal-disclosure-body">

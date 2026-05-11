@@ -98,22 +98,32 @@ export function extractClaims(idToken: string, accessToken?: string): DecodedAut
   const accessPayload = accessToken ? decodeJwtPayload(accessToken) : undefined;
   const idAuth = (idPayload["https://api.openai.com/auth"] ?? {}) as Record<string, unknown>;
   const accessAuth = (accessPayload?.["https://api.openai.com/auth"] ?? {}) as Record<string, unknown>;
+  const idProfile = (idPayload["https://api.openai.com/profile"] ?? {}) as Record<string, unknown>;
+  const accessProfile = (accessPayload?.["https://api.openai.com/profile"] ?? {}) as Record<string, unknown>;
 
   const organizationsValue = idAuth["organizations"];
   const organizations = Array.isArray(organizationsValue)
     ? (organizationsValue as Array<{ id?: string; title?: string }>)
     : undefined;
 
-  const emailValue = idPayload["email"];
-  const authProviderValue = idPayload["auth_provider"];
+  const emailValue =
+    readString(idPayload, "email") ??
+    readString(idPayload, "preferred_username") ??
+    readString(idPayload, "upn") ??
+    readString(idProfile, "email") ??
+    (accessPayload ? readString(accessPayload, "email") : undefined) ??
+    (accessPayload ? readString(accessPayload, "preferred_username") : undefined) ??
+    (accessPayload ? readString(accessPayload, "upn") : undefined) ??
+    readString(accessProfile, "email");
+  const authProviderValue = readString(idPayload, "auth_provider") ?? (accessPayload ? readString(accessPayload, "auth_provider") : undefined);
 
   const claims = {
-    email: typeof emailValue === "string" ? emailValue : undefined,
+    email: emailValue,
     userId:
       readString(idAuth, "chatgpt_user_id") ??
       readString(accessAuth, "chatgpt_user_id") ??
       (accessAuth ? readString(accessAuth, "user_id") : undefined),
-    authProvider: typeof authProviderValue === "string" && authProviderValue.trim() ? authProviderValue : undefined,
+    authProvider: authProviderValue,
     planType: readString(idAuth, "chatgpt_plan_type") ?? readString(accessAuth, "chatgpt_plan_type"),
     accountId:
       readString(idAuth, "chatgpt_account_id") ??

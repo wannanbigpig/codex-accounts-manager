@@ -44,7 +44,7 @@ export function OverviewSection(props: {
               {teamNameDisplay ? <div class="overview-account-workspace">{teamNameDisplay}</div> : null}
               {account.tags.length ? <div class="account-tag-row">{renderTagList(account.tags)}</div> : null}
               <div class="overview-account-tags">
-                <span class="pill active">{copy.primaryAccount}</span>
+                {account.isActive ? <span class="pill active">{copy.primaryAccount}</span> : null}
                 {account.isCurrentWindowAccount ? <span class="pill active">{copy.current}</span> : null}
                 <span class="pill plan">{account.planTypeLabel}</span>
                 {renderHealthPill(account)}
@@ -119,7 +119,7 @@ export function OverviewSection(props: {
           <ActionButton class="toolbar-btn" pending={props.refreshAllPending} disabled={props.disabled} onClick={props.onRefreshAll}>
             {copy.refreshAll}
           </ActionButton>
-          {account ? (
+          {account?.isActive ? (
             <ActionButton class="toolbar-btn" onClick={props.onToggleAutoSwitchLock}>
               {account.autoSwitchLockedUntil ? copy.unlockAutoSwitchBtn : copy.lockAutoSwitchBtn}
             </ActionButton>

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { DashboardAccountViewModel } from "../src/domain/dashboard/types";
+import { resolveOverviewAccount } from "../webview-src/dashboard/helpers";
 import { reduceOAuthActionResult, reduceSharedImportActionResult } from "../webview-src/dashboard/sessionModalState";
 
 describe("reduceOAuthActionResult", () => {
@@ -94,5 +96,26 @@ describe("reduceSharedImportActionResult", () => {
 
     expect(imported.next.importJsonError).toBeUndefined();
     expect(imported.next.importResult?.successCount).toBe(1);
+  });
+});
+
+describe("resolveOverviewAccount", () => {
+  const account = (
+    id: string,
+    flags: Pick<DashboardAccountViewModel, "isActive" | "isCurrentWindowAccount">
+  ): DashboardAccountViewModel => ({ id, ...flags }) as DashboardAccountViewModel;
+
+  it("uses the current window account when no active account is marked", () => {
+    const current = account("current", { isActive: false, isCurrentWindowAccount: true });
+    const other = account("other", { isActive: false, isCurrentWindowAccount: false });
+
+    expect(resolveOverviewAccount([other, current])?.id).toBe("current");
+  });
+
+  it("prefers the active account over the current window account", () => {
+    const active = account("active", { isActive: true, isCurrentWindowAccount: false });
+    const current = account("current", { isActive: false, isCurrentWindowAccount: true });
+
+    expect(resolveOverviewAccount([current, active])?.id).toBe("active");
   });
 });

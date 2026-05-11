@@ -17,18 +17,20 @@ import {
 } from "./sharedAccounts";
 
 export function toSharedEntries(input: SharedCodexAccountJson | SharedCodexAccountJson[]): SharedCodexAccountJson[] {
-  return Array.isArray(input) ? input : [input];
+  const entries = Array.isArray(input) ? input : [input];
+  return entries.map(normalizeSharedAccountImportEntry);
 }
 
 export function previewSharedAccountsImportEntries(
   entries: SharedCodexAccountJson[],
   existingIds: Set<string>
 ): CodexImportPreviewSummary {
+  const normalizedEntries = toSharedEntries(entries);
   const invalidEntries: CodexImportPreviewIssue[] = [];
   let valid = 0;
   let overwriteCount = 0;
 
-  entries.forEach((entry, index) => {
+  normalizedEntries.forEach((entry, index) => {
     try {
       const preview = previewSharedEntry(entry);
       valid += 1;
@@ -41,7 +43,7 @@ export function previewSharedAccountsImportEntries(
   });
 
   return {
-    total: entries.length,
+    total: normalizedEntries.length,
     valid,
     overwriteCount,
     invalidCount: invalidEntries.length,
@@ -88,4 +90,70 @@ export function applySharedAccountEntry(account: CodexAccountRecord, entry: Shar
       account.lastQuotaAt = account.updatedAt;
     }
   }
+}
+
+function normalizeSharedAccountImportEntry(entry: SharedCodexAccountJson): SharedCodexAccountJson {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry) || entry.tokens) {
+    return entry;
+  }
+
+  const record = entry as Record<string, unknown>;
+  const accessToken = firstString(record["accessToken"], record["access_token"], record["token"]);
+  if (!accessToken || !looksLikeChatGptSession(record)) {
+    return entry;
+  }
+
+  const user = asRecord(record["user"]);
+  const sessionAccount = asRecord(record["account"]);
+  return {
+    ...entry,
+    email: firstString(record["email"], user?.["email"]) ?? entry.email,
+    user_id: firstString(record["user_id"], record["userId"], user?.["id"]) ?? entry.user_id,
+    plan_type: firstString(record["plan_type"], record["planType"], sessionAccount?.["planType"]) ?? entry.plan_type,
+    account_id: firstString(record["account_id"], record["accountId"], sessionAccount?.["id"]) ?? entry.account_id,
+    organization_id:
+      firstString(record["organization_id"], record["organizationId"], sessionAccount?.["organizationId"]) ??
+      entry.organization_id,
+    account_name:
+      firstString(record["account_name"], record["accountName"], sessionAccount?.["name"], sessionAccount?.["displayName"]) ??
+      entry.account_name,
+    account_structure:
+      firstString(record["account_structure"], record["accountStructure"], sessionAccount?.["structure"]) ??
+      entry.account_structure,
+    added_via: entry.added_via ?? "session",
+    tokens: {
+      id_token: firstString(record["id_token"], record["idToken"], accessToken),
+      access_token: accessToken,
+      refresh_token: firstString(record["refresh_token"], record["refreshToken"]),
+      account_id: firstString(record["account_id"], record["accountId"], sessionAccount?.["id"])
+    }
+  };
+}
+
+function looksLikeChatGptSession(record: Record<string, unknown>): boolean {
+  const user = asRecord(record["user"]);
+  const sessionAccount = asRecord(record["account"]);
+  return Boolean(
+    record["accessToken"] ||
+      record["sessionToken"] ||
+      record["authProvider"] ||
+      record["expires"] ||
+      user?.["email"] ||
+      sessionAccount?.["id"] ||
+      sessionAccount?.["planType"]
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const normalized = sanitizeOptionalValue(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
 }

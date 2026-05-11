@@ -24,7 +24,11 @@ import {
   restoreSharedTokens,
   toSharedAccountJson
 } from "../src/storage/sharedAccounts";
-import { applySharedAccountEntry } from "../src/storage/sharedAccountsImport";
+import {
+  applySharedAccountEntry,
+  previewSharedAccountsImportEntries,
+  toSharedEntries
+} from "../src/storage/sharedAccountsImport";
 
 function createJwt(payload: Record<string, unknown>): string {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -104,6 +108,57 @@ describe("sharedAccounts helpers", () => {
     expect(previewSharedEntry(entry)).toEqual({
       storageId: buildAccountStorageId("dev@example.com", "acct_123", "org_456"),
       email: "dev@example.com"
+    });
+  });
+
+  it("imports ChatGPT session JSON as a shared Codex account entry", () => {
+    const accessToken = createJwt({
+      sub: "auth0|session-user",
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct_session"
+      },
+      "https://api.openai.com/profile": {
+        email: "session@example.com",
+        email_verified: true
+      }
+    });
+
+    const sessionEntry = {
+      user: {
+        id: "user-session",
+        email: "session@example.com"
+      },
+      expires: "2026-08-09T06:23:18.688Z",
+      account: {
+        id: "acct_session",
+        planType: "plus",
+        structure: "personal"
+      },
+      accessToken,
+      authProvider: "openai"
+    };
+
+    const preview = previewSharedAccountsImportEntries([sessionEntry], new Set());
+    expect(preview).toEqual({
+      total: 1,
+      valid: 1,
+      overwriteCount: 0,
+      invalidCount: 0,
+      invalidEntries: []
+    });
+
+    const [entry] = toSharedEntries(sessionEntry);
+    expect(entry?.email).toBe("session@example.com");
+    expect(entry?.user_id).toBe("user-session");
+    expect(entry?.plan_type).toBe("plus");
+    expect(entry?.account_id).toBe("acct_session");
+    expect(entry?.account_structure).toBe("personal");
+    expect(entry?.tokens?.id_token).toBe(accessToken);
+    expect(entry?.tokens?.access_token).toBe(accessToken);
+    expect(restoreSharedTokens(entry!).refreshToken).toBeUndefined();
+    expect(previewSharedEntry(entry!)).toEqual({
+      storageId: buildAccountStorageId("session@example.com", "acct_session"),
+      email: "session@example.com"
     });
   });
 

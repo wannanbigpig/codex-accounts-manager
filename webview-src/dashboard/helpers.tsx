@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import type { DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
+import type { DashboardAccountViewModel, DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
 import { formatResetRelativeTime } from "../../src/utils/resetTime";
 
 type SensitiveKind = "email" | "id" | "name";
@@ -115,6 +115,10 @@ export function formatSavedAccountsSummary(
     default:
       return `${count} total · ${validCount} valid · ${invalidCount} invalid`;
   }
+}
+
+export function resolveOverviewAccount(accounts: DashboardAccountViewModel[]): DashboardAccountViewModel | undefined {
+  return accounts.find((account) => account.isActive) ?? accounts.find((account) => account.isCurrentWindowAccount);
 }
 
 export function normalizeThresholds(green: number, yellow: number): { green: number; yellow: number } {
