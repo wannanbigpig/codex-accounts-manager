@@ -27,10 +27,10 @@ function createJwt(payload: Record<string, unknown>): string {
   return `header.${encoded}.signature`;
 }
 
-function createTokens(accountId = "acct_123"): CodexTokens {
+function createTokens(accountId = "acct_123", email = "dev@example.com"): CodexTokens {
   return {
     idToken: createJwt({
-      email: "dev@example.com",
+      email,
       "https://api.openai.com/auth": {
         chatgpt_account_id: accountId
       }
@@ -435,4 +435,60 @@ describe("AccountsRepository token persistence", () => {
 
     repo.dispose();
   });
+
+  it("repairs status visibility when force-activating an OAuth account", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const activeId = buildAccountStorageId("oauth@example.com", "acct_oauth", undefined);
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        currentAccountId: activeId,
+        accounts: [
+          {
+            id: activeId,
+            email: "oauth@example.com",
+            accountId: "acct_oauth",
+            isActive: true,
+            showInStatusBar: false,
+            createdAt: 1,
+            updatedAt: 1
+          },
+          {
+            id: "extra-visible",
+            email: "extra@example.com",
+            isActive: false,
+            showInStatusBar: true,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const repo = new AccountsRepository(context);
+    const imported = await repo.upsertFromTokens(createTokens("acct_new", "new@example.com"), true);
+    const accounts = await repo.listAccounts();
+
+    expect(imported.isActive).toBe(true);
+    expect(accounts.find((account) => account.id === imported.id)?.showInStatusBar).toBe(false);
+    expect(accounts.find((account) => account.id === activeId)?.showInStatusBar).toBe(true);
+
+    repo.dispose();
+  });
+
 });

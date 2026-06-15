@@ -4,18 +4,14 @@ import { loginWithOAuth } from "../../auth";
 import { getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
 import { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
-import { getCodexAccountsConfiguration } from "../../infrastructure/config/extensionSettings";
 import { AccountsRepository } from "../../storage";
 import { buildAccountStorageId } from "../../utils/accountIdentity";
 import { extractClaims } from "../../utils/jwt";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
 import {
-  getCodexAppRestartCopy,
-  getCodexAppState,
   getCommandCopy,
   logNetworkEvent,
-  restartCodexAppIfInstalled,
   t
 } from "../../utils";
 import { openDetailsPanel } from "../../ui";
@@ -29,9 +25,7 @@ import {
   refreshSingleQuota,
   refreshSingleQuotaSafely
 } from "./quota";
-
-const CODEX_APP_RESTART_MODE = "codexAppRestartMode";
-const CODEX_APP_RESTART_ENABLED = "codexAppRestartEnabled";
+import { handleCodexAppRestartPreference, promptWindowReloadForAccount } from "./switchEffects";
 const REFRESH_ALL_SILENT_CONCURRENCY = 1;
 const REFRESH_ALL_MANUAL_CONCURRENCY = 2;
 const REFRESH_ALL_SILENT_DELAY_MS = 300;
@@ -104,8 +98,10 @@ export class AccountsCommandService {
     const copy = getCommandCopy();
     await this.withProgress(copy.progressImportCurrent, async () => {
       const account = await this.repo.importCurrentAuth();
+      this.view.markObservedAuthIdentity?.(account.id);
       const result = await refreshImportedAccountQuota(this.repo, account.id);
       this.view.refresh();
+      await promptWindowReloadForAccount(account);
       if (result.error) {
         void vscode.window.showWarningMessage(copy.importedButQuotaFailed(account.email, result.error.message));
       } else {
@@ -186,21 +182,9 @@ export class AccountsCommandService {
     });
     this.view.markObservedAuthIdentity?.(account.id);
 
-    await this.handleCodexAppRestartPreference();
+    await handleCodexAppRestartPreference({ allowManualPrompt: true });
     this.view.refresh();
-
-    if (!needsWindowReloadForAccount(account.id)) {
-      return;
-    }
-
-    const choice = await vscode.window.showInformationMessage(
-      copy.switchedAndAskReload(account.email),
-      copy.reloadNow,
-      copy.later
-    );
-    if (choice === copy.reloadNow) {
-      await vscode.commands.executeCommand("workbench.action.reloadWindow");
-    }
+    await promptWindowReloadForAccount(account);
   }
 
   async refreshQuota(item?: CodexAccountRecord): Promise<void> {
@@ -402,42 +386,6 @@ export class AccountsCommandService {
           message: getErrorMessage(error)
         })
       );
-    }
-  }
-
-  private async handleCodexAppRestartPreference(): Promise<void> {
-    if (!getCodexAccountsConfiguration().get<boolean>(CODEX_APP_RESTART_ENABLED, false)) {
-      return;
-    }
-
-    const state = await getCodexAppState();
-    if (!state.installed || !state.running) {
-      return;
-    }
-
-    const config = getCodexAccountsConfiguration();
-    const currentMode = config.get<string>(CODEX_APP_RESTART_MODE);
-    const copy = getCodexAppRestartCopy();
-
-    let mode = currentMode;
-    if (mode !== "auto" && mode !== "manual") {
-      const choice = await vscode.window.showInformationMessage(copy.preferenceMessage, copy.auto, copy.manual);
-      if (!choice) {
-        return;
-      }
-
-      mode = choice === copy.auto ? "auto" : "manual";
-      await config.update(CODEX_APP_RESTART_MODE, mode, vscode.ConfigurationTarget.Global);
-    }
-
-    if (mode === "auto") {
-      await restartCodexAppIfInstalled();
-      return;
-    }
-
-    const manualChoice = await vscode.window.showInformationMessage(copy.manualMessage, copy.restartNow, copy.later);
-    if (manualChoice === copy.restartNow) {
-      await restartCodexAppIfInstalled();
     }
   }
 

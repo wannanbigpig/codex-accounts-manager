@@ -11,6 +11,7 @@ import { AccountsStatusBarProvider, refreshDetailsPanel } from "../../ui";
 import { needsWindowReloadForAccount, setCurrentWindowRuntimeAccountId } from "./windowRuntimeAccount";
 import { buildWorkbenchRefreshSignature } from "./refreshSignature";
 import { getTokenAutomationSnapshot } from "./tokenAutomationState";
+import { promptWindowReloadForAccount } from "../../application/accounts/switchEffects";
 
 type RefreshView = {
   refresh: () => void;
@@ -127,7 +128,8 @@ export class WorkbenchRefreshCoordinator {
 
   private async promptImportCurrentAccount(view: RefreshView): Promise<void> {
     const auth = await readAuthFile();
-    if (!auth?.tokens?.id_token || !auth.tokens.access_token) {
+    const hasOauth = Boolean(auth?.tokens?.id_token && auth.tokens.access_token);
+    if (!hasOauth) {
       return;
     }
 
@@ -149,6 +151,7 @@ export class WorkbenchRefreshCoordinator {
           this.lastObservedAuthIdentity = account.id;
           const result = await refreshImportedAccountQuota(this.repo, account.id);
           view.refresh();
+          await promptWindowReloadForAccount(account);
 
           if (result.error) {
             void vscode.window.showWarningMessage(copy.partial(account.email, result.error.message));

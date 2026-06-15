@@ -52,6 +52,7 @@ export async function readAuthFile(): Promise<CodexAuthFile | undefined> {
  */
 export async function writeAuthFile(tokens: CodexTokens): Promise<void> {
   const authFile: CodexAuthFile = {
+    auth_mode: "oauth",
     OPENAI_API_KEY: null,
     tokens: {
       id_token: tokens.idToken,

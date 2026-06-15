@@ -6,12 +6,15 @@ export function renderDashboardShell(
   webview: vscode.Webview,
   settingsStore: Pick<ExtensionSettingsStore, "resolveLanguage">
 ): string {
-  const sharedStyles = webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "webview", "shared.css"));
+  const assetVersion = String(Date.now());
+  const sharedStyles = webview.asWebviewUri(
+    vscode.Uri.joinPath(context.extensionUri, "media", "webview", "shared.css").with({ query: assetVersion })
+  );
   const pageStyles = webview.asWebviewUri(
-    vscode.Uri.joinPath(context.extensionUri, "media", "webview", "quotaSummary.css")
+    vscode.Uri.joinPath(context.extensionUri, "media", "webview", "quotaSummary.css").with({ query: assetVersion })
   );
   const script = webview.asWebviewUri(
-    vscode.Uri.joinPath(context.extensionUri, "media", "webview", "dashboard", "dashboard.js")
+    vscode.Uri.joinPath(context.extensionUri, "media", "webview", "dashboard", "dashboard.js").with({ query: assetVersion })
   );
 
   return `<!DOCTYPE html>

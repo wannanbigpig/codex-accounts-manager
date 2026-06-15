@@ -25,6 +25,7 @@ export async function handleDashboardSettingUpdate(
       break;
     case "codexAppRestartEnabled":
     case "autoSwitchEnabled":
+    case "autoSwitchReloadWindowEnabled":
     case "backgroundTokenRefreshEnabled":
     case "quotaWarningEnabled":
     case "debugNetwork":

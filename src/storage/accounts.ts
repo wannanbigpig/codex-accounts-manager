@@ -30,7 +30,7 @@ import {
   shouldAttemptRemoteProfileRepair,
   syncLoginAtFromTokens
 } from "./accountProfileMaintenance";
-import { buildAccountRecordDraft } from "./accountMetadata";
+import { buildAccountRecordDraft, reconcileStatusBarSelections } from "./accountMetadata";
 import { restoreSharedTokens, toSharedAccountJson } from "./sharedAccounts";
 import {
   applySharedAccountEntry,
@@ -204,6 +204,12 @@ export class AccountsRepository {
       throw new AccountError("Current auth.json was not found", {
         code: ErrorCode.NOT_FOUND,
         i18nKey: "message.accountNotFound"
+      });
+    }
+
+    if (!auth.tokens?.id_token || !auth.tokens.access_token) {
+      throw new AccountError("Current auth.json does not include valid tokens", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
       });
     }
 
@@ -464,6 +470,7 @@ export class AccountsRepository {
     }
 
     const index = options.allowRecoveryWrite ? await this.readIndexForRecovery() : await this.readIndex();
+    const previousActiveId = index.currentAccountId;
     const id = buildAccountStorageId(claimsWithEmail.email, claims.accountId, claims.organizationId);
     const existing = index.accounts.find((item) => item.id === id);
     const now = Date.now();
@@ -485,6 +492,7 @@ export class AccountsRepository {
 
     if (forceActive) {
       markActive(index, id);
+      reconcileStatusBarSelections(index, id, previousActiveId);
     }
 
     // 保存令牌
@@ -518,6 +526,12 @@ export class AccountsRepository {
       throw new AccountError("Current auth.json was not found", {
         code: ErrorCode.NOT_FOUND,
         i18nKey: "message.accountNotFound"
+      });
+    }
+
+    if (!auth.tokens?.id_token || !auth.tokens.access_token) {
+      throw new AccountError("Current auth.json does not include valid tokens", {
+        code: ErrorCode.ACCOUNT_INVALID_DATA
       });
     }
 
@@ -794,11 +808,17 @@ export class AccountsRepository {
   async syncActiveAccountFromAuthFile(): Promise<void> {
     const auth = await readAuthFile();
     const index = await this.readIndex();
-    const claims = auth ? extractClaims(auth.tokens.id_token, auth.tokens.access_token) : undefined;
+    const previousActiveId = index.currentAccountId;
+
+    const claims = auth?.tokens ? extractClaims(auth.tokens.id_token, auth.tokens.access_token) : undefined;
     const derivedId = claims?.email
       ? buildAccountStorageId(claims.email, claims.accountId, claims.organizationId)
       : undefined;
     let changed = syncActiveAccountState(index, derivedId);
+    if (derivedId && previousActiveId !== derivedId) {
+      reconcileStatusBarSelections(index, derivedId, previousActiveId);
+      changed = true;
+    }
 
     if (auth?.tokens?.id_token && auth.tokens.access_token && derivedId) {
       const account = index.accounts.find((item) => item.id === derivedId);

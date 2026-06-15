@@ -1,4 +1,4 @@
-import type { DashboardCopy, DashboardOAuthSessionDescriptor } from "../../src/domain/dashboard/types";
+import type { DashboardCopy, DashboardOAuthSessionDescriptor, DashboardState } from "../../src/domain/dashboard/types";
 import type { CodexImportPreviewSummary, CodexImportResultSummary } from "../../src/core/types";
 import { ImportPreviewPanel, ImportResultPanel, ModalShell } from "./components";
 import { createShareFileName, formatTemplate, maskSharedJson } from "./helpers";
@@ -38,6 +38,7 @@ export function AddAccountModal(props: {
   importPreview?: CodexImportPreviewSummary;
   importResult?: CodexImportResultSummary;
   copyFeedbackKey: string | null;
+  lang: DashboardState["lang"];
   startOAuthAutoPending: boolean;
   completeOAuthPending: boolean;
   previewImportPending: boolean;
@@ -50,7 +51,6 @@ export function AddAccountModal(props: {
   onCompleteOAuth: () => void;
   onImportFileSelected: (file: File) => void;
   onImportTextChange: (value: string) => void;
-  onOpenSessionTokenPage: () => void;
   onPreviewImport: () => void;
   onSubmitImport: () => void;
 }) {
@@ -144,13 +144,6 @@ export function AddAccountModal(props: {
       ) : (
         <div class="modal-stack">
           <div class="modal-note">{props.copy.importJsonHint}</div>
-          <button class="modal-secondary-btn" type="button" onClick={props.onOpenSessionTokenPage}>
-            <span class="modal-btn-icon" aria-hidden="true">
-              <GlobeIcon />
-            </span>
-            {props.copy.importJsonOpenSessionToken}
-          </button>
-          <div class="modal-note">{props.copy.importJsonSessionHint}</div>
           <details class="modal-disclosure">
             <summary>{props.copy.importJsonExamplesSummary}</summary>
             <div class="modal-disclosure-body">
@@ -204,7 +197,9 @@ export function AddAccountModal(props: {
             <button
               class="modal-primary-btn"
               type="button"
-              disabled={!props.importJsonText.trim() || !props.importPreview || props.importPreview.valid <= 0 || props.importSharedPending}
+              disabled={
+                !props.importJsonText.trim() || !props.importPreview || props.importPreview.valid <= 0 || props.importSharedPending
+              }
               onClick={props.onSubmitImport}
             >
               {!props.importSharedPending ? (
@@ -315,6 +310,6 @@ export function ShareTokenModal(props: {
         <div class="modal-note">{props.copy.shareTokenModeHint}</div>
         <textarea class="modal-textarea share-preview" readOnly value={previewValue} />
       </div>
-    </ModalShell>
+  </ModalShell>
   );
 }

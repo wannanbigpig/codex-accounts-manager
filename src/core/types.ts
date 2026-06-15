@@ -23,6 +23,8 @@ export interface CodexTokens {
   accountId?: string;
 }
 
+export type CodexAuthMode = "oauth";
+
 /**
  * 配额摘要信息
  */
@@ -119,6 +121,8 @@ export interface CodexAccountRecord {
   loginAt?: number;
   /** 用户邮箱 */
   email: string;
+  /** 认证模式 */
+  authMode?: CodexAuthMode;
   /** 用户 ID */
   userId?: string;
   /** 认证提供者 (如 google, microsoft 等) */
@@ -231,10 +235,15 @@ export interface CodexAnnouncementState {
  * Codex auth.json 文件格式
  */
 export interface CodexAuthFile {
-  /** OpenAI API Key (已废弃，始终为 null) */
-  OPENAI_API_KEY: null;
+  /** 认证模式 */
+  auth_mode?: string;
+  /** OpenAI API Key */
+  OPENAI_API_KEY: string | null;
+  /** API Base URL */
+  api_base_url?: string;
+  base_url?: string;
   /** 认证令牌 */
-  tokens: {
+  tokens?: {
     /** 身份令牌 */
     id_token: string;
     /** 访问令牌 */
@@ -433,6 +442,11 @@ export interface SharedCodexAccountJson {
   id?: string;
   email?: string;
   auth_mode?: string;
+  OPENAI_API_KEY?: string | null;
+  openai_api_key?: string | null;
+  api_base_url?: string | null;
+  base_url?: string | null;
+  apiBaseUrl?: string | null;
   user_id?: string;
   plan_type?: string;
   account_id?: string | null;

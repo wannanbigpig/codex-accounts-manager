@@ -111,7 +111,7 @@ describe("sharedAccounts helpers", () => {
     });
   });
 
-  it("imports ChatGPT session JSON as a shared Codex account entry", () => {
+  it("rejects ChatGPT session JSON during shared import preview", () => {
     const accessToken = createJwt({
       sub: "auth0|session-user",
       "https://api.openai.com/auth": {
@@ -141,25 +141,16 @@ describe("sharedAccounts helpers", () => {
     const preview = previewSharedAccountsImportEntries([sessionEntry], new Set());
     expect(preview).toEqual({
       total: 1,
-      valid: 1,
+      valid: 0,
       overwriteCount: 0,
-      invalidCount: 0,
-      invalidEntries: []
+      invalidCount: 1,
+      invalidEntries: [expect.objectContaining({ index: 0, message: expect.stringContaining("valid tokens") })]
     });
 
-    const [entry] = toSharedEntries(sessionEntry);
-    expect(entry?.email).toBe("session@example.com");
-    expect(entry?.user_id).toBe("user-session");
-    expect(entry?.plan_type).toBe("plus");
-    expect(entry?.account_id).toBe("acct_session");
-    expect(entry?.account_structure).toBe("personal");
-    expect(entry?.tokens?.id_token).toBe(accessToken);
-    expect(entry?.tokens?.access_token).toBe(accessToken);
-    expect(restoreSharedTokens(entry!).refreshToken).toBeUndefined();
-    expect(previewSharedEntry(entry!)).toEqual({
-      storageId: buildAccountStorageId("session@example.com", "acct_session"),
-      email: "session@example.com"
-    });
+    expect(toSharedEntries(sessionEntry)).toEqual([sessionEntry]);
+    expect(() => previewSharedEntry(sessionEntry)).toThrowError(
+      /Shared account JSON does not include valid tokens/
+    );
   });
 
   it("maps shared quota payloads into internal summaries", () => {

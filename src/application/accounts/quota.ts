@@ -17,8 +17,10 @@ import {
 import { clearTokenAutomationError } from "../../presentation/workbench/tokenAutomationState";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy } from "../../utils";
 import { getDashboardCopy } from "../dashboard/copy";
+import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
 
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
+const AUTO_SWITCH_RELOAD_WINDOW_ENABLED = "autoSwitchReloadWindowEnabled";
 const AUTO_SWITCH_HOURLY_THRESHOLD = "autoSwitchHourlyThreshold";
 const AUTO_SWITCH_WEEKLY_THRESHOLD = "autoSwitchWeeklyThreshold";
 const QUOTA_WARNING_ENABLED = "quotaWarningEnabled";
@@ -213,6 +215,12 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   view.refresh();
 
   if (!needsWindowReloadForAccount(next.id)) {
+    return true;
+  }
+
+  if (config.get<boolean>(AUTO_SWITCH_RELOAD_WINDOW_ENABLED, false)) {
+    await handleCodexAppRestartPreference({ allowManualPrompt: false });
+    await autoReloadWindowForAccount(next.id);
     return true;
   }
 

@@ -8,12 +8,22 @@ const { refreshQuotaMock, clearTokenAutomationErrorMock } = vi.hoisted(() => ({
   clearTokenAutomationErrorMock: vi.fn()
 }));
 
+const { handleCodexAppRestartPreferenceMock, autoReloadWindowForAccountMock } = vi.hoisted(() => ({
+  handleCodexAppRestartPreferenceMock: vi.fn(),
+  autoReloadWindowForAccountMock: vi.fn()
+}));
+
 vi.mock("../src/services", () => ({
   refreshQuota: refreshQuotaMock
 }));
 
 vi.mock("../src/presentation/workbench/tokenAutomationState", () => ({
   clearTokenAutomationError: clearTokenAutomationErrorMock
+}));
+
+vi.mock("../src/application/accounts/switchEffects", () => ({
+  handleCodexAppRestartPreference: handleCodexAppRestartPreferenceMock,
+  autoReloadWindowForAccount: autoReloadWindowForAccountMock
 }));
 
 import { maybeAutoSwitchForActiveQuota, refreshSingleQuota } from "../src/application/accounts/quota";
@@ -39,6 +49,8 @@ describe("refreshSingleQuota token automation state", () => {
   beforeEach(() => {
     refreshQuotaMock.mockReset();
     clearTokenAutomationErrorMock.mockReset();
+    handleCodexAppRestartPreferenceMock.mockReset();
+    autoReloadWindowForAccountMock.mockReset();
   });
 
   afterEach(() => {
@@ -180,6 +192,55 @@ describe("refreshSingleQuota token automation state", () => {
     expect(switched).toBe(true);
     expect(repo.switchAccount).toHaveBeenCalledWith(bestQuota.id);
     expect(repo.switchAccount).not.toHaveBeenCalledWith(sameEmailButLowerQuota.id);
+  });
+
+  it("auto reloads the window after auto switch when the setting is enabled", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          autoSwitchEnabled: true,
+          autoSwitchReloadWindowEnabled: true,
+          autoSwitchHourlyThreshold: 20,
+          autoSwitchWeeklyThreshold: 20
+        };
+        return values[key] ?? defaultValue;
+      }),
+      update: vi.fn()
+    } as never);
+
+    const active: CodexAccountRecord = {
+      id: "active",
+      email: "dev@example.com",
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: createQuotaSummary({ hourly: 90, weekly: 5 })
+    };
+    const next: CodexAccountRecord = {
+      id: "next-account",
+      email: "next@example.com",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: createQuotaSummary({ hourly: 80, weekly: 85 })
+    };
+    const repo = {
+      listAccounts: vi.fn(async () => [active, next]),
+      switchAccount: vi.fn(async () => undefined)
+    };
+    const view = {
+      refresh: vi.fn(),
+      markObservedAuthIdentity: vi.fn()
+    };
+
+    setCurrentWindowRuntimeAccountId("other-window-account");
+    autoReloadWindowForAccountMock.mockResolvedValue(true);
+
+    const switched = await maybeAutoSwitchForActiveQuota(repo as unknown as AccountsRepository, view);
+
+    expect(switched).toBe(true);
+    expect(handleCodexAppRestartPreferenceMock).toHaveBeenCalledWith({ allowManualPrompt: false });
+    expect(autoReloadWindowForAccountMock).toHaveBeenCalledWith(next.id);
   });
 });
 

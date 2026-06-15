@@ -156,6 +156,12 @@ export function SettingsOverlay(props: {
                 onPreview={(value) => props.onPatchSettings({ autoSwitchWeeklyThreshold: value })}
                 onCommit={(value) => patchAndSend("autoSwitchWeeklyThreshold", value)}
               />
+              <SettingsToggleBlock
+                title={props.copy.autoSwitchReloadTitle}
+                sub={props.copy.autoSwitchReloadSub}
+                enabled={props.settings.autoSwitchReloadWindowEnabled}
+                onToggle={(enabled) => patchAndSend("autoSwitchReloadWindowEnabled", enabled)}
+              />
               <div class="settings-block-head">
                 <div class="settings-block-title">{props.copy.autoSwitchLockMinutesTitle}</div>
                 <div class="settings-block-sub">{props.copy.autoSwitchLockMinutesSub}</div>

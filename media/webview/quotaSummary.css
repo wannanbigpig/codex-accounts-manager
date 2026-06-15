@@ -1557,6 +1557,29 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
   line-height: 1.35;
   padding-top: 4px;
 }
+.saved-api-usage-panel {
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+.saved-api-usage-btn {
+  min-width: 0;
+  width: 100%;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+.saved-api-usage-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
+  padding: 10px 8px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
 .saved-actions {
   display: flex;
   align-items: center;
@@ -1620,6 +1643,7 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
 .saved-detail-row {
   display: flex;
   align-items: center;
+  gap: 6px;
   min-width: 0;
   font-size: 12px;
   line-height: 1.3;
@@ -1633,10 +1657,74 @@ html[data-theme="auto"] body.vscode-light .tag-pill.muted {
 }
 .saved-detail-value {
   min-width: 0;
+  flex: 1 1 auto;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.saved-detail-value-wrap {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+}
+.saved-detail-inline-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.saved-detail-tooltip {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 45;
+  display: none;
+  max-width: min(360px, calc(100vw - 96px));
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+  word-break: break-all;
+  box-shadow: var(--shadow-lg);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.saved-detail-value-wrap:hover .saved-detail-tooltip,
+.saved-detail-value-wrap:focus-within .saved-detail-tooltip {
+  display: block;
+}
+.saved-sensitive-value {
+  font-variant-numeric: tabular-nums;
+}
+.saved-detail-eye {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.saved-detail-eye:hover,
+.saved-detail-eye:focus-visible {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.saved-detail-eye svg {
+  width: 14px;
+  height: 14px;
 }
 .saved-back-tags {
   display: grid;

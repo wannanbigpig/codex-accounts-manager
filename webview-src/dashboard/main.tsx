@@ -3,12 +3,13 @@ import { useEffect, useReducer, useState } from "preact/hooks";
 import packageJson from "../../package.json";
 import type { DashboardAccountViewModel } from "../../src/domain/dashboard/types";
 import { AnnouncementCenter } from "./announcementCenter";
-import { BatchSelectionBar, OverviewSection, RecoveryPanel, SavedAccountCard } from "./components";
+import { BatchSelectionBar, OverviewSection, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
 import { formatSavedAccountsSummary, normalizeThresholds, resolveLockMinutes, resolveOverviewAccount } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
 import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
+import { SavedAccountCard } from "./savedAccountCard";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
 
@@ -411,6 +412,7 @@ function App() {
         importPreview={modals.importPreview}
         importResult={modals.importResult}
         copyFeedbackKey={modals.copyFeedbackKey}
+        lang={snapshot.lang}
         startOAuthAutoPending={startOAuthAutoPending}
         completeOAuthPending={completeOAuthPending}
         previewImportPending={previewImportPending}
@@ -423,9 +425,6 @@ function App() {
         onCompleteOAuth={modals.handleCompleteOAuth}
         onImportFileSelected={modals.handleImportFileSelected}
         onImportTextChange={modals.handleImportTextChange}
-        onOpenSessionTokenPage={() =>
-          sendAction("openExternalUrl", undefined, { url: "https://chatgpt.com/api/auth/session" })
-        }
         onPreviewImport={modals.handlePreviewImport}
         onSubmitImport={modals.handleSubmitImport}
       />

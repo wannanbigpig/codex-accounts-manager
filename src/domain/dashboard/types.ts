@@ -13,6 +13,7 @@ export type DashboardSettingKey =
   | "backgroundTokenRefreshEnabled"
   | "autoRefreshMinutes"
   | "autoSwitchEnabled"
+  | "autoSwitchReloadWindowEnabled"
   | "autoSwitchHourlyThreshold"
   | "autoSwitchWeeklyThreshold"
   | "autoSwitchLockMinutes"
@@ -30,6 +31,7 @@ export interface DashboardSettings {
   backgroundTokenRefreshEnabled: boolean;
   autoRefreshMinutes: number;
   autoSwitchEnabled: boolean;
+  autoSwitchReloadWindowEnabled: boolean;
   autoSwitchHourlyThreshold: number;
   autoSwitchWeeklyThreshold: number;
   autoSwitchLockMinutes: number;
@@ -222,6 +224,8 @@ export interface DashboardCopy {
   autoSwitchThresholdSuffix: string;
   autoSwitchThresholdDescTemplate: string;
   autoSwitchAnyNote: string;
+  autoSwitchReloadTitle: string;
+  autoSwitchReloadSub: string;
   autoSwitchLockMinutesTitle: string;
   autoSwitchLockMinutesSub: string;
   autoSwitchLockOff: string;
@@ -293,6 +297,7 @@ export interface DashboardAccountViewModel {
   id: string;
   displayName: string;
   email: string;
+  authMode?: "oauth";
   accountName?: string;
   tags: string[];
   authProviderLabel: string;

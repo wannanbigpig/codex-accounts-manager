@@ -41,7 +41,16 @@ export function SavedAccountCard(props: {
   onToggleSelected: () => void;
   onEditTags: () => void;
   onAction: (
-    action: "details" | "switch" | "reloadPrompt" | "reauthorize" | "resyncProfile" | "refresh" | "remove" | "toggleStatusBar",
+    action:
+      | "details"
+      | "switch"
+      | "reloadPrompt"
+      | "reauthorize"
+      | "resyncProfile"
+      | "refresh"
+      | "remove"
+      | "toggleStatusBar"
+      | "openExternalUrl",
     accountId?: string,
     payload?: DashboardActionPayload
   ) => void;
@@ -52,8 +61,8 @@ export function SavedAccountCard(props: {
   const backEmailDisplay = getSensitiveDisplayValue(account.email, privacyMode, "email");
   const selectionLabel = props.selected ? copy.deselectAccount : copy.selectAccount;
   const showReauthorizeButton = account.healthKind === "reauthorize" && !account.dismissedHealth;
-  const showResyncButton = account.healthKind !== "reauthorize";
   const [flipped, setFlipped] = useState(false);
+  const showResyncButton = account.healthKind !== "reauthorize";
   const resyncButtonLabel =
     (account.healthKind === "disabled" || account.healthKind === "quota") && !account.dismissedHealth
       ? copy.resyncProfileBtn
@@ -205,7 +214,7 @@ export function SavedAccountCard(props: {
                 color={account.subscriptionColor}
               />
               <CardDetailRow label={resolveBackLabel("addMethod", props.lang)} value={account.addMethodLabel} />
-              <CardDetailRow label={resolveBackLabel("addedAt", props.lang)} value={account.addedAtLabel} />
+              <CardDetailRow label={resolveBackLabel("createdAt", props.lang)} value={account.addedAtLabel} />
               <CardDetailRow
                 label={resolveBackLabel("status", props.lang)}
                 value={resolveBackStatus(account, props.lang)}
@@ -224,16 +233,13 @@ export function SavedAccountCard(props: {
   );
 }
 
-function resolveBackLabel(
-  key: "workspace" | "subscription" | "addMethod" | "addedAt" | "status",
-  lang: DashboardState["lang"]
-): string {
+function resolveBackLabel(key: "workspace" | "subscription" | "addMethod" | "createdAt" | "status", lang: DashboardState["lang"]): string {
   const zh = lang === "zh" || lang === "zh-hant";
   const labels = {
     workspace: zh ? "工作空间" : "Workspace",
     subscription: zh ? "订阅到期" : "Subscription",
     addMethod: zh ? "添加方式" : "Added by",
-    addedAt: zh ? "添加时间" : "Added at",
+    createdAt: zh ? "创建时间" : "Created at",
     status: zh ? "状态" : "Status"
   };
   return labels[key];

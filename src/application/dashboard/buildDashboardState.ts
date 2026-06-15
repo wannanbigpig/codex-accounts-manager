@@ -48,13 +48,7 @@ export async function buildDashboardState(
       ] as const;
     })
   );
-  const sortedAccounts = [...accounts].sort(
-    (a, b) =>
-      Number(b.isActive) - Number(a.isActive) ||
-      (accountViewStateById.get(b.id)?.healthPriority ?? 0) - (accountViewStateById.get(a.id)?.healthPriority ?? 0) ||
-      b.createdAt - a.createdAt ||
-      a.email.localeCompare(b.email)
-  );
+  const sortedAccounts = sortDashboardAccounts(accounts, currentWindowAccountId, accountViewStateById);
   const extraSelectedCount = sortedAccounts.filter((account) => !account.isActive && account.showInStatusBar).length;
 
   return {
@@ -87,6 +81,22 @@ export async function buildDashboardState(
   };
 }
 
+export function sortDashboardAccounts<T extends Pick<CodexAccountRecord, "id" | "isActive" | "createdAt" | "email">>(
+  accounts: readonly T[],
+  currentWindowAccountId?: string,
+  accountViewStateById?: Map<string, { healthPriority: number }>
+): T[] {
+  return [...accounts].sort(
+    (a, b) =>
+      Number(b.id === currentWindowAccountId) - Number(a.id === currentWindowAccountId) ||
+      Number(b.isActive) - Number(a.isActive) ||
+      (accountViewStateById?.get(b.id)?.healthPriority ?? 0) -
+        (accountViewStateById?.get(a.id)?.healthPriority ?? 0) ||
+      b.createdAt - a.createdAt ||
+      a.email.localeCompare(b.email)
+  );
+}
+
 function mapAccount(
   account: CodexAccountRecord,
   viewState:
@@ -95,7 +105,7 @@ function mapAccount(
         health: ReturnType<typeof resolveAccountHealth>;
         dismissedHealth: boolean;
         automationState: ReturnType<typeof getAccountAutomationState>;
-      }
+    }
     | undefined,
   extraSelectedCount: number,
   lang: DashboardState["lang"],
@@ -114,6 +124,7 @@ function mapAccount(
     id: account.id,
     displayName: account.accountName?.trim() ?? account.email,
     email: account.email,
+    authMode: account.authMode ?? "oauth",
     accountName: account.accountName,
     tags: [...(account.tags ?? [])],
     authProviderLabel: formatAuthProvider(account.authProvider, lang),

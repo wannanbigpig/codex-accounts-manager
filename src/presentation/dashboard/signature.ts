@@ -52,6 +52,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.settings.displayLanguage,
     state.settings.autoRefreshMinutes,
     state.settings.autoSwitchEnabled ? "1" : "0",
+    state.settings.autoSwitchReloadWindowEnabled ? "1" : "0",
     state.settings.autoSwitchHourlyThreshold,
     state.settings.autoSwitchWeeklyThreshold,
     state.settings.autoSwitchLockMinutes,
