@@ -5,10 +5,11 @@
       "id": "ann-2026-06-codex-tools-followup-fixes",
       "type": "info",
       "priority": 530,
-      "title": "Codex Accounts Manager follow-up fixes",
+      "releaseVersion": "0.1.11",
+      "title": "Codex Accounts Manager 0.1.11 follow-up fixes",
       "summary": "This follow-up keeps current-window accounts at the front and tightens auto-reload after account switching.",
       "content": "This follow-up collects the remaining user-facing fixes from the current round.\n1. Current-window account ordering: the account list now puts the current window account first, making the active working identity easier to spot.\n2. Auto-reload after switching: the auto-switch flow can reload the VS Code window automatically after the Codex restart path finishes, with a setting to keep that behavior enabled or off.\n3. Display cleanup: Dashboard and status text received a few small consistency fixes so the current account, visibility, and refresh states line up better.\n4. Scope kept narrow: OAuth, shared JSON, and current-window account behavior remain intact.",
-      "targetVersions": "0.1.10",
+      "targetVersions": "*",
       "targetLanguages": [
         "*"
       ],
@@ -19,7 +20,7 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 补充修正：账号排序与自动重载",
+          "title": "Codex Accounts Manager 0.1.11 补充修正：账号排序与自动重载",
           "summary": "本次补充把当前窗口账号前置，并完善账号切换后的自动重载流程。",
           "content": "本次补充整理了这一轮剩余的用户可见修正。\n1. 当前窗口账号前置：账号列表会把当前窗口账号排在最前面，便于直接识别正在使用的账号。\n2. 切换后自动重载：自动切换流程在完成 Codex 重启路径后可直接重载 VS Code 窗口，并支持开关控制这一行为。\n3. 展示细节收尾：Dashboard 和状态文案做了几处一致性修正，让当前账号、可见性和刷新状态更统一。\n4. 原有能力保持：OAuth、共享 JSON 和当前窗口账号逻辑都继续保留。"
         }
