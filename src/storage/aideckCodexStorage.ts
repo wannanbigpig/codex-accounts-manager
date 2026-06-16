@@ -63,7 +63,7 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
       ...existing,
       id: account.id,
       email: account.email.trim().toLowerCase(),
-      auth_mode: readString(existing["auth_mode"]) ?? "oauth",
+      auth_mode: readString(existing["auth_mode"]) ?? "chatgpt",
       user_id: account.userId ?? readString(existing["user_id"]) ?? "",
       plan_type: account.planType ?? readString(existing["plan_type"]) ?? "",
       subscription_active_until:

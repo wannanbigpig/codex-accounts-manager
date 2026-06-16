@@ -7,7 +7,7 @@ export function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTo
   return {
     id: account.id,
     email: account.email,
-    auth_mode: "oauth",
+    auth_mode: "chatgpt",
     user_id: account.userId,
     plan_type: account.planType,
     subscription_active_until: account.subscriptionActiveUntil ?? null,

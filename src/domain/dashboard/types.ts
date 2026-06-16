@@ -297,7 +297,7 @@ export interface DashboardAccountViewModel {
   id: string;
   displayName: string;
   email: string;
-  authMode?: "oauth";
+  authMode?: "chatgpt" | "oauth";
   accountName?: string;
   tags: string[];
   authProviderLabel: string;
