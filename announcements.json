@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-06-codex-tools-followup-fixes",
+      "id": "ann-2026-06-codex-tools-0-1-12",
       "type": "info",
-      "priority": 530,
-      "releaseVersion": "0.1.11",
-      "title": "Codex Accounts Manager 0.1.11 follow-up fixes",
-      "summary": "This follow-up keeps current-window accounts at the front and tightens auto-reload after account switching.",
-      "content": "This follow-up collects the remaining user-facing fixes from the current round.\n1. Current-window account ordering: the account list now puts the current window account first, making the active working identity easier to spot.\n2. Auto-reload after switching: the auto-switch flow can reload the VS Code window automatically after the Codex restart path finishes, with a setting to keep that behavior enabled or off.\n3. Display cleanup: Dashboard and status text received a few small consistency fixes so the current account, visibility, and refresh states line up better.\n4. Scope kept narrow: OAuth, shared JSON, and current-window account behavior remain intact.",
+      "priority": 540,
+      "releaseVersion": "0.1.12",
+      "title": "Codex Accounts Manager 0.1.12 — auth fix, quota reset, subscription sync",
+      "summary": "Critical auth.json fix, active quota reset, subscription status sync, and performance improvements.",
+      "content": "This release fixes critical login issues and adds rate-limit reset support.\n1. Auth fix: removed \"auth_mode\":\"chatgpt\" from auth.json — no more forced re-login after switching accounts.\n2. macOS Keychain sync: auth.json writes now sync to macOS Keychain so Codex stays in sync.\n3. Token refresh before switch: accounts are now refreshed before switching to avoid expired tokens.\n4. Active quota reset (Reset Credits): if your account has reset credits, a button appears on the card to instantly reset your rate limit.\n5. Subscription status sync: subscription expiry is now actively fetched from accounts/check and subscriptions APIs.\n6. Dashboard perf: token cache eliminates Keychain reads on refresh, and announcements load without blocking.\n7. Code review quota now parsed correctly from the usage API.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-06-13T08:00:00Z",
+      "createdAt": "2026-06-30T10:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.11 补充修正：账号排序与自动重载",
-          "summary": "本次补充把当前窗口账号前置，并完善账号切换后的自动重载流程。",
-          "content": "本次补充整理了这一轮剩余的用户可见修正。\n1. 当前窗口账号前置：账号列表会把当前窗口账号排在最前面，便于直接识别正在使用的账号。\n2. 切换后自动重载：自动切换流程在完成 Codex 重启路径后可直接重载 VS Code 窗口，并支持开关控制这一行为。\n3. 展示细节收尾：Dashboard 和状态文案做了几处一致性修正，让当前账号、可见性和刷新状态更统一。\n4. 原有能力保持：OAuth、共享 JSON 和当前窗口账号逻辑都继续保留。"
+          "title": "Codex Accounts Manager 0.1.12 — 登录修复、配额重置、订阅同步",
+          "summary": "修复切号登录问题，新增主动重置配额次数，Dashboard 刷新加速。",
+          "content": "本次更新修复了关键的登录问题并新增主动重置次数支持。\n1. 登录修复：auth.json 不再写入 \"auth_mode\":\"chatgpt\"，切号后不再强制重新登录。\n2. macOS Keychain 同步：写入 auth.json 同时同步 Keychain，Codex 扩展不再显示已登出。\n3. 切号前 Token 刷新：切换账号前自动刷新过期 token，避免写入过期凭证。\n4. 主动重置配额：如果账号有重置次数，卡片上会显示「重置配额」按钮，点击可立即重置限额。\n5. 订阅到期时间查询：主动调用 accounts/check 和 subscriptions 接口获取准确的订阅到期时间。\n6. Dashboard 性能：token 内存缓存消除重复 Keychain 读取，公告加载不再阻塞界面。\n7. Code Review 额度解析：现在正确从 wham/usage 接口解析 code_review_rate_limit。"
         }
       }
     },

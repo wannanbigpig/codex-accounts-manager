@@ -69,8 +69,28 @@ export interface CodexQuotaSummary {
   additionalRateLimits?: CodexAdditionalQuotaLimit[];
   /** 账号剩余额度/credits */
   credits?: CodexCreditsSummary;
+  /** 主动重置次数可用数 */
+  resetCreditsAvailable?: number;
   /** 原始接口返回 */
   rawData?: unknown;
+}
+
+/** Codex 主动重置次数明细 */
+export interface CodexResetCredit {
+  id?: string;
+  status?: string;
+  reset_type?: string;
+  granted_at?: number;
+  expires_at?: number;
+  redeemed_at?: number;
+  raw_status?: string;
+}
+
+/** Codex 主动重置次数快照 */
+export interface CodexResetCreditsSnapshot {
+  availableCount: number;
+  credits: CodexResetCredit[];
+  nextExpiresAt?: number;
 }
 
 export interface CodexAdditionalQuotaLimit {
@@ -131,6 +151,12 @@ export interface CodexAccountRecord {
   planType?: string;
   /** ChatGPT 订阅到期时间（原始字符串或时间戳字符串） */
   subscriptionActiveUntil?: string;
+  /** 订阅查询最后尝试时间戳 (ms) */
+  subscriptionQueryLastAttemptAt?: number;
+  /** 订阅查询下次允许重试时间戳 (ms) — 对齐 cockpit 30min backoff */
+  subscriptionQueryNextRetryAt?: number;
+  /** 订阅查询最后错误信息 */
+  subscriptionQueryLastError?: string;
   /** 账号 ID */
   accountId?: string;
   /** 组织 ID */
@@ -381,6 +407,15 @@ export interface CodexUsageResponse {
   additionalRateLimits?: UsageAdditionalRateLimitInfo[] | null;
   /** 账号 credits */
   credits?: UsageCreditsInfo | null;
+  /** 主动重置次数（rate-limit reset credits） */
+  rate_limit_reset_credits?: {
+    available_count?: number;
+    availableCount?: number;
+  } | null;
+  rateLimitResetCredits?: {
+    available_count?: number;
+    availableCount?: number;
+  } | null;
 }
 
 export interface UsageAdditionalRateLimitInfo {
@@ -481,6 +516,7 @@ export interface SharedCodexAccountJson {
     code_review_requests_limit?: number;
     code_review_window_minutes?: number;
     code_review_window_present?: boolean;
+    reset_credits_available?: number;
     additional_rate_limits?: Array<{
       limit_name?: string;
       metered_feature?: string;

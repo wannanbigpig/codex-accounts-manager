@@ -59,6 +59,8 @@ import {
   readPendingOrCachedIndex
 } from "./accountsWriteCoordinator";
 import { readAuthFile, writeAuthFile } from "../codex";
+import { needsRefresh, refreshTokens, TOKEN_REFRESH_SKEW_SECONDS } from "../auth/oauth";
+import { createKeyedMutex } from "../utils/concurrency";
 import {
   CodexAccountRecord,
   CodexAccountsIndex,
@@ -73,6 +75,13 @@ import {
 } from "../core/types";
 import { fetchRemoteAccountProfile } from "../services/profile";
 import { clearQuotaCacheForAccount } from "../services/quota";
+import {
+  clearSubscriptionRetryPending,
+  fetchSubscriptionStatus,
+  markSubscriptionRetryPending,
+  shouldAttemptSubscriptionRefresh,
+  subscriptionMissingOrExpired
+} from "../services/subscription";
 import { buildAccountStorageId } from "../utils/accountIdentity";
 import { extractClaims, isTokenExpired } from "../utils/jwt";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
@@ -93,13 +102,32 @@ const INDEX_BACKUP_COUNT = 3;
  *
  * 提供账号数据的持久化和缓存管理
  */
+/** getTokens 内存缓存 TTL（避免 Dashboard 刷新时重复读 Keychain） */
+const TOKEN_CACHE_TTL_MS = 30_000;
+
+type TokenCacheEntry = {
+  tokens: CodexTokens | undefined;
+  cachedAt: number;
+};
+
 export class AccountsRepository {
   private readonly secretStore: SecretStore;
   private readonly indexPath: string;
   private readonly state = createAccountsRepositoryState();
+  /** 按账号串行化切号/刷新，避免并发刷新同一账号 token */
+  private readonly accountMutex = createKeyedMutex();
+  /** getTokens 内存缓存，减少 SecretStore/Keychain 重复读取 */
+  private readonly tokenCache = new Map<string, TokenCacheEntry>();
 
   /** 防止重复释放 */
   private disposed = false;
+
+  /** 任何 token 写入后清空整个缓存，下次 getTokens 重新从 SecretStore 读取 */
+  private invalidateTokenCache(): void {
+    if (this.tokenCache.size > 0) {
+      this.tokenCache.clear();
+    }
+  }
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.secretStore = new SecretStore(context.secrets);
@@ -267,7 +295,15 @@ export class AccountsRepository {
     options: { syncExternal?: boolean } = {}
   ): Promise<CodexTokens | undefined> {
     try {
+      // 内存缓存命中直接返回，避免 Dashboard 刷新时重复读 Keychain
+      const cached = this.tokenCache.get(accountId);
+      if (cached && Date.now() - cached.cachedAt < TOKEN_CACHE_TTL_MS) {
+        return cached.tokens;
+      }
+
       const storedTokens = await this.secretStore.getTokens(accountId);
+      this.tokenCache.set(accountId, { tokens: storedTokens, cachedAt: Date.now() });
+
       if (options.syncExternal === false) {
         return storedTokens;
       }
@@ -281,6 +317,7 @@ export class AccountsRepository {
 
       if (!storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens)) {
         await this.secretStore.setTokens(accountId, mergedTokens);
+        this.invalidateTokenCache();
         clearQuotaCacheForAccount(accountId);
       }
 
@@ -307,6 +344,7 @@ export class AccountsRepository {
     };
 
     await this.secretStore.setTokens(accountId, effectiveTokens);
+    this.invalidateTokenCache();
     await mirrorAideckCodexAccount(account, effectiveTokens);
 
     let shouldWriteIndex = false;
@@ -501,6 +539,7 @@ export class AccountsRepository {
       accountId: account.accountId ?? tokens.accountId
     };
     await this.secretStore.setTokens(id, storedTokens);
+    this.invalidateTokenCache();
     await mirrorAideckCodexAccount(account, storedTokens);
     if (account.isActive) {
       await mirrorAideckCurrentAccount(id);
@@ -640,6 +679,7 @@ export class AccountsRepository {
         accountId: account.accountId ?? restoredTokens.accountId
       };
       await this.secretStore.setTokens(account.id, storedTokens);
+      this.invalidateTokenCache();
       await mirrorAideckCodexAccount(account, storedTokens);
 
       if (options.persistImmediately) {
@@ -660,6 +700,11 @@ export class AccountsRepository {
    * @returns 切换后的账号记录
    */
   async switchAccount(accountId: string): Promise<CodexAccountRecord> {
+    // 按账号串行化，避免切号与后台续期并发刷新同一账号 token
+    return this.accountMutex.runExclusive(accountId, () => this.switchAccountLocked(accountId));
+  }
+
+  private async switchAccountLocked(accountId: string): Promise<CodexAccountRecord> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
 
@@ -674,11 +719,20 @@ export class AccountsRepository {
       });
     }
 
-    // 写入 auth.json
-    const effectiveTokens = {
+    // 切号前按需刷新 token，避免写入过期 token 导致 codex 登录失败（对齐 cockpit switch_account_managed）
+    let effectiveTokens = {
       ...tokens,
       accountId: account.accountId ?? tokens.accountId
     };
+
+    if (tokens.refreshToken && needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
+      const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
+      effectiveTokens = {
+        ...refreshed,
+        accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
+      };
+      await this.updateTokens(accountId, effectiveTokens);
+    }
 
     await writeAuthFile(effectiveTokens);
 
@@ -704,6 +758,7 @@ export class AccountsRepository {
     }
 
     await this.secretStore.deleteTokens(accountId);
+    this.invalidateTokenCache();
     clearQuotaCacheForAccount(accountId);
     this.writeIndex(index);
   }
@@ -768,13 +823,25 @@ export class AccountsRepository {
     }
 
     if (storedTokens && shouldAttemptRemoteProfileRepair(account, effectivePlanType)) {
-      const remoteProfile = await fetchRemoteAccountProfile(storedTokens).catch(() => undefined);
-      applyRemoteProfileFromTokens({
-        account,
-        tokens: storedTokens,
-        remoteProfile,
-        planType: effectivePlanType
-      });
+      // 后台异步拉取远程档案，不阻塞配额刷新
+      void fetchRemoteAccountProfile(storedTokens)
+        .then(async (remoteProfile) => {
+          if (!remoteProfile) {
+            return;
+          }
+          const freshIndex = await this.readIndex();
+          const freshAccount = freshIndex.accounts.find((item) => item.id === account.id);
+          if (freshAccount) {
+            applyRemoteProfileFromTokens({
+              account: freshAccount,
+              tokens: storedTokens,
+              remoteProfile,
+              planType: effectivePlanType
+            });
+            this.writeIndex(freshIndex);
+          }
+        })
+        .catch(() => undefined);
     }
 
     const nextStoredTokens = updatedTokens ?? (account.accountId !== previousStoredAccountId ? storedTokens : undefined);
@@ -784,6 +851,7 @@ export class AccountsRepository {
         accountId: account.accountId ?? storedTokens.accountId
       };
       await this.secretStore.setTokens(accountId, effectiveNextTokens);
+      this.invalidateTokenCache();
       await mirrorAideckCodexAccount(account, effectiveNextTokens);
       if (account.isActive) {
         await writeAuthFile(effectiveNextTokens);
@@ -833,6 +901,7 @@ export class AccountsRepository {
 
         if (shouldSyncTokensFromAuthFile(storedTokens, nextTokens)) {
           await this.secretStore.setTokens(derivedId, nextTokens);
+          this.invalidateTokenCache();
           await mirrorAideckCodexAccount(account, nextTokens);
           await mirrorAideckCurrentAccount(derivedId);
           clearQuotaCacheForAccount(derivedId);
@@ -855,6 +924,84 @@ export class AccountsRepository {
     if (changed) {
       this.writeIndex(index);
     }
+  }
+
+  /**
+   * 刷新订阅状态（对齐 cockpit refresh_subscription_state）。
+   * 先调 accounts/check，不够再降级到 subscriptions。失败后 30min 回退重试。
+   */
+  async refreshSubscriptionState(accountId: string, force = false): Promise<void> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account) {
+      return;
+    }
+
+    // 归一化：若当前已有有效 subscription，清除重试标记
+    if (!subscriptionMissingOrExpired(account.subscriptionActiveUntil)) {
+      clearSubscriptionRetryPending(account);
+      this.writeIndex(index);
+      return;
+    }
+
+    if (!shouldAttemptSubscriptionRefresh(account, force)) {
+      return;
+    }
+
+    const tokens = await this.getTokens(accountId);
+    if (!tokens?.accessToken) {
+      markSubscriptionRetryPending(account, "No access token available");
+      this.writeIndex(index);
+      return;
+    }
+
+    const effectiveAccountId = account.accountId ?? undefined;
+    let snapshotResult: { planType?: string; subscriptionActiveUntil?: string; accountId?: string } | undefined;
+    let fetchError: string | undefined;
+    try {
+      snapshotResult = await fetchSubscriptionStatus(tokens.accessToken, effectiveAccountId);
+    } catch (error) {
+      fetchError = error instanceof Error ? error.message : String(error);
+    }
+
+    // 网络返回后重读 index，避免覆盖期间其他操作（updateQuota/switchAccount）的并发修改
+    const freshIndex = await this.readIndex();
+    const freshAccount = freshIndex.accounts.find((item) => item.id === accountId);
+    if (!freshAccount) {
+      return;
+    }
+
+    if (fetchError) {
+      markSubscriptionRetryPending(freshAccount, fetchError);
+    } else if (snapshotResult) {
+      let changed = false;
+      if (snapshotResult.accountId && snapshotResult.accountId !== freshAccount.accountId) {
+        freshAccount.accountId = snapshotResult.accountId;
+        changed = true;
+      }
+      if (snapshotResult.planType && snapshotResult.planType !== freshAccount.planType) {
+        freshAccount.planType = snapshotResult.planType;
+        changed = true;
+      }
+      if (snapshotResult.subscriptionActiveUntil && snapshotResult.subscriptionActiveUntil !== freshAccount.subscriptionActiveUntil) {
+        freshAccount.subscriptionActiveUntil = snapshotResult.subscriptionActiveUntil;
+        changed = true;
+      }
+
+      freshAccount.subscriptionQueryLastAttemptAt = Date.now();
+
+      if (subscriptionMissingOrExpired(freshAccount.subscriptionActiveUntil)) {
+        markSubscriptionRetryPending(freshAccount, "订阅接口未返回有效订阅时间");
+      } else {
+        clearSubscriptionRetryPending(freshAccount);
+      }
+
+      if (changed) {
+        freshAccount.updatedAt = Date.now();
+      }
+    }
+
+    this.writeIndex(freshIndex);
   }
 
   /**

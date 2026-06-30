@@ -29,7 +29,7 @@ vi.mock("../src/application/accounts/switchEffects", () => ({
 import { maybeAutoSwitchForActiveQuota, refreshSingleQuota } from "../src/application/accounts/quota";
 import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
 
-type QuotaRefreshRepo = Pick<AccountsRepository, "getAccount" | "getTokens" | "updateQuota">;
+type QuotaRefreshRepo = Pick<AccountsRepository, "getAccount" | "getTokens" | "updateQuota" | "refreshSubscriptionState">;
 
 describe("refreshSingleQuota token automation state", () => {
   const account: CodexAccountRecord = {
@@ -62,7 +62,8 @@ describe("refreshSingleQuota token automation state", () => {
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
       getTokens: vi.fn(async () => tokens),
-      updateQuota: vi.fn(async () => account)
+      updateQuota: vi.fn(async () => account),
+      refreshSubscriptionState: vi.fn(async () => undefined)
     };
 
     refreshQuotaMock.mockResolvedValue({
@@ -85,7 +86,8 @@ describe("refreshSingleQuota token automation state", () => {
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
       getTokens: vi.fn(async () => tokens),
-      updateQuota: vi.fn(async () => account)
+      updateQuota: vi.fn(async () => account),
+      refreshSubscriptionState: vi.fn(async () => undefined)
     };
 
     refreshQuotaMock.mockResolvedValue({
@@ -117,7 +119,8 @@ describe("refreshSingleQuota token automation state", () => {
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
       getTokens: vi.fn(async () => tokens),
-      updateQuota: vi.fn(async () => account)
+      updateQuota: vi.fn(async () => account),
+      refreshSubscriptionState: vi.fn(async () => undefined)
     };
 
     refreshQuotaMock.mockResolvedValue({

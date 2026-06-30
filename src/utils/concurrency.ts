@@ -33,3 +33,24 @@ export async function runWithConcurrencyLimit<T>(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * 创建一个异步互斥锁，保证同一 key 的任务串行执行。
+ *
+ * 用于切号/刷新 token 等需要按账号串行化的场景，避免切号与后台续期并发刷新同一账号 token。
+ */
+export function createKeyedMutex(): {
+  runExclusive<T>(key: string, task: () => Promise<T>): Promise<T>;
+} {
+  const tails = new Map<string, Promise<unknown>>();
+
+  return {
+    runExclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
+      const tail = tails.get(key) ?? Promise.resolve();
+      const next = tail.then(() => task());
+      // 失败不阻断后续排队
+      tails.set(key, next.then(() => undefined, () => undefined));
+      return next;
+    }
+  };
+}

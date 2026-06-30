@@ -353,6 +353,7 @@ function App() {
                   removePending={isActionPending("remove", account.id)}
                   togglePending={isActionPending("toggleStatusBar", account.id)}
                   updateTagsPending={isActionPending("updateTags", account.id)}
+                  consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
                   selected={selectedAccountIds.has(account.id)}
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
                   onEditTags={() => handleEditAccountTags(account)}

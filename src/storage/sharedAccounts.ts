@@ -7,7 +7,6 @@ export function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTo
   return {
     id: account.id,
     email: account.email,
-    auth_mode: "chatgpt",
     user_id: account.userId,
     plan_type: account.planType,
     subscription_active_until: account.subscriptionActiveUntil ?? null,
@@ -104,6 +103,7 @@ export function fromSharedQuota(quota: NonNullable<SharedCodexAccountJson["quota
     codeReviewRequestsLimit: normalizeOptionalNumber(quota.code_review_requests_limit),
     codeReviewWindowMinutes: normalizeOptionalNumber(quota.code_review_window_minutes),
     codeReviewWindowPresent: Boolean(quota.code_review_window_present),
+    resetCreditsAvailable: normalizeOptionalNumber(quota.reset_credits_available),
     additionalRateLimits: Array.isArray(quota.additional_rate_limits)
       ? quota.additional_rate_limits.map((limit) => ({
           limitName: sanitizeOptionalValue(limit.limit_name) ?? "额外模型",
@@ -200,6 +200,7 @@ function toSharedQuota(summary?: CodexQuotaSummary): SharedCodexAccountJson["quo
     code_review_requests_limit: summary.codeReviewRequestsLimit,
     code_review_window_minutes: summary.codeReviewWindowMinutes,
     code_review_window_present: summary.codeReviewWindowPresent,
+    reset_credits_available: summary.resetCreditsAvailable,
     additional_rate_limits: summary.additionalRateLimits?.map((limit) => ({
       limit_name: limit.limitName,
       metered_feature: limit.meteredFeature,

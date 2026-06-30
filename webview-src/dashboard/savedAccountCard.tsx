@@ -14,6 +14,7 @@ import {
   renderReauthorizeIcon,
   renderReloadIcon,
   renderRemoveIcon,
+  renderResetCreditsIcon,
   renderResyncProfileIcon,
   renderSwitchIcon
 } from "./icons";
@@ -37,6 +38,7 @@ export function SavedAccountCard(props: {
   removePending: boolean;
   togglePending: boolean;
   updateTagsPending: boolean;
+  consumeResetCreditPending: boolean;
   selected: boolean;
   onToggleSelected: () => void;
   onEditTags: () => void;
@@ -50,6 +52,7 @@ export function SavedAccountCard(props: {
       | "refresh"
       | "remove"
       | "toggleStatusBar"
+      | "consumeResetCredit"
       | "openExternalUrl",
     accountId?: string,
     payload?: DashboardActionPayload
@@ -174,6 +177,11 @@ export function SavedAccountCard(props: {
             )}
           </div>
           {account.creditsText ? <div class="saved-credits-line">{account.creditsText}</div> : null}
+          {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
+            <div class="saved-credits-line saved-reset-credits-line">
+              {copy.resetCreditsLabel ?? "重置次数"}: {account.resetCreditsAvailable}
+            </div>
+          ) : null}
           <div class="saved-card-divider"></div>
           <div class="saved-actions" onClick={stopFlip}>
             {account.isActive && !account.isCurrentWindowAccount ? (
@@ -187,6 +195,16 @@ export function SavedAccountCard(props: {
             ) : null}
             <ActionButton icon={renderSwitchIcon()} iconOnly label={copy.switchBtn} pending={props.switchPending} disabled={props.busy} onClick={() => onAction("switch", account.id)} />
             <ActionButton icon={renderRefreshIcon()} iconOnly label={copy.refreshBtn} pending={props.refreshPending} disabled={props.busy} onClick={() => onAction("refresh", account.id)} />
+            {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
+              <ActionButton
+                icon={renderResetCreditsIcon()}
+                iconOnly
+                label={`${copy.resetCreditsBtn ?? "重置配额"} (${account.resetCreditsAvailable})`}
+                pending={props.consumeResetCreditPending}
+                disabled={props.busy}
+                onClick={() => onAction("consumeResetCredit", account.id)}
+              />
+            ) : null}
             <ActionButton icon={renderDetailsIcon()} iconOnly label={copy.detailsBtn} pending={props.detailsPending} disabled={props.busy} onClick={() => onAction("details", account.id, { privacyMode })} />
             <ActionButton icon={renderRemoveIcon()} iconOnly label={copy.removeBtn} pending={props.removePending} disabled={props.busy} onClick={() => onAction("remove", account.id)} />
           </div>

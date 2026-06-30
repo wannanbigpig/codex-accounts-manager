@@ -34,15 +34,18 @@ describe("Codex auth mode compatibility", () => {
     await fs.rm(tempCodexHome, { recursive: true, force: true });
   });
 
-  it("writes ChatGPT auth mode to auth.json", async () => {
+  it("omits auth_mode from auth.json for OAuth accounts", async () => {
     await writeAuthFile(createTokens());
 
     const authFile = JSON.parse(await fs.readFile(path.join(tempCodexHome, "auth.json"), "utf8"));
 
-    expect(authFile.auth_mode).toBe("chatgpt");
+    // OAuth 账号不写 auth_mode（由 codex 根据 token 推断），避免 codex 新版拒绝 "chatgpt"。
+    expect(authFile.auth_mode).toBeUndefined();
+    expect(authFile.OPENAI_API_KEY).toBeNull();
+    expect(authFile.tokens.access_token).toBe("access-token");
   });
 
-  it("exports shared accounts with ChatGPT auth mode", () => {
+  it("omits auth_mode when exporting shared accounts", () => {
     const account: CodexAccountRecord = {
       id: "account",
       email: "dev@example.com",
@@ -52,6 +55,6 @@ describe("Codex auth mode compatibility", () => {
 
     const shared = toSharedAccountJson(account, createTokens());
 
-    expect(shared.auth_mode).toBe("chatgpt");
+    expect(shared.auth_mode).toBeUndefined();
   });
 });

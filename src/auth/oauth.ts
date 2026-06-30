@@ -21,6 +21,12 @@ const SCOPES = OAUTH_SCOPES;
 const ORIGINATOR = OAUTH_ORIGINATOR;
 const CALLBACK_PORT = OAUTH_CALLBACK_PORT;
 
+/**
+ * Token 刷新提前量（秒）。对齐 cockpit-tools 的 TOKEN_REFRESH_SKEW_SECONDS，
+ * 在 access_token 剩余有效期不足 5 分钟时即触发刷新，避免边界过期。
+ */
+export const TOKEN_REFRESH_SKEW_SECONDS = 300;
+
 interface OAuthSession {
   state: string;
   verifier: string;
@@ -45,21 +51,24 @@ export async function loginWithOAuth(cancellationToken?: vscode.CancellationToke
   return runPreparedOAuthLoginSession(prepared, cancellationToken);
 }
 
-export async function refreshTokens(refreshToken: string): Promise<CodexTokens> {
+export async function refreshTokens(
+  refreshToken: string,
+  currentIdToken?: string
+): Promise<CodexTokens> {
   const response = await fetchWithTimeout(
     TOKEN_ENDPOINT,
     {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
+        "Content-Type": "application/json"
       },
-      body: new URLSearchParams({
+      body: JSON.stringify({
         grant_type: "refresh_token",
         refresh_token: refreshToken,
         client_id: CLIENT_ID
-      }).toString()
+      })
     },
-    15000,
+    25000,
     "Token refresh"
   );
 
@@ -71,25 +80,62 @@ export async function refreshTokens(refreshToken: string): Promise<CodexTokens> 
     bodyPreview: raw
   });
   if (!response.ok) {
+    const errorCode = extractTokenErrorCode(raw);
     throw new APIError(`Token refresh failed: ${raw}`, {
       statusCode: response.status,
-      responseBody: raw
+      responseBody: raw,
+      context: errorCode ? { errorCode } : undefined
     });
   }
 
   const payload = JSON.parse(raw) as Record<string, unknown>;
+  // OpenAI refresh 端点偶尔不返回新的 id_token，此时复用本地旧值（对齐 cockpit refresh_access_token_with_fallback）。
+  const idToken = readOptionalString(payload, "id_token") ?? (currentIdToken && currentIdToken.trim() ? currentIdToken : undefined);
+  if (!idToken) {
+    throw new AuthError("Missing id_token in OAuth refresh response and no local fallback available", {
+      code: ErrorCode.AUTH_TOKEN_MISSING,
+      context: { key: "id_token" }
+    });
+  }
+
   return {
-    idToken: readString(payload, "id_token"),
+    idToken,
     accessToken: readString(payload, "access_token"),
     refreshToken: readOptionalString(payload, "refresh_token") ?? refreshToken
   };
 }
 
-export function needsRefresh(accessToken: string, skewSeconds = 60): boolean {
+/**
+ * 从 token 端点错误响应中提取 error code，便于诊断（对齐 cockpit extract_token_error_code）。
+ */
+function extractTokenErrorCode(body: string): string | undefined {
+  try {
+    const value = JSON.parse(body) as Record<string, unknown>;
+    const fromError = value["error"];
+    if (typeof fromError === "string" && fromError) {
+      return fromError;
+    }
+    if (fromError && typeof fromError === "object") {
+      const code = (fromError as Record<string, unknown>)["code"];
+      if (typeof code === "string" && code) {
+        return code;
+      }
+    }
+    const code = value["code"];
+    return typeof code === "string" && code ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function needsRefresh(accessToken: string, skewSeconds = TOKEN_REFRESH_SKEW_SECONDS): boolean {
   return isTokenExpired(accessToken, skewSeconds);
 }
 
-export function needsTokenRefresh(tokens: Pick<CodexTokens, "idToken" | "accessToken">, skewSeconds = 60): boolean {
+export function needsTokenRefresh(
+  tokens: Pick<CodexTokens, "idToken" | "accessToken">,
+  skewSeconds = TOKEN_REFRESH_SKEW_SECONDS
+): boolean {
   return isTokenExpired(tokens.accessToken, skewSeconds) || isTokenExpired(tokens.idToken, skewSeconds);
 }
 
@@ -127,23 +173,6 @@ export async function runPreparedOAuthLoginSession(
   session: PreparedOAuthLoginSession,
   cancellationToken?: vscode.CancellationToken
 ): Promise<CodexTokens> {
-  const port = Number(new URL(session.redirectUri).port || CALLBACK_PORT);
-  const available = await canBindPort(port);
-  logNetworkEvent("oauth.start", {
-    callbackPort: port,
-    callbackAvailable: available,
-    redirectUri: session.redirectUri
-  });
-
-  if (!available) {
-    throw new AuthError(
-      `Automatic OAuth callback listener is unavailable on ${session.redirectUri}. Use the Add Account dialog to complete the callback manually.`,
-      {
-        code: ErrorCode.AUTH_OAUTH_FAILED
-      }
-    );
-  }
-
   const runtimeSession: OAuthSession = {
     state: session.state,
     verifier: session.verifier,
@@ -270,8 +299,17 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
       });
 
       session.server.once("error", (error) => {
+        const isAddrInUse =
+          error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
         finish(() => {
-          reject(new Error(`Unable to bind OAuth callback port: ${String(error)}`));
+          reject(
+            new AuthError(
+              isAddrInUse
+                ? `Automatic OAuth callback listener is unavailable on ${session.redirectUri}. Use the Add Account dialog to complete the callback manually.`
+                : `Unable to bind OAuth callback port: ${String(error)}`,
+              { code: ErrorCode.AUTH_OAUTH_FAILED }
+            )
+          );
         });
       });
 
@@ -311,9 +349,11 @@ async function exchangeCodeForTokens(code: string, verifier: string, redirectUri
     bodyPreview: raw
   });
   if (!response.ok) {
+    const errorCode = extractTokenErrorCode(raw);
     throw new APIError(`Token exchange failed: ${raw}`, {
       statusCode: response.status,
-      responseBody: raw
+      responseBody: raw,
+      context: errorCode ? { errorCode } : undefined
     });
   }
 
@@ -327,16 +367,6 @@ async function exchangeCodeForTokens(code: string, verifier: string, redirectUri
 
 function randomBase64Url(): string {
   return crypto.randomBytes(32).toString("base64url");
-}
-
-async function canBindPort(port: number): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const server = http.createServer();
-    server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => {
-      server.close(() => resolve(true));
-    });
-  });
 }
 
 function validateManualCallback(value: string, redirectUri: string, expectedState: string): string | undefined {

@@ -87,33 +87,52 @@ export class AnnouncementService {
     return explicit ? path.resolve(explicit) : path.join(this.extensionRoot, "announcements.json");
   }
 
-  private async loadAnnouncementsRaw(forceRefresh: boolean): Promise<{ version: string; announcements: CodexAnnouncement[] }> {
+  private async loadAnnouncementsRaw(
+    forceRefresh: boolean
+  ): Promise<{ version: string; announcements: CodexAnnouncement[] }> {
     const localFile = this.localFilePath;
     if (isDevelopmentRuntime(this.extensionRoot) && fsSync.existsSync(localFile)) {
       return normalizeAnnouncementResponse(await readJsonSafe(localFile, { announcements: [] }));
     }
 
-    if (!forceRefresh) {
-      const cache = await readJsonSafe(this.cachePath, null);
-      if (isCachePayload(cache) && Date.now() - cache.time < CACHE_TTL_MS) {
+    // 有缓存时立即返回（不阻塞 Dashboard），过期时后台异步刷新
+    const cache = await readJsonSafe(this.cachePath, null);
+    if (isCachePayload(cache)) {
+      const isStale = Date.now() - cache.time >= CACHE_TTL_MS;
+      if (isStale && !forceRefresh) {
+        this.refreshCacheInBackground();
+      }
+      if (!forceRefresh) {
         return normalizeAnnouncementResponse(cache.data);
       }
+      // forceRefresh：有缓存也忽略，走网络刷新
     }
 
+    // 无缓存或 forceRefresh：必须走网络
     try {
       const remote = normalizeAnnouncementResponse(await fetchJson(this.announcementUrl));
       await this.saveCache(remote);
       return remote;
     } catch {
-      const cache = await readJsonSafe(this.cachePath, null);
-      if (isCachePayload(cache)) {
-        return normalizeAnnouncementResponse(cache.data);
+      // 网络失败，回退到缓存（包括过期缓存）
+      const fallback = await readJsonSafe(this.cachePath, null);
+      if (isCachePayload(fallback)) {
+        return normalizeAnnouncementResponse(fallback.data);
       }
       if (fsSync.existsSync(localFile)) {
         return normalizeAnnouncementResponse(await readJsonSafe(localFile, { announcements: [] }));
       }
       return { version: "1.0", announcements: [] };
     }
+  }
+
+  /** 后台异步刷新公告缓存，不阻塞当前请求 */
+  private refreshCacheInBackground(): void {
+    fetchJson(this.announcementUrl)
+      .then((remote) => this.saveCache(remote))
+      .catch(() => {
+        // 后台刷新失败静默忽略，下次打开再用旧缓存
+      });
   }
 
   private async ensureAnnouncementDir(): Promise<void> {

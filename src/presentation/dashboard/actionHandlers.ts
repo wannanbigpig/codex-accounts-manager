@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { refreshSingleQuota } from "../../application/accounts/quota";
+import { fetchResetCredits, consumeResetCredit } from "../../services/quota";
 import { getDashboardCopy } from "../../application/dashboard/copy";
 import type {
   DashboardActionName,
@@ -175,6 +176,10 @@ async function runDashboardAction(
         await vscode.commands.executeCommand("codexAccounts.toggleStatusBarAccount", account);
       }
       return undefined;
+    case "getResetCredits":
+      return handleGetResetCredits(ctx.repo, account);
+    case "consumeResetCredit":
+      return handleConsumeResetCredit(ctx.repo, account, ctx.schedulePublishState, ctx.resolveLanguage());
     default:
       return undefined;
   }
@@ -612,5 +617,71 @@ async function handleReloadPrompt(account: CodexAccountRecord | undefined) {
       await vscode.commands.executeCommand("workbench.action.reloadWindow");
     }
   }
+  return undefined;
+}
+
+async function handleGetResetCredits(
+  repo: AccountsRepository,
+  account?: Awaited<ReturnType<AccountsRepository["getAccount"]>>
+) {
+  if (!account) {
+    throw new Error("Account not found");
+  }
+
+  const tokens = await repo.getTokens(account.id);
+  if (!tokens?.accessToken) {
+    throw new Error("No access token available");
+  }
+
+  const accountId = account.accountId ?? undefined;
+  const snapshot = await fetchResetCredits(tokens.accessToken, accountId);
+  return { resetCredits: snapshot };
+}
+
+async function handleConsumeResetCredit(
+  repo: AccountsRepository,
+  account?: Awaited<ReturnType<AccountsRepository["getAccount"]>>,
+  schedulePublishState?: () => void,
+  lang?: string
+) {
+  if (!account) {
+    throw new Error("Account not found");
+  }
+
+  const available = account.quotaSummary?.resetCreditsAvailable;
+  if (available == null || available <= 0) {
+    throw new Error("No reset credits available");
+  }
+
+  // 使用 Dashboard 语言设置而非 VS Code UI 语言
+  const isZh = (lang ?? vscode.env.language).toLowerCase().startsWith("zh");
+  const title = isZh ? "要重置你的使用量吗？" : "Reset your usage?";
+  const body = isZh
+    ? `重置速率限制后，继续不间断地工作。你还有 ${available} 次重置 可用。`
+    : `Reset your rate limit and keep working without interruption. You have ${available} reset(s) available.`;
+  const confirmBtn = isZh ? "重置速率限制" : "Reset Rate Limit";
+
+  const choice = await vscode.window.showWarningMessage(
+    `${title}\n\n${body}`,
+    { modal: true },
+    confirmBtn
+  );
+  if (choice !== confirmBtn) {
+    return undefined;
+  }
+
+  const tokens = await repo.getTokens(account.id);
+  if (!tokens?.accessToken) {
+    throw new Error("No access token available");
+  }
+
+  const accountId = account.accountId ?? undefined;
+  await consumeResetCredit(tokens.accessToken, accountId);
+
+  void vscode.window.showInformationMessage(
+    isZh ? "速率限制已重置，你可以继续工作了。" : "Rate limit has been reset. You can continue working."
+  );
+
+  schedulePublishState?.();
   return undefined;
 }

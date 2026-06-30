@@ -8,7 +8,7 @@ import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
 import { registerAutoRefreshScheduler, registerTokenRefreshScheduler } from "./schedulerRegistration";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
-const TOKEN_REFRESH_SKEW_SECONDS = 10 * 60;
+const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
 
 export class AccountsWorkbench {
   private readonly repo: AccountsRepository;

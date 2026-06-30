@@ -14,15 +14,18 @@ import {
   CodexCreditsSummary,
   CodexQuotaErrorInfo,
   CodexQuotaSummary,
+  CodexResetCredit,
+  CodexResetCreditsSnapshot,
   CodexTokens,
   CodexUsageResponse,
   UsageCreditsInfo,
   UsageRateLimitInfo,
   UsageWindowInfo
 } from "../core/types";
+import { APIError } from "../core/errors";
 import { needsRefresh, refreshTokens } from "../auth/oauth";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
-import { QUOTA_USAGE_URL } from "../infrastructure/config/apiEndpoints";
+import { QUOTA_USAGE_URL, RESET_CREDITS_CONSUME_URL, RESET_CREDITS_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
 import { logNetworkEvent } from "../utils/debug";
 import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
@@ -92,7 +95,7 @@ export async function refreshQuota(
       if (!tokens.refreshToken) {
         return { error: buildError("Token expired and no refresh token is available") };
       }
-      effectiveTokens = await refreshTokens(tokens.refreshToken);
+      effectiveTokens = await refreshTokens(tokens.refreshToken, tokens.idToken);
       effectiveTokens.accountId = effectiveTokens.accountId ?? account.accountId;
     }
 
@@ -237,10 +240,19 @@ function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
     pickWindow(item.rateLimit, "primary"),
     pickWindow(item.rateLimit, "secondary")
   ]);
-  const percentScale = detectUsagePercentScale(primary, secondary, ...additionalWindows);
+
+  // code_review_rate_limit 结构与 rate_limit 一致，含 primary_window / secondary_window
+  const crPrimary = pickWindow(usage.code_review_rate_limit, "primary");
+  const crSecondary = pickWindow(usage.code_review_rate_limit, "secondary");
+  const crWindow = crPrimary ?? crSecondary;
+
+  const allWindows = [primary, secondary, crPrimary, crSecondary, ...additionalWindows];
+  const percentScale = detectUsagePercentScale(...allWindows);
   const { hourlyWindow, weeklyWindow } = resolveRateLimitWindows(primary, secondary);
   const hourlyPercentage = resolveRemainingPercentage(hourlyWindow, percentScale);
   const weeklyPercentage = resolveRemainingPercentage(weeklyWindow, percentScale);
+
+  const crPercentage = resolveRemainingPercentage(extractCodeReviewWindow(crPrimary, crSecondary), percentScale);
 
   return {
     hourlyPercentage: hourlyPercentage ?? 0,
@@ -255,12 +267,45 @@ function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
     weeklyRequestsLimit: pickNumberField(weeklyWindow, "limit", "requests_limit", "requestsLimit"),
     weeklyWindowMinutes: normalizeWindow(weeklyWindow),
     weeklyWindowPresent: weeklyPercentage !== undefined,
-    codeReviewPercentage: 0,
-    codeReviewWindowPresent: false,
+    codeReviewPercentage: crPercentage ?? 0,
+    codeReviewResetTime: crWindow ? normalizeReset(crWindow) : undefined,
+    codeReviewRequestsLeft: crWindow ? pickNumberField(crWindow, "remaining", "requests_left", "requestsLeft") : undefined,
+    codeReviewRequestsLimit: crWindow ? pickNumberField(crWindow, "limit", "requests_limit", "requestsLimit") : undefined,
+    codeReviewWindowMinutes: crWindow ? normalizeWindow(crWindow) : undefined,
+    codeReviewWindowPresent: crPercentage !== undefined,
     additionalRateLimits: parseAdditionalRateLimits(additionalRateLimitItems, percentScale),
     credits: normalizeCredits(usage.credits),
+    resetCreditsAvailable: normalizeResetCreditsAvailable(usage),
     rawData: usage
   };
+}
+
+function normalizeResetCreditsAvailable(usage: CodexUsageResponse): number | undefined {
+  const src = usage.rate_limit_reset_credits ?? usage.rateLimitResetCredits;
+  // 调试日志：确认 API 是否返回了 rate_limit_reset_credits 字段
+  logNetworkEvent("quota.resetCredits", {
+    hasField: Boolean(src),
+    availableCount: src?.available_count ?? src?.availableCount,
+    topKeys: Object.keys(usage as Record<string, unknown>).filter(
+      (k) => k.toLowerCase().includes("reset") || k.toLowerCase().includes("credit")
+    )
+  });
+  if (!src) {
+    return undefined;
+  }
+  const value = src.available_count ?? src.availableCount;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * code_review_rate_limit 只有一个窗口（primary_window），兜底取 secondary_window。
+ * 与主 rate_limit 不同，这里直接取存在的窗口作为额度窗口。
+ */
+function extractCodeReviewWindow(
+  primary: UsageWindowInfo | undefined,
+  secondary: UsageWindowInfo | undefined
+): UsageWindowInfo | undefined {
+  return primary ?? secondary;
 }
 
 type NormalizedAdditionalRateLimit = {
@@ -566,4 +611,221 @@ export function clearQuotaCacheForAccount(accountId: string): void {
 
 function getQuotaCacheGeneration(accountId: string): number {
   return quotaCacheGenerations.get(accountId) ?? 0;
+}
+
+// ── 主动重置次数（rate-limit reset credits）──
+
+/**
+ * 查询账号的主动重置次数（可用于手动重置 5 小时配额窗口）。
+ *
+ * @param accessToken - access token
+ * @param accountId - ChatGPT account ID
+ * @returns 重置次数快照
+ */
+export async function fetchResetCredits(
+  accessToken: string,
+  accountId?: string
+): Promise<CodexResetCreditsSnapshot> {
+  const headers = new Headers({
+    Authorization: `Bearer ${accessToken}`,
+    Accept: "application/json"
+  });
+  if (accountId) {
+    headers.set("ChatGPT-Account-Id", accountId);
+  }
+
+  const response = await fetchWithTimeout(
+    RESET_CREDITS_URL,
+    { method: "GET", headers },
+    15000,
+    "Reset credits request"
+  );
+
+  const raw = await response.text();
+  logNetworkEvent("resetCredits", {
+    accountId,
+    status: response.status,
+    ok: response.ok,
+    url: RESET_CREDITS_URL,
+    bodyPreview: raw
+  });
+
+  if (!response.ok) {
+    const detailCode = extractErrorDetailCode(raw);
+    throw new APIError(`Reset credits API returned ${response.status}: ${raw.slice(0, 200)}`, {
+      statusCode: response.status,
+      responseBody: raw.slice(0, 200),
+      context: detailCode ? { errorCode: detailCode } : undefined
+    });
+  }
+
+  return parseResetCreditsSnapshot(JSON.parse(raw) as Record<string, unknown>);
+}
+
+/**
+ * 消耗一次主动重置次数。
+ *
+ * @param accessToken - access token
+ * @param accountId - ChatGPT account ID
+ */
+export async function consumeResetCredit(
+  accessToken: string,
+  accountId?: string
+): Promise<void> {
+  const headers = new Headers({
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    Accept: "application/json"
+  });
+  if (accountId) {
+    headers.set("ChatGPT-Account-Id", accountId);
+  }
+
+  // redeem_request_id 使用随机 UUID v4 风格标识
+  const redeemRequestId = `cr-${crypto.randomUUID()}`;
+
+  const response = await fetchWithTimeout(
+    RESET_CREDITS_CONSUME_URL,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ redeem_request_id: redeemRequestId })
+    },
+    15000,
+    "Consume reset credit"
+  );
+
+  const raw = await response.text();
+  logNetworkEvent("consumeResetCredit", {
+    accountId,
+    redeemRequestId,
+    status: response.status,
+    ok: response.ok,
+    url: RESET_CREDITS_CONSUME_URL,
+    bodyPreview: raw
+  });
+
+  if (!response.ok) {
+    const detailCode = extractErrorDetailCode(raw);
+    throw new APIError(`Consume reset credit returned ${response.status}: ${raw.slice(0, 200)}`, {
+      statusCode: response.status,
+      responseBody: raw.slice(0, 200),
+      context: detailCode ? { errorCode: detailCode } : undefined
+    });
+  }
+}
+
+function parseResetCreditsSnapshot(payload: Record<string, unknown>): CodexResetCreditsSnapshot {
+  const creditsValue = payload["credits"] ?? (payload["data"] as Record<string, unknown> | undefined)?.["credits"];
+  const credits: CodexResetCredit[] = Array.isArray(creditsValue)
+    ? creditsValue.filter(isResetCreditRecord).map(parseResetCreditRecord)
+    : [];
+
+  const availableCount =
+    normalizeOptionalInt(payload["available_count"]) ??
+    normalizeOptionalInt(payload["availableCount"]) ??
+    normalizeOptionalInt((payload["data"] as Record<string, unknown> | undefined)?.["available_count"]) ??
+    normalizeOptionalInt((payload["data"] as Record<string, unknown> | undefined)?.["availableCount"]) ??
+    credits.filter(isAvailableResetCredit).length;
+
+  const nextExpiresAt = credits
+    .filter(isAvailableResetCredit)
+    .map((c) => c.expires_at)
+    .filter((v): v is number => typeof v === "number" && v > 0)
+    .sort((a, b) => a - b)[0];
+
+  return { availableCount, credits, nextExpiresAt };
+}
+
+function parseResetCreditRecord(record: Record<string, unknown>): CodexResetCredit {
+  const rawStatus = readResetCreditString(record, ["status", "state"]);
+  const expiresAt = readResetCreditTimestamp(record, ["expires_at", "expire_at", "expiresAt"]);
+  return {
+    id: readResetCreditString(record, ["id", "credit_id", "creditId"]),
+    status: normalizeResetCreditStatus(rawStatus, expiresAt),
+    reset_type: readResetCreditString(record, ["type", "reset_type", "resetType"]),
+    granted_at: readResetCreditTimestamp(record, ["granted_at", "created_at", "grantedAt"]),
+    expires_at: expiresAt,
+    redeemed_at: readResetCreditTimestamp(record, ["redeemed_at", "used_at", "consumed_at", "redeemedAt"]),
+    raw_status: rawStatus
+  };
+}
+
+function normalizeResetCreditStatus(rawStatus: string | undefined, expiresAt: number | undefined): string | undefined {
+  const status = (rawStatus ?? "available").trim().toLowerCase();
+  if (["redeemed", "used", "consumed", "expired"].includes(status)) {
+    return status;
+  }
+  if (typeof expiresAt === "number" && expiresAt <= Math.floor(Date.now() / 1000)) {
+    return "expired";
+  }
+  return status;
+}
+
+function isAvailableResetCredit(credit: CodexResetCredit): boolean {
+  const status = credit.status?.trim().toLowerCase() ?? "available";
+  if (["redeemed", "used", "consumed", "expired"].includes(status)) {
+    return false;
+  }
+  return credit.expires_at === undefined || credit.expires_at > Math.floor(Date.now() / 1000);
+}
+
+function readResetCreditString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function readResetCreditTimestamp(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return value > 1_000_000_000_000 ? Math.floor(value / 1000) : value;
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed > 1_000_000_000_000 ? Math.floor(parsed / 1000) : parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function isResetCreditRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeOptionalInt(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  return undefined;
+}
+
+function extractErrorDetailCode(body: string): string | undefined {
+  try {
+    const value = JSON.parse(body) as Record<string, unknown>;
+    const detail = value["detail"];
+    if (detail && typeof detail === "object") {
+      const code = (detail as Record<string, unknown>)["code"];
+      if (typeof code === "string" && code) {
+        return code;
+      }
+    }
+    const err = value["error"];
+    if (err && typeof err === "object") {
+      const code = (err as Record<string, unknown>)["code"];
+      if (typeof code === "string" && code) {
+        return code;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }

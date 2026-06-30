@@ -69,6 +69,8 @@ export async function refreshSingleQuota(
     result.updatedPlanType,
     result.updatedSubscriptionActiveUntil
   );
+  // 后台异步刷新订阅到期时间（对齐 cockpit refresh_subscription_state），不阻塞配额刷新
+  void repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
   if (!result.error) {
     clearTokenAutomationError(accountId);
   }
@@ -117,6 +119,8 @@ export async function refreshImportedAccountQuota(
     result.updatedPlanType,
     result.updatedSubscriptionActiveUntil
   );
+  // 后台异步刷新订阅到期时间
+  void repo.refreshSubscriptionState(accountId, true).catch(() => undefined);
   if (!result.error) {
     clearTokenAutomationError(accountId);
   }

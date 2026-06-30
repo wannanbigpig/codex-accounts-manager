@@ -88,6 +88,8 @@ export function registerTokenRefreshScheduler(params: {
 
     inFlight = true;
     let lastFailureMessage: string | undefined;
+    let checked = 0;
+    let refreshedCount = 0;
     try {
       markTokenAutomationSweepStarted();
       const accounts = await params.repo.listAccounts();
@@ -99,6 +101,7 @@ export function registerTokenRefreshScheduler(params: {
         try {
           const tokens = await params.repo.getTokens(account.id);
           markTokenAutomationCheck(account.id);
+          checked += 1;
           if (!tokens?.accessToken || !needsRefresh(tokens.accessToken, params.skewSeconds)) {
             clearTokenAutomationError(account.id);
             continue;
@@ -108,12 +111,13 @@ export function registerTokenRefreshScheduler(params: {
             throw new Error("Token expired and no refresh token is available");
           }
 
-          const refreshed = await refreshTokens(tokens.refreshToken);
+          const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
           await params.repo.updateTokens(account.id, {
             ...refreshed,
             accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
           });
           markTokenAutomationRefreshSuccess(account.id);
+          refreshedCount += 1;
         } catch (error) {
           lastFailureMessage = error instanceof Error ? error.message : String(error);
           markTokenAutomationRefreshFailure(account.id, lastFailureMessage);
@@ -123,6 +127,11 @@ export function registerTokenRefreshScheduler(params: {
     } finally {
       inFlight = false;
       markTokenAutomationSweepFinished(lastFailureMessage);
+      console.info(
+        `[codexAccounts] background token refresh sweep: checked=${checked}, refreshed=${refreshedCount}` +
+          (lastFailureMessage ? `, lastError=${lastFailureMessage}` : ""),
+        { checked, refreshed: refreshedCount }
+      );
       params.view.refresh();
     }
   };

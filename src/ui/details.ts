@@ -180,7 +180,7 @@ async function getFreshUsageTokens(
     return tokens;
   }
 
-  const refreshed = await refreshTokens(tokens.refreshToken);
+  const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
   await repo.updateTokens(accountId, {
     ...refreshed,
     accountId: refreshed.accountId ?? tokens.accountId

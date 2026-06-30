@@ -62,6 +62,7 @@ export function normalizeQuotaSummary(summary?: CodexQuotaSummary): CodexQuotaSu
     additionalRateLimits:
       summary.additionalRateLimits?.map((limit) => ({ ...limit })) ?? readAdditionalRateLimitsFromRawData(summary.rawData),
     credits: summary.credits ? { ...summary.credits } : readCreditsFromRawData(summary.rawData),
+    resetCreditsAvailable: summary.resetCreditsAvailable,
     rawData: summary.rawData
   };
 }

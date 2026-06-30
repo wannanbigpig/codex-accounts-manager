@@ -152,6 +152,8 @@ export interface DashboardCopy {
   login: string;
   switchBtn: string;
   refreshBtn: string;
+  resetCreditsBtn: string;
+  resetCreditsLabel: string;
   detailsBtn: string;
   removeBtn: string;
   settingsTitle: string;
@@ -331,6 +333,7 @@ export interface DashboardAccountViewModel {
   lastTokenRefreshAt?: number;
   lastTokenRefreshError?: string;
   lastQuotaAt?: number;
+  resetCreditsAvailable?: number;
   autoSwitchLockedUntil?: number;
   metrics: DashboardMetricViewModel[];
 }
@@ -411,7 +414,9 @@ export type DashboardActionName =
   | "switch"
   | "refresh"
   | "remove"
-  | "toggleStatusBar";
+  | "toggleStatusBar"
+  | "getResetCredits"
+  | "consumeResetCredit";
 
 export interface DashboardOAuthSessionDescriptor {
   sessionId: string;
@@ -446,6 +451,7 @@ export interface DashboardActionResultPayload {
   importedEmails?: string[];
   email?: string;
   restoredCount?: number;
+  resetCredits?: import("../../core/types").CodexResetCreditsSnapshot;
 }
 
 export type DashboardHostMessage =
