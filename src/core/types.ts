@@ -23,7 +23,7 @@ export interface CodexTokens {
   accountId?: string;
 }
 
-export type CodexAuthMode = "oauth";
+export type CodexAuthMode = "chatgpt" | "oauth";
 
 /**
  * 配额摘要信息

@@ -124,7 +124,7 @@ function mapAccount(
     id: account.id,
     displayName: account.accountName?.trim() ?? account.email,
     email: account.email,
-    authMode: account.authMode ?? "oauth",
+    authMode: account.authMode ?? "chatgpt",
     accountName: account.accountName,
     tags: [...(account.tags ?? [])],
     authProviderLabel: formatAuthProvider(account.authProvider, lang),
