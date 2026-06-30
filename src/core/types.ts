@@ -71,6 +71,8 @@ export interface CodexQuotaSummary {
   credits?: CodexCreditsSummary;
   /** 主动重置次数可用数 */
   resetCreditsAvailable?: number;
+  /** 最近一张可用重置次数的到期时间戳 (秒) */
+  resetCreditsNextExpiresAt?: number;
   /** 原始接口返回 */
   rawData?: unknown;
 }

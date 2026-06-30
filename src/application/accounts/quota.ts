@@ -6,7 +6,7 @@ import {
   normalizeAutoSwitchThreshold,
   normalizeQuotaWarningThreshold
 } from "../../infrastructure/config/extensionSettings";
-import { QuotaRefreshResult, refreshQuota } from "../../services";
+import { QuotaRefreshResult, refreshQuota, fetchResetCredits } from "../../services";
 import { AccountsRepository } from "../../storage";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
 import {
@@ -71,6 +71,19 @@ export async function refreshSingleQuota(
   );
   // 后台异步刷新订阅到期时间（对齐 cockpit refresh_subscription_state），不阻塞配额刷新
   void repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
+  // 后台异步拉取重置次数明细（含最近到期时间），不阻塞配额刷新
+  if (!result.error && account.quotaSummary?.resetCreditsAvailable != null && account.quotaSummary.resetCreditsAvailable > 0) {
+    const credTokens = result.updatedTokens ?? tokens;
+    const credAccountId = account.accountId ?? undefined;
+    void fetchResetCredits(credTokens.accessToken, credAccountId).then((snapshot) => {
+      if (snapshot.nextExpiresAt != null) {
+        if (account.quotaSummary) {
+          account.quotaSummary.resetCreditsNextExpiresAt = snapshot.nextExpiresAt;
+        }
+        void repo.updateResetCreditsExpiry(accountId, snapshot.nextExpiresAt).catch(() => undefined);
+      }
+    }).catch(() => undefined);
+  }
   if (!result.error) {
     clearTokenAutomationError(accountId);
   }

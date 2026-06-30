@@ -162,6 +162,7 @@ function mapAccount(
     lastTokenRefreshError: automationState?.lastError,
     lastQuotaAt: account.lastQuotaAt,
     resetCreditsAvailable: account.quotaSummary?.resetCreditsAvailable,
+    resetCreditsNextExpiresAt: account.quotaSummary?.resetCreditsNextExpiresAt,
     autoSwitchLockedUntil: autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     metrics: buildMetrics(account, copy)
   };

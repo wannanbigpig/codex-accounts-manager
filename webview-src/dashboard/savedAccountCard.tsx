@@ -180,6 +180,9 @@ export function SavedAccountCard(props: {
           {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
             <div class="saved-credits-line saved-reset-credits-line">
               {copy.resetCreditsLabel ?? "重置次数"}: {account.resetCreditsAvailable}
+              {account.resetCreditsNextExpiresAt != null && account.resetCreditsNextExpiresAt > 0
+                ? ` (${formatResetCreditsExpiry(account.resetCreditsNextExpiresAt)})`
+                : ""}
             </div>
           ) : null}
           <div class="saved-card-divider"></div>
@@ -294,4 +297,15 @@ function CardDetailRow(props: { label: string; value: string; title?: string; co
       </span>
     </div>
   );
+}
+
+function formatResetCreditsExpiry(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `最近到期: ${y}/${mo}/${day} ${h}:${mi}:${s}`;
 }

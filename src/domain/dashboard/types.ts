@@ -334,6 +334,7 @@ export interface DashboardAccountViewModel {
   lastTokenRefreshError?: string;
   lastQuotaAt?: number;
   resetCreditsAvailable?: number;
+  resetCreditsNextExpiresAt?: number;
   autoSwitchLockedUntil?: number;
   metrics: DashboardMetricViewModel[];
 }

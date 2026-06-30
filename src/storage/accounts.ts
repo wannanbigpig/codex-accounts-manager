@@ -1005,6 +1005,20 @@ export class AccountsRepository {
   }
 
   /**
+   * 更新重置次数的最近到期时间（由后台 fetchResetCredits 拉取后调用）。
+   */
+  async updateResetCreditsExpiry(accountId: string, nextExpiresAt: number): Promise<void> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account?.quotaSummary) {
+      return;
+    }
+    account.quotaSummary.resetCreditsNextExpiresAt = nextExpiresAt;
+    account.updatedAt = Date.now();
+    this.writeIndex(index);
+  }
+
+  /**
    * 打开 Codex Home 目录
    */
   async openCodexHome(): Promise<void> {
