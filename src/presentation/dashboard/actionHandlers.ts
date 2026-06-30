@@ -682,6 +682,10 @@ async function handleConsumeResetCredit(
     isZh ? "速率限制已重置，你可以继续工作了。" : "Rate limit has been reset. You can continue working."
   );
 
+  // 消耗后触发配额刷新，更新 resetCreditsAvailable 和 nextExpiresAt
   schedulePublishState?.();
+  if (account) {
+    void vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
+  }
   return undefined;
 }
