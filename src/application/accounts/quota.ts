@@ -75,12 +75,13 @@ export async function refreshSingleQuota(
   if (!result.error && account.quotaSummary?.resetCreditsAvailable != null && account.quotaSummary.resetCreditsAvailable > 0) {
     const credTokens = result.updatedTokens ?? tokens;
     const credAccountId = account.accountId ?? undefined;
-    void fetchResetCredits(credTokens.accessToken, credAccountId).then((snapshot) => {
+    void fetchResetCredits(credTokens.accessToken, credAccountId).then(async (snapshot) => {
       if (snapshot.nextExpiresAt != null) {
         if (account.quotaSummary) {
           account.quotaSummary.resetCreditsNextExpiresAt = snapshot.nextExpiresAt;
         }
-        void repo.updateResetCreditsExpiry(accountId, snapshot.nextExpiresAt).catch(() => undefined);
+        await repo.updateResetCreditsExpiry(accountId, snapshot.nextExpiresAt).catch(() => undefined);
+        view.refresh();
       }
     }).catch(() => undefined);
   }

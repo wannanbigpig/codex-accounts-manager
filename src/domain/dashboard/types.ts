@@ -178,7 +178,6 @@ export interface DashboardCopy {
   importJson: string;
   importJsonPlaceholder: string;
   importJsonSessionHint: string;
-  importJsonOpenSessionToken: string;
   importJsonSubmit: string;
   importJsonHint: string;
   importJsonValidate: string;

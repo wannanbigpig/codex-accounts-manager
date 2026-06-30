@@ -82,7 +82,6 @@ const en: DashboardCopy = {
   importJsonPlaceholder: "Paste auth.json or shared account JSON.",
   importJsonSessionHint:
     "If you already have a current login session, use the API key add flow instead of importing session JSON.",
-  importJsonOpenSessionToken: "View Current Login Token",
   importJsonValidate: "Validate",
   importJsonSummaryTitle: "Import Validation Summary",
   importJsonSummaryTotal: "Total",
@@ -323,7 +322,6 @@ export const dashboardCopyResources = defineLocaleResources(en, {
     importJson: "导入 JSON",
     importJsonPlaceholder: "粘贴 auth.json 或共享账号 JSON",
     importJsonSessionHint: "如果你已经有当前登录会话，请改用 API key 添加流程，而不是导入 session JSON。",
-    importJsonOpenSessionToken: "查看当前登录 Token",
     importJsonValidate: "先校验",
     importJsonSummaryTitle: "导入校验摘要",
     importJsonSummaryTotal: "总数",
@@ -540,7 +538,6 @@ export const dashboardCopyResources = defineLocaleResources(en, {
     importJson: "匯入 JSON",
     importJsonPlaceholder: "貼上 auth.json 或共享帳號 JSON",
     importJsonSessionHint: "如果你已經有目前登入工作階段，請改用 API key 新增流程，而不是匯入 session JSON。",
-    importJsonOpenSessionToken: "查看目前登入 Token",
     importJsonValidate: "先校驗",
     importJsonSummaryTitle: "匯入校驗摘要",
     importJsonSummaryTotal: "總數",
