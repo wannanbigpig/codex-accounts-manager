@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens } from "../core/types";
+import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens, SharedCodexAccountJson } from "../core/types";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -37,6 +37,44 @@ export async function readAideckCodexTokens(accountId: string): Promise<Partial<
   } catch {
     return undefined;
   }
+}
+
+export async function listAideckCodexSharedAccounts(): Promise<SharedCodexAccountJson[]> {
+  const root = getAideckCodexRoot();
+  const accountFiles = new Set<string>();
+
+  try {
+    const index = (await readJsonFile(path.join(root, "accounts-index.json"))) ?? {};
+    const accounts = Array.isArray(index["accounts"]) ? index["accounts"] : [];
+    for (const item of accounts) {
+      const record = getRecord(item);
+      const id = readString(record?.["id"]);
+      if (id) {
+        accountFiles.add(getAideckCodexAccountFilePath(id));
+      }
+    }
+  } catch {}
+
+  try {
+    const dir = path.join(root, "accounts");
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".json")) {
+        accountFiles.add(path.join(dir, entry.name));
+      }
+    }
+  } catch {}
+
+  const shared: SharedCodexAccountJson[] = [];
+  for (const filePath of accountFiles) {
+    const parsed = await readJsonFile(filePath);
+    const entry = parsed ? toSharedCodexAccount(parsed) : undefined;
+    if (entry) {
+      shared.push(entry);
+    }
+  }
+
+  return shared;
 }
 
 export async function mirrorAideckCodexAccount(account: CodexAccountRecord, tokens?: CodexTokens): Promise<void> {
@@ -168,6 +206,50 @@ function buildAideckIndexRecord(account: JsonRecord): JsonRecord {
   };
 }
 
+function toSharedCodexAccount(account: JsonRecord): SharedCodexAccountJson | undefined {
+  const tokenSource = getRecord(account["tokens"]) ?? {};
+  const idToken = readString(tokenSource["id_token"]) ?? readString(account["id_token"]);
+  const accessToken =
+    readString(tokenSource["access_token"]) ??
+    readString(account["access_token"]) ??
+    readString(account["token"]);
+  const refreshToken = readString(tokenSource["refresh_token"]) ?? readString(account["refresh_token"]);
+  const externalAccountId =
+    readString(tokenSource["account_id"]) ??
+    readString(account["account_id"]) ??
+    undefined;
+
+  if (!idToken || !accessToken) {
+    return undefined;
+  }
+
+  return {
+    id: readString(account["id"]),
+    email: readString(account["email"]),
+    auth_mode: readString(account["auth_mode"]),
+    user_id: readString(account["user_id"]),
+    plan_type: readString(account["plan_type"]),
+    subscription_active_until: readString(account["subscription_active_until"]) ?? readNumber(account["subscription_active_until"]) ?? null,
+    account_id: externalAccountId ?? null,
+    organization_id: readString(account["organization_id"]) ?? null,
+    account_name: readString(account["account_name"]) ?? readString(account["name"]) ?? null,
+    account_structure: readString(account["account_structure"]) ?? null,
+    added_via: readString(account["added_via"]) ?? "aideck",
+    added_at: readNumber(account["added_at"]) ?? readNumber(account["created_at"]) ?? null,
+    tokens: {
+      id_token: idToken,
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      account_id: externalAccountId ?? null
+    },
+    quota: getSharedQuota(account["quota"]),
+    quota_error: getSharedQuotaError(account["quota_error"]),
+    tags: getStringArray(account["tags"]) ?? null,
+    created_at: readNumber(account["created_at"]),
+    last_used: readNumber(account["last_used"]) ?? readNumber(account["updated_at"])
+  };
+}
+
 function toAideckQuota(summary: CodexQuotaSummary, updatedAt?: number): JsonRecord {
   return {
     hourly_percentage: summary.hourlyPercentage,
@@ -211,6 +293,35 @@ function toAideckQuota(summary: CodexQuotaSummary, updatedAt?: number): JsonReco
       : null,
     updated_at: updatedAt ?? Date.now()
   };
+}
+
+function getSharedQuota(value: unknown): SharedCodexAccountJson["quota"] {
+  const quota = getRecord(value);
+  return quota ? (quota as NonNullable<SharedCodexAccountJson["quota"]>) : null;
+}
+
+function getSharedQuotaError(value: unknown): SharedCodexAccountJson["quota_error"] {
+  const error = getRecord(value);
+  if (!error) {
+    return null;
+  }
+  const message = readString(error["message"]);
+  if (!message) {
+    return null;
+  }
+  return {
+    code: readString(error["code"]),
+    message,
+    timestamp: readNumber(error["timestamp"])
+  };
+}
+
+function getStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const out = value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
+  return out.length ? out : undefined;
 }
 
 async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {

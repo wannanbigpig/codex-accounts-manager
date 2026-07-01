@@ -195,18 +195,25 @@ function App() {
             <div class="hero-settings">
               <button
                 id="announcementsButton"
-                class={`settings-btn announcement-btn ${announcementUnreadCount > 0 ? "has-unread" : ""}`}
+                class={`settings-btn action-btn icon-only announcement-btn ${announcementUnreadCount > 0 ? "has-unread" : ""}`}
                 type="button"
                 title={snapshot.copy.announcementsTooltip}
                 aria-label={snapshot.copy.announcementsTooltip}
                 onClick={() => setAnnouncementsOpen(true)}
               >
-                <BellIcon />
+                <span class="button-face">
+                  <span class="button-icon">
+                    <BellIcon />
+                  </span>
+                </span>
                 {announcementUnreadCount > 0 ? (
                   <span class="announcement-button-badge" aria-label={`${announcementUnreadCount} unread`}>
                     {announcementUnreadCount > 9 ? "9+" : announcementUnreadCount}
                   </span>
                 ) : null}
+                <span class="button-tip" aria-hidden="true">
+                  {snapshot.copy.announcementsTooltip}
+                </span>
               </button>
               <button
                 id="githubProjectButton"
@@ -227,18 +234,23 @@ function App() {
               </button>
               <button
                 id="privacyToggleButton"
-                class={`settings-btn ${state.privacyMode ? "is-active" : ""}`}
+                class={`settings-btn action-btn icon-only ${state.privacyMode ? "is-active" : ""}`}
                 type="button"
                 title={privacyToggleLabel}
                 aria-label={privacyToggleLabel}
                 aria-pressed={state.privacyMode}
                 onClick={() => dispatch({ type: "toggle-privacy" })}
               >
-                {state.privacyMode ? <EyeOffIcon /> : <EyeIcon />}
+                <span class="button-face">
+                  <span class="button-icon">{state.privacyMode ? <EyeOffIcon /> : <EyeIcon />}</span>
+                </span>
+                <span class="button-tip" aria-hidden="true">
+                  {privacyToggleLabel}
+                </span>
               </button>
               <button
                 id="refreshViewButton"
-                class="settings-btn refresh-view-btn action-btn"
+                class="settings-btn refresh-view-btn action-btn icon-only"
                 type="button"
                 title={snapshot.copy.refreshPage}
                 aria-label={snapshot.copy.refreshPage}
@@ -250,16 +262,24 @@ function App() {
                   {isActionPending("refreshView") ? <span class="button-spinner" aria-hidden="true"></span> : null}
                   <span class="button-label">↻</span>
                 </span>
+                <span class="button-tip" aria-hidden="true">
+                  {snapshot.copy.refreshPage}
+                </span>
               </button>
               <button
                 id="settingsOpenButton"
-                class="settings-btn"
+                class="settings-btn action-btn icon-only"
                 type="button"
                 title={snapshot.copy.settingsTitle}
                 aria-label={snapshot.copy.settingsTitle}
                 onClick={() => dispatch({ type: "open-settings" })}
               >
-                ⚙
+                <span class="button-face">
+                  <span class="button-icon">⚙</span>
+                </span>
+                <span class="button-tip" aria-hidden="true">
+                  {snapshot.copy.settingsTitle}
+                </span>
               </button>
               <button
                 id="aboutOpenButton"

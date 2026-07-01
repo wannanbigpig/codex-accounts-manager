@@ -61,7 +61,7 @@ export async function refreshSingleQuota(
   }
 
   const result = await refreshQuota(account, tokens, forceRefresh);
-  await repo.updateQuota(
+  const updatedAccount = await repo.updateQuota(
     accountId,
     result.quota,
     result.error,
@@ -71,19 +71,11 @@ export async function refreshSingleQuota(
   );
   // 后台异步刷新订阅到期时间（对齐 cockpit refresh_subscription_state），不阻塞配额刷新
   void repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
-  // 后台异步拉取重置次数明细（含最近到期时间），不阻塞配额刷新
-  if (!result.error && account.quotaSummary?.resetCreditsAvailable != null && account.quotaSummary.resetCreditsAvailable > 0) {
+  // 后台异步拉取重置次数明细（含最新可用次数与最近到期时间），不阻塞配额刷新
+  if (!result.error && updatedAccount.quotaSummary) {
     const credTokens = result.updatedTokens ?? tokens;
-    const credAccountId = account.accountId ?? undefined;
-    void fetchResetCredits(credTokens.accessToken, credAccountId).then(async (snapshot) => {
-      if (snapshot.nextExpiresAt != null) {
-        if (account.quotaSummary) {
-          account.quotaSummary.resetCreditsNextExpiresAt = snapshot.nextExpiresAt;
-        }
-        await repo.updateResetCreditsExpiry(accountId, snapshot.nextExpiresAt).catch(() => undefined);
-        view.refresh();
-      }
-    }).catch(() => undefined);
+    const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
+    void syncResetCreditsSnapshot(repo, view, accountId, updatedAccount, credTokens.accessToken, credAccountId);
   }
   if (!result.error) {
     clearTokenAutomationError(accountId);
@@ -125,7 +117,7 @@ export async function refreshImportedAccountQuota(
   }
 
   const result = await refreshQuota(account, tokens, true);
-  await repo.updateQuota(
+  const updatedAccount = await repo.updateQuota(
     accountId,
     result.quota,
     result.error,
@@ -135,11 +127,39 @@ export async function refreshImportedAccountQuota(
   );
   // 后台异步刷新订阅到期时间
   void repo.refreshSubscriptionState(accountId, true).catch(() => undefined);
+  if (!result.error && updatedAccount.quotaSummary) {
+    const credTokens = result.updatedTokens ?? tokens;
+    const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
+    void syncResetCreditsSnapshot(repo, undefined, accountId, updatedAccount, credTokens.accessToken, credAccountId);
+  }
   if (!result.error) {
     clearTokenAutomationError(accountId);
   }
   await maybeWarnForAccount(repo, accountId);
   return result;
+}
+
+async function syncResetCreditsSnapshot(
+  repo: AccountsRepository,
+  view: RefreshView | undefined,
+  accountId: string,
+  updatedAccount: CodexAccountRecord,
+  accessToken: string,
+  remoteAccountId?: string
+): Promise<void> {
+  try {
+    const snapshot = await fetchResetCredits(accessToken, remoteAccountId);
+    if (updatedAccount.quotaSummary) {
+      updatedAccount.quotaSummary.resetCreditsAvailable = snapshot.availableCount;
+      updatedAccount.quotaSummary.resetCreditsNextExpiresAt = snapshot.nextExpiresAt;
+    }
+    await repo.updateResetCreditsSnapshot(accountId, snapshot.availableCount, snapshot.nextExpiresAt).catch(
+      () => undefined
+    );
+    view?.refresh();
+  } catch {
+    return;
+  }
 }
 
 export async function refreshSingleQuotaSafely(

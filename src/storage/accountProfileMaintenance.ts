@@ -17,7 +17,32 @@ export function applyQuotaUpdate(params: {
 }): string | undefined {
   params.account.lastQuotaAt = params.now;
   params.account.updatedAt = params.now;
-  params.account.quotaSummary = normalizeQuotaSummary(params.quotaSummary);
+  const previousQuotaSummary = params.account.quotaSummary;
+  const nextQuotaSummary = normalizeQuotaSummary(params.quotaSummary);
+  const incomingResetCreditsNextExpiresAt = nextQuotaSummary?.resetCreditsNextExpiresAt;
+  let preservedResetCreditsExpiry = false;
+  if (
+    nextQuotaSummary &&
+    nextQuotaSummary.resetCreditsNextExpiresAt == null &&
+    (nextQuotaSummary.resetCreditsAvailable ?? 0) > 0 &&
+    previousQuotaSummary?.resetCreditsNextExpiresAt != null
+  ) {
+    nextQuotaSummary.resetCreditsNextExpiresAt = previousQuotaSummary.resetCreditsNextExpiresAt;
+    preservedResetCreditsExpiry = true;
+  }
+  if ((previousQuotaSummary?.resetCreditsAvailable ?? nextQuotaSummary?.resetCreditsAvailable ?? 0) > 0) {
+    console.info("[codexAccounts] quota reset credits update", {
+      accountId: params.account.id,
+      remoteAccountId: params.account.accountId,
+      previousAvailable: previousQuotaSummary?.resetCreditsAvailable ?? null,
+      previousNextExpiresAt: previousQuotaSummary?.resetCreditsNextExpiresAt ?? null,
+      incomingAvailable: nextQuotaSummary?.resetCreditsAvailable ?? null,
+      incomingNextExpiresAt: incomingResetCreditsNextExpiresAt ?? null,
+      storedNextExpiresAt: nextQuotaSummary?.resetCreditsNextExpiresAt ?? null,
+      preservedResetCreditsExpiry
+    });
+  }
+  params.account.quotaSummary = nextQuotaSummary;
   params.account.quotaError = params.quotaError;
   params.account.dismissedHealthIssueKey = undefined;
 

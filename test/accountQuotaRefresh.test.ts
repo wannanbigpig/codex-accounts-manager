@@ -3,8 +3,9 @@ import * as vscode from "vscode";
 import type { CodexAccountRecord, CodexTokens } from "../src/core/types";
 import type { AccountsRepository } from "../src/storage";
 
-const { refreshQuotaMock, clearTokenAutomationErrorMock } = vi.hoisted(() => ({
+const { refreshQuotaMock, fetchResetCreditsMock, clearTokenAutomationErrorMock } = vi.hoisted(() => ({
   refreshQuotaMock: vi.fn(),
+  fetchResetCreditsMock: vi.fn(),
   clearTokenAutomationErrorMock: vi.fn()
 }));
 
@@ -14,7 +15,8 @@ const { handleCodexAppRestartPreferenceMock, autoReloadWindowForAccountMock } = 
 }));
 
 vi.mock("../src/services", () => ({
-  refreshQuota: refreshQuotaMock
+  refreshQuota: refreshQuotaMock,
+  fetchResetCredits: fetchResetCreditsMock
 }));
 
 vi.mock("../src/presentation/workbench/tokenAutomationState", () => ({
@@ -29,7 +31,10 @@ vi.mock("../src/application/accounts/switchEffects", () => ({
 import { maybeAutoSwitchForActiveQuota, refreshSingleQuota } from "../src/application/accounts/quota";
 import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
 
-type QuotaRefreshRepo = Pick<AccountsRepository, "getAccount" | "getTokens" | "updateQuota" | "refreshSubscriptionState">;
+type QuotaRefreshRepo = Pick<
+  AccountsRepository,
+  "getAccount" | "getTokens" | "updateQuota" | "refreshSubscriptionState" | "updateResetCreditsSnapshot"
+>;
 
 describe("refreshSingleQuota token automation state", () => {
   const account: CodexAccountRecord = {
@@ -48,6 +53,7 @@ describe("refreshSingleQuota token automation state", () => {
 
   beforeEach(() => {
     refreshQuotaMock.mockReset();
+    fetchResetCreditsMock.mockReset();
     clearTokenAutomationErrorMock.mockReset();
     handleCodexAppRestartPreferenceMock.mockReset();
     autoReloadWindowForAccountMock.mockReset();
@@ -63,7 +69,8 @@ describe("refreshSingleQuota token automation state", () => {
       getAccount: vi.fn(async () => account),
       getTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => account),
-      refreshSubscriptionState: vi.fn(async () => undefined)
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
     };
 
     refreshQuotaMock.mockResolvedValue({
@@ -87,7 +94,8 @@ describe("refreshSingleQuota token automation state", () => {
       getAccount: vi.fn(async () => account),
       getTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => account),
-      refreshSubscriptionState: vi.fn(async () => undefined)
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
     };
 
     refreshQuotaMock.mockResolvedValue({
@@ -120,7 +128,8 @@ describe("refreshSingleQuota token automation state", () => {
       getAccount: vi.fn(async () => account),
       getTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => account),
-      refreshSubscriptionState: vi.fn(async () => undefined)
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
     };
 
     refreshQuotaMock.mockResolvedValue({
@@ -138,6 +147,97 @@ describe("refreshSingleQuota token automation state", () => {
     });
 
     expect(clearTokenAutomationErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("fetches reset credits expiry from the updated quota snapshot", async () => {
+    const updatedAccount: CodexAccountRecord = {
+      ...account,
+      accountId: "acct-1",
+      quotaSummary: {
+        hourlyPercentage: 82,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 97,
+        weeklyWindowPresent: true,
+        resetCreditsAvailable: 1
+      }
+    };
+    const repo: QuotaRefreshRepo = {
+      getAccount: vi.fn(async () => account),
+      getTokens: vi.fn(async () => tokens),
+      updateQuota: vi.fn(async () => updatedAccount),
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
+    };
+    const view = { refresh: vi.fn() };
+
+    refreshQuotaMock.mockResolvedValue({
+      quota: updatedAccount.quotaSummary,
+      error: undefined,
+      updatedTokens: tokens
+    });
+    fetchResetCreditsMock.mockResolvedValue({
+      availableCount: 1,
+      credits: [],
+      nextExpiresAt: 1_800_000_000
+    });
+
+    await refreshSingleQuota(repo as AccountsRepository, view, account.id, {
+      announce: false,
+      refreshView: false,
+      warnQuota: false,
+      forceRefresh: true
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchResetCreditsMock).toHaveBeenCalledWith(tokens.accessToken, "acct-1");
+    expect(repo.updateResetCreditsSnapshot).toHaveBeenCalledWith(account.id, 1, 1_800_000_000);
+    expect(view.refresh).toHaveBeenCalled();
+  });
+
+  it("still refreshes reset credits when the updated quota count is zero", async () => {
+    const updatedAccount: CodexAccountRecord = {
+      ...account,
+      accountId: "acct-2",
+      quotaSummary: {
+        hourlyPercentage: 70,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 95,
+        weeklyWindowPresent: true,
+        resetCreditsAvailable: 0,
+        resetCreditsNextExpiresAt: 1_700_000_000
+      }
+    };
+    const repo: QuotaRefreshRepo = {
+      getAccount: vi.fn(async () => account),
+      getTokens: vi.fn(async () => tokens),
+      updateQuota: vi.fn(async () => updatedAccount),
+      refreshSubscriptionState: vi.fn(async () => undefined),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
+    };
+
+    refreshQuotaMock.mockResolvedValue({
+      quota: updatedAccount.quotaSummary,
+      error: undefined,
+      updatedTokens: tokens
+    });
+    fetchResetCreditsMock.mockResolvedValue({
+      availableCount: 0,
+      credits: [],
+      nextExpiresAt: undefined
+    });
+
+    await refreshSingleQuota(repo as AccountsRepository, { refresh: vi.fn() }, account.id, {
+      announce: false,
+      refreshView: false,
+      warnQuota: false,
+      forceRefresh: true
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchResetCreditsMock).toHaveBeenCalledWith(tokens.accessToken, "acct-2");
+    expect(repo.updateResetCreditsSnapshot).toHaveBeenCalledWith(account.id, 0, undefined);
   });
 
   it("auto-switches to the candidate with the best matching remaining quota", async () => {

@@ -460,4 +460,40 @@ describe("accountProfileMaintenance helpers", () => {
     expect(account.organizationId).toBe("org_456");
     expect(account.subscriptionActiveUntil).toBe("1900000000");
   });
+
+  it("preserves reset credits expiry when quota refresh only returns available count", () => {
+    const account: CodexAccountRecord = {
+      id: "a",
+      email: "team@example.com",
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1,
+      quotaSummary: {
+        hourlyPercentage: 30,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 70,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0,
+        resetCreditsAvailable: 1,
+        resetCreditsNextExpiresAt: 1_785_109_796
+      }
+    };
+
+    applyQuotaUpdate({
+      account,
+      quotaSummary: {
+        hourlyPercentage: 25,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 75,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 0,
+        resetCreditsAvailable: 1
+      },
+      quotaError: undefined,
+      now: 99
+    });
+
+    expect(account.quotaSummary?.resetCreditsAvailable).toBe(1);
+    expect(account.quotaSummary?.resetCreditsNextExpiresAt).toBe(1_785_109_796);
+  });
 });

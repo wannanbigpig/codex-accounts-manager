@@ -31,7 +31,7 @@ import {
   syncLoginAtFromTokens
 } from "./accountProfileMaintenance";
 import { buildAccountRecordDraft, reconcileStatusBarSelections } from "./accountMetadata";
-import { restoreSharedTokens, toSharedAccountJson } from "./sharedAccounts";
+import { previewSharedEntry, restoreSharedTokens, toSharedAccountJson } from "./sharedAccounts";
 import {
   applySharedAccountEntry,
   createSharedImportIssue,
@@ -86,7 +86,12 @@ import { buildAccountStorageId } from "../utils/accountIdentity";
 import { extractClaims, isTokenExpired } from "../utils/jwt";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
 import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
-import { mirrorAideckCodexAccount, mirrorAideckCurrentAccount, readAideckCodexTokens } from "./aideckCodexStorage";
+import {
+  listAideckCodexSharedAccounts,
+  mirrorAideckCodexAccount,
+  mirrorAideckCurrentAccount,
+  readAideckCodexTokens
+} from "./aideckCodexStorage";
 
 /** 缓存失效时间 (毫秒) */
 const CACHE_TTL_MS = 5000;
@@ -148,6 +153,7 @@ export class AccountsRepository {
 
     try {
       await this.syncActiveAccountFromAuthFile();
+      await this.syncFromAideckMirror();
     } catch (cause) {
       if (isIndexHealthError(cause)) {
         console.error("[codexAccounts] accounts index init failed:", cause);
@@ -155,6 +161,43 @@ export class AccountsRepository {
       }
       throw cause;
     }
+  }
+
+  async syncFromAideckMirror(): Promise<CodexAccountRecord[]> {
+    const sharedAccounts = await listAideckCodexSharedAccounts();
+    if (sharedAccounts.length === 0) {
+      return [];
+    }
+
+    let index: CodexAccountsIndex;
+    try {
+      index = await this.readIndex();
+    } catch (error) {
+      if (isIndexHealthError(error)) {
+        return [];
+      }
+      throw error;
+    }
+
+    const existingIds = new Set(index.accounts.map((account) => account.id));
+    const missing = sharedAccounts.filter((entry) => {
+      try {
+        const preview = previewSharedEntry(entry);
+        return Boolean(preview.storageId && !existingIds.has(preview.storageId));
+      } catch {
+        return false;
+      }
+    });
+
+    if (missing.length === 0) {
+      return [];
+    }
+
+    const imported = await this.importSharedAccountsInternal(missing);
+    if (imported.length > 0) {
+      console.info(`[codexAccounts] imported ${imported.length} account(s) from Aideck mirror`);
+    }
+    return imported;
   }
 
   /**
@@ -1005,7 +1048,40 @@ export class AccountsRepository {
   }
 
   /**
-   * 更新重置次数的最近到期时间（由后台 fetchResetCredits 拉取后调用）。
+   * 更新重置次数快照（由后台 fetchResetCredits 拉取后调用）。
+   */
+  async updateResetCreditsSnapshot(
+    accountId: string,
+    availableCount: number,
+    nextExpiresAt?: number
+  ): Promise<void> {
+    const index = await this.readIndex();
+    const account = index.accounts.find((item) => item.id === accountId);
+    if (!account?.quotaSummary) {
+      return;
+    }
+    const previousNextExpiresAt = account.quotaSummary.resetCreditsNextExpiresAt;
+    const effectiveNextExpiresAt =
+      nextExpiresAt ?? (availableCount > 0 ? account.quotaSummary.resetCreditsNextExpiresAt : undefined);
+    if (availableCount > 0 || previousNextExpiresAt != null || nextExpiresAt != null) {
+      console.info("[codexAccounts] reset credits snapshot update", {
+        accountId,
+        previousAvailable: account.quotaSummary.resetCreditsAvailable ?? null,
+        previousNextExpiresAt: previousNextExpiresAt ?? null,
+        incomingAvailable: availableCount,
+        incomingNextExpiresAt: nextExpiresAt ?? null,
+        storedNextExpiresAt: effectiveNextExpiresAt ?? null,
+        preservedResetCreditsExpiry: nextExpiresAt == null && effectiveNextExpiresAt != null
+      });
+    }
+    account.quotaSummary.resetCreditsAvailable = availableCount;
+    account.quotaSummary.resetCreditsNextExpiresAt = effectiveNextExpiresAt;
+    account.updatedAt = Date.now();
+    this.writeIndex(index);
+  }
+
+  /**
+   * 兼容旧调用：仅更新最近到期时间。
    */
   async updateResetCreditsExpiry(accountId: string, nextExpiresAt: number): Promise<void> {
     const index = await this.readIndex();
@@ -1013,9 +1089,7 @@ export class AccountsRepository {
     if (!account?.quotaSummary) {
       return;
     }
-    account.quotaSummary.resetCreditsNextExpiresAt = nextExpiresAt;
-    account.updatedAt = Date.now();
-    this.writeIndex(index);
+    await this.updateResetCreditsSnapshot(accountId, account.quotaSummary.resetCreditsAvailable ?? 0, nextExpiresAt);
   }
 
   /**

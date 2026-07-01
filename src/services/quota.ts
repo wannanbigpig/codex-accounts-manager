@@ -716,7 +716,8 @@ export async function consumeResetCredit(
 }
 
 function parseResetCreditsSnapshot(payload: Record<string, unknown>): CodexResetCreditsSnapshot {
-  const creditsValue = payload["credits"] ?? (payload["data"] as Record<string, unknown> | undefined)?.["credits"];
+  const dataRecord = isResetCreditRecord(payload["data"]) ? payload["data"] : undefined;
+  const creditsValue = payload["credits"] ?? dataRecord?.["credits"];
   const credits: CodexResetCredit[] = Array.isArray(creditsValue)
     ? creditsValue.filter(isResetCreditRecord).map(parseResetCreditRecord)
     : [];
@@ -724,15 +725,33 @@ function parseResetCreditsSnapshot(payload: Record<string, unknown>): CodexReset
   const availableCount =
     normalizeOptionalInt(payload["available_count"]) ??
     normalizeOptionalInt(payload["availableCount"]) ??
-    normalizeOptionalInt((payload["data"] as Record<string, unknown> | undefined)?.["available_count"]) ??
-    normalizeOptionalInt((payload["data"] as Record<string, unknown> | undefined)?.["availableCount"]) ??
+    normalizeOptionalInt(dataRecord?.["available_count"]) ??
+    normalizeOptionalInt(dataRecord?.["availableCount"]) ??
     credits.filter(isAvailableResetCredit).length;
 
-  const nextExpiresAt = credits
+  const explicitNextExpiresAt =
+    readResetCreditTimestamp(payload, [
+      "next_expires_at",
+      "nextExpiresAt",
+      "reset_credits_next_expires_at",
+      "resetCreditsNextExpiresAt"
+    ]) ??
+    (dataRecord
+      ? readResetCreditTimestamp(dataRecord, [
+          "next_expires_at",
+          "nextExpiresAt",
+          "reset_credits_next_expires_at",
+          "resetCreditsNextExpiresAt"
+        ])
+      : undefined);
+
+  const derivedNextExpiresAt = credits
     .filter(isAvailableResetCredit)
     .map((c) => c.expires_at)
     .filter((v): v is number => typeof v === "number" && v > 0)
     .sort((a, b) => a - b)[0];
+
+  const nextExpiresAt = explicitNextExpiresAt ?? derivedNextExpiresAt;
 
   return { availableCount, credits, nextExpiresAt };
 }
@@ -787,9 +806,15 @@ function readResetCreditTimestamp(record: Record<string, unknown>, keys: string[
       return value > 1_000_000_000_000 ? Math.floor(value / 1000) : value;
     }
     if (typeof value === "string" && value.trim()) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        return parsed > 1_000_000_000_000 ? Math.floor(parsed / 1000) : parsed;
+      const trimmed = value.trim();
+      const numericTimestamp = Number(trimmed);
+      if (Number.isFinite(numericTimestamp) && numericTimestamp > 0) {
+        return numericTimestamp > 1_000_000_000_000 ? Math.floor(numericTimestamp / 1000) : numericTimestamp;
+      }
+
+      const dateTimestamp = Date.parse(trimmed);
+      if (Number.isFinite(dateTimestamp) && dateTimestamp > 0) {
+        return Math.floor(dateTimestamp / 1000);
       }
     }
   }

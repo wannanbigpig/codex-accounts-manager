@@ -45,6 +45,28 @@ function createTokens(accountId = "acct_123", email = "dev@example.com"): CodexT
   };
 }
 
+async function writeAideckAccountJson(accountId: string, value: Record<string, unknown>): Promise<void> {
+  const root = path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex");
+  const accountFile = path.join(root, "accounts", `${accountId}.json`);
+  await fs.mkdir(path.dirname(accountFile), { recursive: true });
+  await fs.writeFile(accountFile, JSON.stringify(value), "utf8");
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(
+    path.join(root, "accounts-index.json"),
+    JSON.stringify({
+      schema_version: 1,
+      accounts: [
+        {
+          id: accountId,
+          email: value.email,
+          updated_at: Date.now()
+        }
+      ]
+    }),
+    "utf8"
+  );
+}
+
 describe("AccountsRepository token persistence", () => {
   let tempDir: string;
   let originalAideckDataDir: string | undefined;
@@ -263,6 +285,131 @@ describe("AccountsRepository token persistence", () => {
       refreshToken: "aideck-refreshed-token",
       accountId: "acct_123"
     });
+
+    repo.dispose();
+  });
+
+  it("imports missing accounts from Aideck mirror on init", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const aideckTokens = createTokens("acct_aideck", "aideck@example.com");
+    const storageId = buildAccountStorageId("aideck@example.com", "acct_aideck", undefined);
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "aideck@example.com",
+      plan_type: "plus",
+      account_name: "Aideck Team",
+      account_id: "acct_aideck",
+      added_via: "oauth",
+      tokens: {
+        id_token: aideckTokens.idToken,
+        access_token: aideckTokens.accessToken,
+        refresh_token: "aideck-refresh-token",
+        account_id: "acct_aideck"
+      },
+      quota: {
+        hourly_percentage: 88,
+        hourly_window_present: true,
+        hourly_window_minutes: 300,
+        weekly_percentage: 96,
+        weekly_window_present: true,
+        weekly_window_minutes: 10080,
+        code_review_percentage: 0
+      },
+      tags: ["from-aideck"]
+    });
+
+    const repo = new AccountsRepository(context);
+    await repo.init();
+
+    const imported = await repo.getAccount(storageId);
+    expect(imported).toMatchObject({
+      id: storageId,
+      email: "aideck@example.com",
+      planType: "plus",
+      accountName: "Aideck Team",
+      accountId: "acct_aideck",
+      tags: ["from-aideck"]
+    });
+    expect(imported?.quotaSummary?.weeklyPercentage).toBe(96);
+    expect(JSON.parse(secrets.get(`codex.account.${storageId}`) ?? "{}")).toMatchObject({
+      refreshToken: "aideck-refresh-token",
+      accountId: "acct_aideck"
+    });
+
+    repo.dispose();
+  });
+
+  it("does not overwrite existing VS Code accounts from Aideck mirror on init", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const storageId = buildAccountStorageId("dev@example.com", "acct_123", undefined);
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: storageId,
+            email: "dev@example.com",
+            accountName: "VS Code Source",
+            accountId: "acct_123",
+            planType: "team",
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 2
+          }
+        ]
+      }),
+      "utf8"
+    );
+    await context.secrets.store(`codex.account.${storageId}`, JSON.stringify(createTokens("acct_123")));
+    const aideckTokens = createTokens("acct_123", "dev@example.com");
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "dev@example.com",
+      plan_type: "plus",
+      account_name: "Stale Aideck Source",
+      account_id: "acct_123",
+      tokens: {
+        id_token: aideckTokens.idToken,
+        access_token: aideckTokens.accessToken,
+        refresh_token: "stale-aideck-refresh",
+        account_id: "acct_123"
+      }
+    });
+
+    const repo = new AccountsRepository(context);
+    await repo.init();
+
+    const account = await repo.getAccount(storageId);
+    expect(account?.accountName).toBe("VS Code Source");
+    expect(account?.planType).toBe("team");
 
     repo.dispose();
   });
@@ -487,6 +634,59 @@ describe("AccountsRepository token persistence", () => {
     expect(imported.isActive).toBe(true);
     expect(accounts.find((account) => account.id === imported.id)?.showInStatusBar).toBe(false);
     expect(accounts.find((account) => account.id === activeId)?.showInStatusBar).toBe(true);
+
+    repo.dispose();
+  });
+
+  it("keeps reset credits expiry when snapshot refresh still has available credits but no expiry", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: "account-1",
+            email: "dev@example.com",
+            isActive: false,
+            createdAt: 1,
+            updatedAt: 1,
+            quotaSummary: {
+              hourlyPercentage: 90,
+              hourlyWindowPresent: true,
+              weeklyPercentage: 95,
+              weeklyWindowPresent: true,
+              codeReviewPercentage: 0,
+              resetCreditsAvailable: 1,
+              resetCreditsNextExpiresAt: 1_785_109_796
+            }
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const repo = new AccountsRepository(context);
+    await repo.updateResetCreditsSnapshot("account-1", 1, undefined);
+
+    expect((await repo.getAccount("account-1"))?.quotaSummary?.resetCreditsNextExpiresAt).toBe(1_785_109_796);
+
+    await repo.updateResetCreditsSnapshot("account-1", 0, undefined);
+
+    expect((await repo.getAccount("account-1"))?.quotaSummary?.resetCreditsNextExpiresAt).toBeUndefined();
 
     repo.dispose();
   });

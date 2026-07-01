@@ -118,6 +118,17 @@ function mapAccount(
   const dismissedHealth = viewState?.dismissedHealth ?? isHealthDismissed(account, health);
   const automationState = viewState?.automationState;
   const subscription = resolveSubscriptionDisplay(account, viewState?.tokens, copy, lang);
+  const resetCreditsAvailable = account.quotaSummary?.resetCreditsAvailable;
+  const resetCreditsNextExpiresAt = account.quotaSummary?.resetCreditsNextExpiresAt;
+  if ((resetCreditsAvailable ?? 0) > 0 && resetCreditsNextExpiresAt == null) {
+    console.info("[codexAccounts] dashboard state missing reset credits expiry", {
+      accountId: account.id,
+      remoteAccountId: account.accountId,
+      resetCreditsAvailable,
+      lastQuotaAt: account.lastQuotaAt ?? null,
+      updatedAt: account.updatedAt
+    });
+  }
 
   return {
     quotaIssueKind: getQuotaIssueKind(account.quotaError),
@@ -161,8 +172,8 @@ function mapAccount(
     lastTokenRefreshAt: automationState?.lastRefreshAt,
     lastTokenRefreshError: automationState?.lastError,
     lastQuotaAt: account.lastQuotaAt,
-    resetCreditsAvailable: account.quotaSummary?.resetCreditsAvailable,
-    resetCreditsNextExpiresAt: account.quotaSummary?.resetCreditsNextExpiresAt,
+    resetCreditsAvailable,
+    resetCreditsNextExpiresAt,
     autoSwitchLockedUntil: autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     metrics: buildMetrics(account, copy)
   };

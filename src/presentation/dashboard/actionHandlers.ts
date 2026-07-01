@@ -25,7 +25,7 @@ export type DashboardActionContext = {
   repo: AccountsRepository;
   resolveLanguage: () => DashboardLanguage;
   schedulePublishState: () => void;
-  reloadShell: () => void;
+  publishState: (force?: boolean) => Promise<void>;
   oauth: DashboardOAuthCoordinator;
   announcements: AnnouncementService;
   getAnnouncementOptions: () => AnnouncementOptions;
@@ -118,7 +118,7 @@ async function runDashboardAction(
     case "completeOAuthSession":
       return ctx.oauth.completeSession(payload?.oauthSessionId, payload?.callbackUrl, translate);
     case "refreshView":
-      ctx.reloadShell();
+      await ctx.publishState(true);
       return undefined;
     case "updateTags":
       return handleUpdateTags(ctx.repo, ctx.resolveLanguage, ctx.schedulePublishState, payload, account, translate);
@@ -682,10 +682,13 @@ async function handleConsumeResetCredit(
     isZh ? "速率限制已重置，你可以继续工作了。" : "Rate limit has been reset. You can continue working."
   );
 
-  // 消耗后触发配额刷新，更新 resetCreditsAvailable 和 nextExpiresAt
-  schedulePublishState?.();
   if (account) {
-    void vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
+    try {
+      await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
+    } catch (error) {
+      console.warn("[codexAccounts] refresh quota after consuming reset credit failed:", error);
+      schedulePublishState?.();
+    }
   }
   return undefined;
 }

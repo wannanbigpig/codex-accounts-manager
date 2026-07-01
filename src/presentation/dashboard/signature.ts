@@ -17,6 +17,8 @@ export function buildDashboardStateSignature(state: DashboardState): string {
         account.isActive ? "1" : "0",
         account.showInStatusBar ? "1" : "0",
         account.lastQuotaAt ?? 0,
+        account.resetCreditsAvailable ?? "",
+        account.resetCreditsNextExpiresAt ?? "",
         account.healthKind,
         account.dismissedHealth ? "1" : "0",
         account.lastTokenCheckAt ?? "",

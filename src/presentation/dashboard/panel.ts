@@ -15,11 +15,46 @@ import { buildDashboardStateSignature } from "./signature";
 import { executeDashboardActionMessage } from "./actionHandlers";
 import { clearDashboardCodexAppPath, dispatchDashboardClientMessage } from "./messageDispatcher";
 import { DashboardOAuthCoordinator } from "./oauthCoordinator";
+import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 
 let dashboardPanelController: DashboardPanelController | undefined;
+
+type PublishDashboardSnapshotParams = {
+  repo: AccountsRepository;
+  settingsStore: ExtensionSettingsStore;
+  logoUri: string;
+  announcementsState: Awaited<ReturnType<AnnouncementService["getState"]>>;
+  setPanelTitle: (title: string) => void;
+  postMessage: (message: DashboardHostMessage) => Thenable<boolean>;
+  schedulePublishState: () => void;
+  lastPublishedStateSignature?: string;
+  force?: boolean;
+};
+
+export async function publishDashboardSnapshot(params: PublishDashboardSnapshotParams): Promise<string | undefined> {
+  const state = await buildDashboardState(
+    params.repo,
+    params.settingsStore,
+    params.logoUri,
+    params.announcementsState
+  );
+  void backfillMissingResetCreditExpiries(params.repo, state.accounts, params.schedulePublishState).catch(() => undefined);
+
+  params.setPanelTitle(state.panelTitle);
+  const signature = buildDashboardStateSignature(state);
+  if (!params.force && signature === params.lastPublishedStateSignature) {
+    return undefined;
+  }
+
+  await params.postMessage({
+    type: "dashboard:snapshot",
+    state
+  } satisfies DashboardHostMessage);
+  return signature;
+}
 
 class DashboardPanelController {
   private readonly settingsStore = new ExtensionSettingsStore();
@@ -108,7 +143,7 @@ class DashboardPanelController {
       return;
     }
 
-    await this.publishState();
+    await this.publishState(true);
   }
 
   private getPanelTitle(): string {
@@ -139,17 +174,7 @@ class DashboardPanelController {
     }, delayMs);
   }
 
-  private reloadShell(): void {
-    if (!this.panel) {
-      return;
-    }
-
-    this.webviewReady = false;
-    this.lastPublishedStateSignature = undefined;
-    this.panel.webview.html = renderDashboardShell(this.context, this.panel.webview, this.settingsStore);
-  }
-
-  private async publishState(): Promise<void> {
+  private async publishState(force = false): Promise<void> {
     if (!this.panel || !this.webviewReady) {
       return;
     }
@@ -157,23 +182,26 @@ class DashboardPanelController {
     const logoUri = this.panel.webview
       .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "CT_logo_transparent_square_hd.png"))
       .toString();
-    const state = await buildDashboardState(
-      this.repo,
-      this.settingsStore,
+    const signature = await publishDashboardSnapshot({
+      repo: this.repo,
+      settingsStore: this.settingsStore,
       logoUri,
-      await this.announcements.getState(this.getAnnouncementOptions())
-    );
-    this.panel.title = state.panelTitle;
-    const signature = buildDashboardStateSignature(state);
-    if (signature === this.lastPublishedStateSignature) {
+      announcementsState: await this.announcements.getState(this.getAnnouncementOptions()),
+      setPanelTitle: (title) => {
+        if (this.panel) {
+          this.panel.title = title;
+        }
+      },
+      postMessage: (message) => this.panel!.webview.postMessage(message),
+      schedulePublishState: () => this.schedulePublishState(),
+      lastPublishedStateSignature: this.lastPublishedStateSignature,
+      force
+    });
+    if (!signature) {
       return;
     }
 
     this.lastPublishedStateSignature = signature;
-    await this.panel.webview.postMessage({
-      type: "dashboard:snapshot",
-      state
-    } satisfies DashboardHostMessage);
   }
 
   private async handleActionMessage(
@@ -185,7 +213,7 @@ class DashboardPanelController {
         repo: this.repo,
         resolveLanguage: () => this.settingsStore.resolveLanguage(),
         schedulePublishState: () => this.schedulePublishState(),
-        reloadShell: () => this.reloadShell(),
+        publishState: async (force = false) => this.publishState(force),
         oauth: this.oauth,
         announcements: this.announcements,
         getAnnouncementOptions: () => this.getAnnouncementOptions()
