@@ -29,7 +29,7 @@ describe("executeDashboardActionMessage", () => {
         oauth: {} as DashboardActionContext["oauth"],
         announcements: {} as DashboardActionContext["announcements"],
         getAnnouncementOptions: () => ({
-          version: "0.1.13",
+          version: "0.1.14",
           locale: "en"
         })
       },
@@ -72,7 +72,7 @@ describe("executeDashboardActionMessage", () => {
         oauth: {} as DashboardActionContext["oauth"],
         announcements: {} as DashboardActionContext["announcements"],
         getAnnouncementOptions: () => ({
-          version: "0.1.13",
+          version: "0.1.14",
           locale: "en"
         })
       },

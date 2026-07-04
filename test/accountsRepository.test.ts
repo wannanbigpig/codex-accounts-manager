@@ -414,6 +414,75 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
+  it("removes Aideck mirror data so deleted accounts are not re-imported on next init", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const aideckTokens = createTokens("acct_aideck", "aideck@example.com");
+    const storageId = buildAccountStorageId("aideck@example.com", "acct_aideck", undefined);
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "aideck@example.com",
+      account_id: "acct_aideck",
+      tokens: {
+        id_token: aideckTokens.idToken,
+        access_token: aideckTokens.accessToken,
+        refresh_token: "aideck-refresh-token",
+        account_id: "acct_aideck"
+      }
+    });
+    await fs.writeFile(
+      path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex", "current.json"),
+      JSON.stringify({
+        id: storageId,
+        updated_at: Date.now()
+      }),
+      "utf8"
+    );
+
+    const repo = new AccountsRepository(context);
+    await repo.init();
+    await repo.removeAccount(storageId);
+    repo.dispose();
+
+    const accountFile = path.join(
+      process.env.AIDECK_DATA_DIR as string,
+      "accounts",
+      "codex",
+      "accounts",
+      `${storageId}.json`
+    );
+    await expect(fs.readFile(accountFile, "utf8")).rejects.toThrow();
+
+    const aideckIndex = JSON.parse(
+      await fs.readFile(path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex", "accounts-index.json"), "utf8")
+    );
+    expect(aideckIndex.accounts).not.toContainEqual(expect.objectContaining({ id: storageId }));
+
+    await expect(
+      fs.readFile(path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex", "current.json"), "utf8")
+    ).rejects.toThrow();
+
+    const reloaded = new AccountsRepository(context);
+    await reloaded.init();
+
+    expect(await reloaded.getAccount(storageId)).toBeUndefined();
+
+    reloaded.dispose();
+  });
+
   it("does not replace a valid stored access token with an expired Aideck token", async () => {
     const secrets = new Map<string, string>();
     const context = {

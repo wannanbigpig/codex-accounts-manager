@@ -151,6 +151,20 @@ export async function mirrorAideckCurrentAccount(accountId: string): Promise<voi
   }
 }
 
+export async function removeAideckCodexAccount(accountId: string): Promise<void> {
+  if (!accountId.trim()) {
+    return;
+  }
+
+  try {
+    await fs.rm(getAideckCodexAccountFilePath(accountId), { force: true });
+    await removeAideckCodexIndexRecord(accountId);
+    await clearAideckCurrentAccountIfMatches(accountId);
+  } catch {
+    // Aideck storage is a compatibility mirror. Failing to clean it must not block the VS Code extension store.
+  }
+}
+
 export function getAideckCodexAccountFilePath(accountId: string): string {
   return path.join(getAideckCodexRoot(), "accounts", `${sanitizeFileStem(accountId)}.json`);
 }
@@ -178,6 +192,38 @@ async function writeAideckCodexIndex(accountId: string, account: JsonRecord): Pr
     updated_at: Date.now(),
     accounts: nextAccounts
   });
+}
+
+async function removeAideckCodexIndexRecord(accountId: string): Promise<void> {
+  const indexPath = path.join(getAideckCodexRoot(), "accounts-index.json");
+  const existing = await readJsonFile(indexPath);
+  if (!existing) {
+    return;
+  }
+
+  const accounts: unknown[] = Array.isArray(existing["accounts"]) ? existing["accounts"] : [];
+  const nextAccounts = accounts.filter((item) => getRecord(item)?.["id"] !== accountId);
+  if (nextAccounts.length === accounts.length) {
+    return;
+  }
+
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await writeJsonFile(indexPath, {
+    ...existing,
+    schema_version: readNumber(existing["schema_version"]) ?? 1,
+    updated_at: Date.now(),
+    accounts: nextAccounts
+  });
+}
+
+async function clearAideckCurrentAccountIfMatches(accountId: string): Promise<void> {
+  const currentPath = path.join(getAideckCodexRoot(), "current.json");
+  const current = await readJsonFile(currentPath);
+  if (readString(current?.["id"]) !== accountId) {
+    return;
+  }
+
+  await fs.rm(currentPath, { force: true });
 }
 
 function buildAideckIndexRecord(account: JsonRecord): JsonRecord {

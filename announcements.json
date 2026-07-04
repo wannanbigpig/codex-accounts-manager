@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-07-codex-tools-0-1-13",
+      "id": "ann-2026-07-codex-tools-0-1-14",
       "type": "info",
-      "priority": 560,
-      "releaseVersion": "0.1.13",
-      "title": "Codex Accounts Manager 0.1.13 — Aideck import, reset credits sync, dashboard refresh",
-      "summary": "Auto-import Aideck accounts, improve reset credits sync, and stop dashboard refresh from blocking on backfill.",
-      "content": "This release focuses on account interoperability and reset-credits reliability.\n1. Aideck mirror import: missing Codex accounts from ~/.ai_deck/accounts/codex are now auto-imported on startup, while existing VS Code accounts remain authoritative.\n2. Reset credits snapshot sync: quota refresh now pulls the latest reset-credit count and next expiry in the background, even when the initial quota response is incomplete.\n3. Reset credits parsing: explicit next_expires_at / reset_credits_next_expires_at fields and ISO timestamps are now parsed correctly.\n4. Dashboard refresh fix: opening or manually refreshing the dashboard no longer waits for reset-credits backfill network calls before rendering.\n5. Consume reset credit flow: after using a reset credit, the dashboard now waits for quota refresh so the card updates immediately.",
+      "priority": 570,
+      "releaseVersion": "0.1.14",
+      "title": "Codex Accounts Manager 0.1.14 — account removal sync and Aideck mirror cleanup",
+      "summary": "Deleting a stale saved account now clears its Aideck mirror copy so it does not come back after restart.",
+      "content": "This release focuses on stale-account cleanup consistency.\n1. Remove-account fix: deleting a saved Codex account now clears the matching Aideck mirror account file, index record, and current marker together.\n2. Restart behavior fix: stale accounts removed from VS Code no longer get re-imported from ~/.ai_deck/accounts/codex on the next startup.\n3. Mirror cleanup safety: Aideck compatibility cleanup stays best-effort, so mirror write failures still do not block the VS Code extension store.\n4. Regression coverage: added a repository test that verifies mirror-imported accounts stay deleted after re-initialization.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-07-01T09:00:00Z",
+      "createdAt": "2026-07-04T09:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.13 — Aideck 导入、重置次数同步、Dashboard 刷新修复",
-          "summary": "自动导入 Aideck 账号，补强 reset credits 同步，并修复 Dashboard 刷新被回填阻塞的问题。",
-          "content": "本次更新聚焦账号互通与 reset credits 的稳定性。\n1. Aideck 镜像导入：启动时会自动导入 ~/.ai_deck/accounts/codex 中缺失的 Codex 账号，但不会覆盖 VS Code 侧已有账号。\n2. 重置次数快照同步：刷新配额后会在后台补拉最新的 reset credits 可用次数和最近到期时间，即使首个配额响应没有带全信息也能补齐。\n3. 重置次数解析增强：现在会正确解析 next_expires_at / reset_credits_next_expires_at 字段以及 ISO 时间格式。\n4. Dashboard 刷新修复：打开面板或手动刷新时，不再等待 reset credits 回填网络请求完成后才渲染界面。\n5. 重置配额后的状态更新：消耗一次重置次数后，会等待配额刷新完成，让卡片状态及时更新。"
+          "title": "Codex Accounts Manager 0.1.14 — 账号删除同步与 Aideck 镜像清理",
+          "summary": "删除失效已保存账号时，现在会同步清理 Aideck 镜像，避免扩展重启后被重新导入。",
+          "content": "本次更新聚焦失效账号删除后的状态一致性。\n1. 删除账号修复：删除已保存 Codex 账号时，现在会同步清理对应的 Aideck 镜像账号文件、索引记录和 current 标记。\n2. 重启回流修复：从 VS Code 中删除的失效账号，不会再在下次启动时被 ~/.ai_deck/accounts/codex 自动重新导入。\n3. 镜像清理容错：Aideck 兼容镜像的清理仍保持 best-effort，即使镜像清理失败，也不会阻塞 VS Code 主存储的删除流程。\n4. 回归测试补强：新增仓库级测试，验证从 mirror 导入的账号删除后在重新初始化时仍保持删除状态。"
         }
       }
     },

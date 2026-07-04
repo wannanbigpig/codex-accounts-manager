@@ -90,6 +90,7 @@ import {
   listAideckCodexSharedAccounts,
   mirrorAideckCodexAccount,
   mirrorAideckCurrentAccount,
+  removeAideckCodexAccount,
   readAideckCodexTokens
 } from "./aideckCodexStorage";
 
@@ -803,6 +804,7 @@ export class AccountsRepository {
     await this.secretStore.deleteTokens(accountId);
     this.invalidateTokenCache();
     clearQuotaCacheForAccount(accountId);
+    await removeAideckCodexAccount(accountId);
     this.writeIndex(index);
   }
 
