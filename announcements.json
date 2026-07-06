@@ -6,9 +6,9 @@
       "type": "info",
       "priority": 570,
       "releaseVersion": "0.1.14",
-      "title": "Codex Accounts Manager 0.1.14 — account removal sync and Aideck mirror cleanup",
-      "summary": "Deleting a stale saved account now clears its Aideck mirror copy so it does not come back after restart.",
-      "content": "This release focuses on stale-account cleanup consistency.\n1. Remove-account fix: deleting a saved Codex account now clears the matching Aideck mirror account file, index record, and current marker together.\n2. Restart behavior fix: stale accounts removed from VS Code no longer get re-imported from ~/.ai_deck/accounts/codex on the next startup.\n3. Mirror cleanup safety: Aideck compatibility cleanup stays best-effort, so mirror write failures still do not block the VS Code extension store.\n4. Regression coverage: added a repository test that verifies mirror-imported accounts stay deleted after re-initialization.",
+      "title": "Codex Accounts Manager 0.1.14 — account cleanup and auto-reload fixes",
+      "summary": "Deleting stale saved accounts is now cleaner, and the auto-switch reload toggle now stays enabled reliably.",
+      "content": "This release focuses on stale-account cleanup consistency and auto-switch reload reliability.\n1. Remove-account fix: deleting a saved Codex account now clears the matching Aideck mirror account file, index record, and current marker together.\n2. Restart behavior fix: stale accounts removed from VS Code no longer get re-imported from ~/.ai_deck/accounts/codex on the next startup.\n3. Mirror cleanup safety: Aideck compatibility cleanup stays best-effort, so mirror write failures still do not block the VS Code extension store.\n4. Auto-switch reload fix: the \"Reload after auto switch\" setting is now declared in the VS Code extension manifest, so the Dashboard toggle can persist correctly.\n5. Workspace setting fix: Dashboard setting updates now write back to the active Workspace or Workspace Folder override when one exists, preventing toggles from reverting after the next refresh.\n6. Regression coverage: added repository, manifest, and Dashboard settings tests for mirror deletion and auto-reload setting persistence.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -20,9 +20,9 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.14 — 账号删除同步与 Aideck 镜像清理",
-          "summary": "删除失效已保存账号时，现在会同步清理 Aideck 镜像，避免扩展重启后被重新导入。",
-          "content": "本次更新聚焦失效账号删除后的状态一致性。\n1. 删除账号修复：删除已保存 Codex 账号时，现在会同步清理对应的 Aideck 镜像账号文件、索引记录和 current 标记。\n2. 重启回流修复：从 VS Code 中删除的失效账号，不会再在下次启动时被 ~/.ai_deck/accounts/codex 自动重新导入。\n3. 镜像清理容错：Aideck 兼容镜像的清理仍保持 best-effort，即使镜像清理失败，也不会阻塞 VS Code 主存储的删除流程。\n4. 回归测试补强：新增仓库级测试，验证从 mirror 导入的账号删除后在重新初始化时仍保持删除状态。"
+          "title": "Codex Accounts Manager 0.1.14 — 账号清理与自动重载修复",
+          "summary": "删除失效账号时会更完整地清理镜像，同时自动切号后自动重载开关现在可以稳定保持开启。",
+          "content": "本次更新聚焦失效账号删除后的状态一致性，以及自动切号后自动重载开关的可靠性。\n1. 删除账号修复：删除已保存 Codex 账号时，现在会同步清理对应的 Aideck 镜像账号文件、索引记录和 current 标记。\n2. 重启回流修复：从 VS Code 中删除的失效账号，不会再在下次启动时被 ~/.ai_deck/accounts/codex 自动重新导入。\n3. 镜像清理容错：Aideck 兼容镜像的清理仍保持 best-effort，即使镜像清理失败，也不会阻塞 VS Code 主存储的删除流程。\n4. 自动重载开关修复：现在已在 VS Code 扩展 manifest 中声明“自动切号后自动重载”设置，Dashboard 中的开关可以正确持久化。\n5. 工作区配置修复：Dashboard 修改设置时，如果当前工作区或工作区文件夹已有同名覆盖值，会写回对应层级，避免下一次刷新后开关又回退。\n6. 回归测试补强：新增仓库、manifest 和 Dashboard 设置测试，覆盖 mirror 删除和自动重载设置持久化。"
         }
       }
     },

@@ -8,10 +8,11 @@ vi.mock("vscode", () => ({
     executeCommand: vi.fn()
   },
   workspace: {
-    getConfiguration: () => ({
+    getConfiguration: vi.fn(() => ({
       get: (_key: string, defaultValue?: unknown) => defaultValue,
-      update: vi.fn()
-    }),
+      update: vi.fn(),
+      inspect: vi.fn()
+    })),
     onDidChangeConfiguration: vi.fn()
   },
   window: {
@@ -20,6 +21,8 @@ vi.mock("vscode", () => ({
     showInformationMessage: vi.fn()
   },
   ConfigurationTarget: {
-    Global: 1
+    Global: 1,
+    Workspace: 2,
+    WorkspaceFolder: 3
   }
 }));

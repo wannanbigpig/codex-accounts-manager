@@ -90,6 +90,11 @@
           "default": false,
           "markdownDescription": "Automatically switch away from the active account when its quota falls below the configured hourly or weekly threshold. Candidate accounts are ranked by the best matching remaining quota."
         },
+        "codexAccounts.autoSwitchReloadWindowEnabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Automatically reload the current VS Code window after an automatic account switch when the active runtime account changes."
+        },
         "codexAccounts.autoSwitchHourlyThreshold": {
           "type": "number",
           "minimum": 0,

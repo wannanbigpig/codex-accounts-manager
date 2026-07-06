@@ -9,6 +9,8 @@ import {
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
 
+type DashboardConfigurationKey = DashboardSettingKey | "codexAppPath";
+
 export async function handleDashboardSettingUpdate(
   key: DashboardSettingKey,
   value: string | number | boolean
@@ -19,7 +21,7 @@ export async function handleDashboardSettingUpdate(
   switch (key) {
     case "dashboardTheme":
       if (typeof value === "string") {
-        await config.update(key, normalizeDashboardTheme(value), vscode.ConfigurationTarget.Global);
+        await updateDashboardConfiguration(config, key, normalizeDashboardTheme(value));
         updated = true;
       }
       break;
@@ -30,13 +32,13 @@ export async function handleDashboardSettingUpdate(
     case "quotaWarningEnabled":
     case "debugNetwork":
       if (typeof value === "boolean") {
-        await config.update(key, value, vscode.ConfigurationTarget.Global);
+        await updateDashboardConfiguration(config, key, value);
         updated = true;
       }
       break;
     case "codexAppRestartMode":
       if (value === "auto" || value === "manual") {
-        await config.update(key, value, vscode.ConfigurationTarget.Global);
+        await updateDashboardConfiguration(config, key, value);
         updated = true;
       }
       break;
@@ -47,19 +49,19 @@ export async function handleDashboardSettingUpdate(
     case "quotaYellowThreshold":
     case "autoSwitchLockMinutes":
       if (typeof value === "number") {
-        await config.update(key, value, vscode.ConfigurationTarget.Global);
+        await updateDashboardConfiguration(config, key, value);
         updated = true;
       }
       break;
     case "autoRefreshMinutes":
       if (typeof value === "number") {
-        await config.update(key, normalizeAutoRefreshMinutes(value), vscode.ConfigurationTarget.Global);
+        await updateDashboardConfiguration(config, key, normalizeAutoRefreshMinutes(value));
         updated = true;
       }
       break;
     case "displayLanguage":
       if (typeof value === "string" && isDashboardLanguageOption(value)) {
-        await config.update(key, value, vscode.ConfigurationTarget.Global);
+        await updateDashboardConfiguration(config, key, value);
         updated = true;
       }
       break;
@@ -68,6 +70,28 @@ export async function handleDashboardSettingUpdate(
   }
 
   return updated;
+}
+
+async function updateDashboardConfiguration(
+  config: vscode.WorkspaceConfiguration,
+  key: DashboardConfigurationKey,
+  value: string | number | boolean
+): Promise<void> {
+  await config.update(key, value, resolveConfigurationTarget(config, key));
+}
+
+function resolveConfigurationTarget(
+  config: vscode.WorkspaceConfiguration,
+  key: DashboardConfigurationKey
+): vscode.ConfigurationTarget {
+  const inspected = config.inspect(key);
+  if (inspected?.workspaceFolderValue !== undefined) {
+    return vscode.ConfigurationTarget.WorkspaceFolder;
+  }
+  if (inspected?.workspaceValue !== undefined) {
+    return vscode.ConfigurationTarget.Workspace;
+  }
+  return vscode.ConfigurationTarget.Global;
 }
 
 export async function pickDashboardCodexAppPath(settingsStore: Pick<ExtensionSettingsStore, "resolveLanguage">): Promise<void> {
@@ -83,5 +107,7 @@ export async function pickDashboardCodexAppPath(settingsStore: Pick<ExtensionSet
     return;
   }
 
-  await getCodexAccountsConfiguration().update("codexAppPath", selected[0].fsPath, vscode.ConfigurationTarget.Global);
+  const config = getCodexAccountsConfiguration();
+  const target = resolveConfigurationTarget(config, "codexAppPath");
+  await config.update("codexAppPath", selected[0].fsPath, target);
 }
