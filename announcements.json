@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-07-codex-tools-0-1-14",
+      "id": "ann-2026-07-codex-tools-0-1-15",
       "type": "info",
       "priority": 570,
-      "releaseVersion": "0.1.14",
-      "title": "Codex Accounts Manager 0.1.14 — account cleanup and auto-reload fixes",
-      "summary": "Deleting stale saved accounts is now cleaner, and the auto-switch reload toggle now stays enabled reliably.",
-      "content": "This release focuses on stale-account cleanup consistency and auto-switch reload reliability.\n1. Remove-account fix: deleting a saved Codex account now clears the matching Aideck mirror account file, index record, and current marker together.\n2. Restart behavior fix: stale accounts removed from VS Code no longer get re-imported from ~/.ai_deck/accounts/codex on the next startup.\n3. Mirror cleanup safety: Aideck compatibility cleanup stays best-effort, so mirror write failures still do not block the VS Code extension store.\n4. Auto-switch reload fix: the \"Reload after auto switch\" setting is now declared in the VS Code extension manifest, so the Dashboard toggle can persist correctly.\n5. Workspace setting fix: Dashboard setting updates now write back to the active Workspace or Workspace Folder override when one exists, preventing toggles from reverting after the next refresh.\n6. Regression coverage: added repository, manifest, and Dashboard settings tests for mirror deletion and auto-reload setting persistence.",
+      "releaseVersion": "0.1.15",
+      "title": "Codex Accounts Manager 0.1.15 — multi-workspace identity and mirror sync fixes",
+      "summary": "Fixes same-email Plus and Team workspaces being mixed together, and hardens Aideck mirror token sync to stop cross-workspace bleed-through.",
+      "content": "This release focuses on isolating same-email multi-workspace accounts correctly and stopping bad mirror data from spreading between Codex Accounts Manager and Aideck.\n1. Workspace identity fix: remote profile parsing now prefers the selected workspace record and includes organization identity in the profile cache key, so same-email Plus and Team accounts no longer collapse into the same context.\n2. Plan metadata fix: when accounts/check returns both personal and team records under the same accountId, workspace-scoped plan_type and subscription fields now win over top-level user metadata.\n3. Mirror token safety: Aideck mirror tokens are now adopted only when their email, userId, accountId, organizationId, and embedded JWT claims agree with the target saved account.\n4. Corrupt mirror rejection: if a mirror snapshot's top-level identity disagrees with the token claims inside it, Codex Accounts Manager now ignores that snapshot instead of importing bad tokens into VS Code SecretStorage.\n5. Mirror write guard: token writes back to ~/.ai_deck/accounts/codex now verify identity first, and existing workspace/profile/quota fields are preserved by default to avoid amplifying stale or cross-workspace data.\n6. Regression coverage: added tests for same accountId with different organizationId, workspace-specific plan selection, mirror identity conflicts, and token write-back safety.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-07-04T09:00:00Z",
+      "createdAt": "2026-07-08T04:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.14 — 账号清理与自动重载修复",
-          "summary": "删除失效账号时会更完整地清理镜像，同时自动切号后自动重载开关现在可以稳定保持开启。",
-          "content": "本次更新聚焦失效账号删除后的状态一致性，以及自动切号后自动重载开关的可靠性。\n1. 删除账号修复：删除已保存 Codex 账号时，现在会同步清理对应的 Aideck 镜像账号文件、索引记录和 current 标记。\n2. 重启回流修复：从 VS Code 中删除的失效账号，不会再在下次启动时被 ~/.ai_deck/accounts/codex 自动重新导入。\n3. 镜像清理容错：Aideck 兼容镜像的清理仍保持 best-effort，即使镜像清理失败，也不会阻塞 VS Code 主存储的删除流程。\n4. 自动重载开关修复：现在已在 VS Code 扩展 manifest 中声明“自动切号后自动重载”设置，Dashboard 中的开关可以正确持久化。\n5. 工作区配置修复：Dashboard 修改设置时，如果当前工作区或工作区文件夹已有同名覆盖值，会写回对应层级，避免下一次刷新后开关又回退。\n6. 回归测试补强：新增仓库、manifest 和 Dashboard 设置测试，覆盖 mirror 删除和自动重载设置持久化。"
+          "title": "Codex Accounts Manager 0.1.15 — 多 workspace 身份隔离与镜像同步修复",
+          "summary": "修复同邮箱 Plus 与 Team workspace 被串成同一账号上下文的问题，并收紧 Aideck mirror 的 token 同步，阻止跨 workspace 串写。",
+          "content": "本次更新聚焦同邮箱多 workspace 账号的身份隔离，以及 Codex Accounts Manager 与 Aideck 之间 mirror 同步的止血与收口。\n1. Workspace 身份修复：远端 profile 解析现在优先使用当前选中的 workspace 记录，并把 organization 身份纳入 profile 缓存键，同邮箱的 Plus 与 Team 账号不会再落到同一个上下文。\n2. 套餐元数据修复：当 accounts/check 在同一个 accountId 下同时返回个人与团队记录时，现在优先采用 workspace 记录上的 plan_type 和订阅字段，不再被顶层用户级元数据覆盖。\n3. Mirror token 安全校验：只有当 Aideck mirror 中的 email、userId、accountId、organizationId，以及嵌入 JWT claims 与目标保存账号一致时，才会吸收外部 token。\n4. 脏 mirror 快照拒收：如果 mirror 文件顶层 identity 与内部 token claims 自相矛盾，Codex Accounts Manager 现在会直接忽略该快照，不再把坏 token 导入 VS Code SecretStorage。\n5. Mirror 回写保护：回写 ~/.ai_deck/accounts/codex 时会先校验 token identity，且默认保留已有 workspace/profile/quota 字段，避免把陈旧或跨 workspace 的错误数据继续放大。\n6. 回归测试补强：新增“同 accountId 不同 organizationId”“workspace 套餐优先级”“mirror identity 冲突”“token 回写安全”相关测试。"
         }
       }
     },

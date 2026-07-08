@@ -6,6 +6,22 @@
 - 历史版本正文统一写在本文件，按版本追加条目，不做删除。
 - 详情可按 `releaseVersion` 反查本次发布公告对应的 `id` 与变更内容。
 
+## 0.1.15（2026-07-08）
+
+### 变更内容
+
+- 修复同邮箱下个人 `Plus` 与团队 `Team` workspace 共享 `accountId` 时，profile/workspace 识别可能串到同一账号上下文的问题。
+- 远端 `accounts/check` / profile 解析优先使用选中的 workspace 记录，并把 `organizationId` 纳入 profile 缓存键。
+- 收紧 Aideck mirror token 吸收条件，仅在 `email`、`userId`、`accountId`、`organizationId` 以及 token claims 一致时才覆盖本地 SecretStorage。
+- mirror 文件若出现“顶层 identity 与嵌入 token claims 不一致”，现在会在读取阶段直接丢弃。
+- mirror 回写增加 identity 校验，并默认保留已有 workspace/profile/quota 字段，避免跨项目继续放大脏数据。
+- 补充多 workspace、mirror identity 冲突和 token 回写安全的回归测试。
+
+### 说明
+
+- 本版本公告使用新 `id`：`ann-2026-07-codex-tools-0-1-15`。
+- 本次发版同时包含 `codex-tools` 与 Aideck 串号问题对应的 VS Code 侧止血修复。
+
 ## 0.1.9（2026-04-28）
 
 ### 变更内容

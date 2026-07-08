@@ -87,6 +87,7 @@ import { extractClaims, isTokenExpired } from "../utils/jwt";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
 import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
 import {
+  AideckMirrorTokenSnapshot,
   listAideckCodexSharedAccounts,
   mirrorAideckCodexAccount,
   mirrorAideckCurrentAccount,
@@ -352,8 +353,14 @@ export class AccountsRepository {
         return storedTokens;
       }
 
+      const index = await this.readIndex();
+      const account = index.accounts.find((item) => item.id === accountId);
+      if (!account) {
+        return storedTokens;
+      }
+
       const aideckTokens = await readAideckCodexTokens(accountId);
-      const mergedTokens = mergeExternalTokens(storedTokens, aideckTokens);
+      const mergedTokens = mergeExternalTokens(storedTokens, aideckTokens, account);
 
       if (!mergedTokens) {
         return storedTokens;
@@ -1244,9 +1251,14 @@ function toComparableTokenSnapshot(tokens: CodexTokens | undefined): string {
 
 function mergeExternalTokens(
   current: CodexTokens | undefined,
-  external: Partial<CodexTokens> | undefined
+  external: AideckMirrorTokenSnapshot | undefined,
+  account?: CodexAccountRecord
 ): CodexTokens | undefined {
   if (!external) {
+    return current;
+  }
+
+  if (!canAdoptExternalMirrorTokens(current, external, account)) {
     return current;
   }
 
@@ -1272,6 +1284,140 @@ function mergeExternalTokens(
   }
 
   return merged;
+}
+
+function canAdoptExternalMirrorTokens(
+  current: CodexTokens | undefined,
+  external: AideckMirrorTokenSnapshot,
+  account?: CodexAccountRecord
+): boolean {
+  const externalClaims = safeExtractTokenClaims(external);
+  if (!isMirrorSnapshotInternallyConsistent(external, externalClaims)) {
+    return false;
+  }
+
+  if (
+    hasRequiredIdentityMismatch(account?.email ? normalizeEmailIdentity(account.email) : undefined, externalClaims?.email) ||
+    hasRequiredIdentityMismatch(account?.userId, externalClaims?.userId) ||
+    hasRequiredIdentityMismatch(account?.accountId, external.accountId ?? externalClaims?.accountId) ||
+    hasRequiredIdentityMismatch(account?.organizationId, externalClaims?.organizationId)
+  ) {
+    return false;
+  }
+
+  const expected = buildExpectedMirrorIdentity(account, current);
+  const candidate = buildExternalMirrorIdentity(external, externalClaims);
+  if (
+    hasRequiredIdentityMismatch(expected.email, candidate.email) ||
+    hasRequiredIdentityMismatch(expected.userId, candidate.userId) ||
+    hasRequiredIdentityMismatch(expected.accountId, candidate.accountId) ||
+    hasRequiredIdentityMismatch(expected.organizationId, candidate.organizationId)
+  ) {
+    return false;
+  }
+
+  return Boolean(candidate.accountId || candidate.organizationId || candidate.email || candidate.userId);
+}
+
+function buildExpectedMirrorIdentity(
+  account: CodexAccountRecord | undefined,
+  current: CodexTokens | undefined
+): {
+  email?: string;
+  userId?: string;
+  accountId?: string;
+  organizationId?: string;
+} {
+  const claims = safeExtractTokenClaims(current);
+  return {
+    email: normalizeEmailIdentity(account?.email ?? claims?.email),
+    userId: account?.userId ?? claims?.userId,
+    accountId: account?.accountId ?? current?.accountId ?? claims?.accountId,
+    organizationId: account?.organizationId ?? claims?.organizationId
+  };
+}
+
+function buildExternalMirrorIdentity(
+  external: AideckMirrorTokenSnapshot,
+  claims: {
+    email?: string;
+    userId?: string;
+    accountId?: string;
+    organizationId?: string;
+  } | undefined = safeExtractTokenClaims(external)
+): {
+  email?: string;
+  userId?: string;
+  accountId?: string;
+  organizationId?: string;
+} {
+  return {
+    email: normalizeEmailIdentity(external.email ?? claims?.email),
+    userId: external.userId ?? claims?.userId,
+    accountId: external.accountId ?? claims?.accountId,
+    organizationId: external.organizationId ?? claims?.organizationId
+  };
+}
+
+function safeExtractTokenClaims(tokens: Partial<CodexTokens> | undefined):
+  | {
+      email?: string;
+      userId?: string;
+      accountId?: string;
+      organizationId?: string;
+    }
+  | undefined {
+  if (!tokens?.idToken) {
+    return undefined;
+  }
+
+  try {
+    const claims = extractClaims(tokens.idToken, tokens.accessToken);
+    return {
+      email: normalizeEmailIdentity(claims.email),
+      userId: claims.userId,
+      accountId: claims.accountId,
+      organizationId: claims.organizationId
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeEmailIdentity(email: string | undefined): string | undefined {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed || undefined;
+}
+
+function isMirrorSnapshotInternallyConsistent(
+  external: AideckMirrorTokenSnapshot,
+  claims:
+    | {
+        email?: string;
+        userId?: string;
+        accountId?: string;
+        organizationId?: string;
+      }
+    | undefined
+): boolean {
+  if (!external.idToken) {
+    return true;
+  }
+
+  if (!claims) {
+    return false;
+  }
+
+  return !(
+    hasRequiredIdentityMismatch(normalizeEmailIdentity(external.email), claims.email) ||
+    hasRequiredIdentityMismatch(external.userId, claims.userId) ||
+    hasRequiredIdentityMismatch(external.accountId, claims.accountId) ||
+    hasRequiredIdentityMismatch(external.organizationId, claims.organizationId)
+  );
+}
+
+function hasRequiredIdentityMismatch(expected: string | undefined, candidate: string | undefined): boolean {
+  return Boolean(expected && expected !== candidate);
 }
 
 /**

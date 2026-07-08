@@ -67,8 +67,9 @@ export async function fetchRemoteAccountProfile(
 ): Promise<RemoteAccountProfile | undefined> {
   const claims = extractClaims(tokens.idToken, tokens.accessToken);
   const accountId = tokens.accountId ?? claims.accountId;
+  const organizationId = claims.organizationId;
   pruneProfileCache();
-  const cacheKey = buildProfileCacheKey(tokens.accessToken, accountId);
+  const cacheKey = buildProfileCacheKey(tokens.accessToken, accountId, organizationId);
   const cached = profileCache.get(cacheKey);
   if (cached && !options.forceRefresh) {
     return cached.profile;
@@ -188,8 +189,11 @@ function parseAccountProfile(
   let selected: Record<string, unknown> | undefined;
 
   if (expectedAccountId) {
-    selected = findById(records, expectedAccountId);
-    // 当请求已明确指定账号时，只接受精确匹配，避免把其他 workspace 错绑到当前令牌上。
+    selected =
+      findByIdAndOrg(records, expectedAccountId, expectedOrgId) ??
+      findByOrg(records, expectedOrgId) ??
+      findById(records, expectedAccountId);
+    // 当请求已明确指定账号或组织时，只接受 workspace 身份匹配的记录，避免把其他 workspace 错绑到当前令牌上。
     if (!selected) {
       return undefined;
     }
@@ -215,13 +219,15 @@ function parseAccountProfile(
   return {
     email: readField(payload, ["email"]) ?? readField(selected, ["email"]),
     userId: readField(payload, ["user_id", "userId"]) ?? readField(selected, ["user_id", "userId"]),
-    planType: readField(payload, ["plan_type", "planType"]) ?? readField(selected, ["plan_type", "planType"]),
+    // Workspace-scoped metadata should win over top-level user metadata.
+    planType: readField(selected, ["plan_type", "planType"]) ?? readField(payload, ["plan_type", "planType"]),
     organizationId:
       readField(selected, ["organization_id", "org_id", "workspace_id"]) ??
       readField(payload, ["organization_id", "org_id"]),
     subscriptionActiveUntil:
+      readScalarField(selected, ["subscription_active_until", "subscriptionActiveUntil", "chatgpt_subscription_active_until"]) ??
       readScalarField(payload, ["subscription_active_until", "subscriptionActiveUntil", "chatgpt_subscription_active_until"]) ??
-      readScalarField(selected, ["subscription_active_until", "subscriptionActiveUntil", "chatgpt_subscription_active_until"]),
+      undefined,
     accountName: readField(selected, [
       "name",
       "display_name",
@@ -263,6 +269,22 @@ function findById(records: Array<Record<string, unknown>>, expectedId?: string):
     const candidate = readField(record, ["id", "account_id", "chatgpt_account_id", "workspace_id"]);
     return candidate === expectedId;
   })!;
+}
+
+function findByIdAndOrg(
+  records: Array<Record<string, unknown>>,
+  expectedId?: string,
+  expectedOrgId?: string
+): Record<string, unknown> | undefined {
+  if (!expectedId || !expectedOrgId) {
+    return undefined;
+  }
+
+  return records.find((record) => {
+    const candidateId = readField(record, ["id", "account_id", "chatgpt_account_id", "workspace_id"]);
+    const candidateOrg = readField(record, ["organization_id", "org_id", "workspace_id"]);
+    return candidateId === expectedId && candidateOrg === expectedOrgId;
+  });
 }
 
 /**
@@ -314,8 +336,8 @@ function readScalarField(record: Record<string, unknown> | undefined, keys: stri
   return undefined;
 }
 
-function buildProfileCacheKey(accessToken: string, accountId?: string): string {
-  return `${accessToken}::${accountId ?? ""}`;
+function buildProfileCacheKey(accessToken: string, accountId?: string, organizationId?: string): string {
+  return `${accessToken}::${accountId ?? ""}::${organizationId ?? ""}`;
 }
 
 function pruneProfileCache(): void {

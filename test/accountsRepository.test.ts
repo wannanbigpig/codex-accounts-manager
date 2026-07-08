@@ -20,6 +20,7 @@ vi.mock("../src/codex", async (importOriginal) => {
 });
 
 import { AccountsRepository } from "../src/storage";
+import { mirrorAideckCodexAccount } from "../src/storage/aideckCodexStorage";
 import { buildAccountStorageId } from "../src/utils/accountIdentity";
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -27,18 +28,31 @@ function createJwt(payload: Record<string, unknown>): string {
   return `header.${encoded}.signature`;
 }
 
-function createTokens(accountId = "acct_123", email = "dev@example.com"): CodexTokens {
+function createTokens(
+  accountId = "acct_123",
+  email = "dev@example.com",
+  options: {
+    organizationId?: string;
+    userId?: string;
+  } = {}
+): CodexTokens {
+  const authPayload: Record<string, unknown> = {
+    chatgpt_account_id: accountId
+  };
+  if (options.organizationId) {
+    authPayload["organization_id"] = options.organizationId;
+  }
+  if (options.userId) {
+    authPayload["chatgpt_user_id"] = options.userId;
+  }
+
   return {
     idToken: createJwt({
       email,
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: accountId
-      }
+      "https://api.openai.com/auth": authPayload
     }),
     accessToken: createJwt({
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: accountId
-      }
+      "https://api.openai.com/auth": authPayload
     }),
     refreshToken: "refresh-token",
     accountId
@@ -353,6 +367,154 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
+  it("does not absorb an Aideck token from a different organization when accountId is shared", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const storageId = buildAccountStorageId("dev@example.com", "acct_shared", "org_team");
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        currentAccountId: storageId,
+        accounts: [
+          {
+            id: storageId,
+            email: "dev@example.com",
+            userId: "user_same",
+            accountId: "acct_shared",
+            organizationId: "org_team",
+            isActive: true,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+    await context.secrets.store(
+      `codex.account.${storageId}`,
+      JSON.stringify(createTokens("acct_shared", "dev@example.com", { organizationId: "org_team", userId: "user_same" }))
+    );
+
+    const externalTokens = createTokens("acct_shared", "dev@example.com", {
+      organizationId: "org_plus",
+      userId: "user_same"
+    });
+    externalTokens.refreshToken = "wrong-org-refresh-token";
+    const aideckAccountFile = path.join(
+      process.env.AIDECK_DATA_DIR as string,
+      "accounts",
+      "codex",
+      "accounts",
+      `${storageId}.json`
+    );
+    await fs.mkdir(path.dirname(aideckAccountFile), { recursive: true });
+    await fs.writeFile(
+      aideckAccountFile,
+      JSON.stringify({
+        id: storageId,
+        email: "dev@example.com",
+        organization_id: "org_plus",
+        user_id: "user_same",
+        tokens: {
+          id_token: externalTokens.idToken,
+          access_token: externalTokens.accessToken,
+          refresh_token: externalTokens.refreshToken,
+          account_id: externalTokens.accountId
+        }
+      }),
+      "utf8"
+    );
+
+    const repo = new AccountsRepository(context);
+    const merged = await repo.getTokens(storageId);
+
+    expect(merged?.refreshToken).toBe("refresh-token");
+    expect(merged?.accessToken).not.toBe(externalTokens.accessToken);
+    expect(JSON.parse(secrets.get(`codex.account.${storageId}`) ?? "{}")).toMatchObject({
+      refreshToken: "refresh-token",
+      accountId: "acct_shared"
+    });
+
+    repo.dispose();
+  });
+
+  it("ignores Aideck mirror tokens when mirror identity and embedded tokens disagree", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const storageId = buildAccountStorageId("dev@example.com", "acct_shared", "org_team");
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        currentAccountId: storageId,
+        accounts: [
+          {
+            id: storageId,
+            email: "dev@example.com",
+            userId: "user_same",
+            accountId: "acct_shared",
+            organizationId: "org_team",
+            isActive: true,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+
+    const wrongOrgTokens = createTokens("acct_shared", "dev@example.com", {
+      organizationId: "org_plus",
+      userId: "user_same"
+    });
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "dev@example.com",
+      user_id: "user_same",
+      account_id: "acct_shared",
+      organization_id: "org_team",
+      tokens: {
+        id_token: wrongOrgTokens.idToken,
+        access_token: wrongOrgTokens.accessToken,
+        refresh_token: "wrong-org-refresh-token",
+        account_id: wrongOrgTokens.accountId
+      }
+    });
+
+    const repo = new AccountsRepository(context);
+    const merged = await repo.getTokens(storageId);
+
+    expect(merged).toBeUndefined();
+    expect(secrets.get(`codex.account.${storageId}`)).toBeUndefined();
+
+    repo.dispose();
+  });
+
   it("does not overwrite existing VS Code accounts from Aideck mirror on init", async () => {
     const secrets = new Map<string, string>();
     const context = {
@@ -650,6 +812,165 @@ describe("AccountsRepository token persistence", () => {
     expect(aideckIndex.accounts).toContainEqual(expect.objectContaining({ id: storageId, has_quota: true }));
 
     repo.dispose();
+  });
+
+  it("preserves existing Aideck workspace metadata and quota when codex-tools mirrors tokens", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: {
+        fsPath: tempDir
+      },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const storageId = buildAccountStorageId("dev@example.com", "acct_123", "org_team");
+    await fs.writeFile(
+      path.join(tempDir, "accounts-index.json"),
+      JSON.stringify({
+        currentAccountId: storageId,
+        accounts: [
+          {
+            id: storageId,
+            email: "dev@example.com",
+            userId: "user_same",
+            accountId: "acct_123",
+            organizationId: "org_team",
+            accountName: "VS Code Personal",
+            accountStructure: "personal",
+            planType: "plus",
+            isActive: true,
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ]
+      }),
+      "utf8"
+    );
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "dev@example.com",
+      user_id: "user_same",
+      account_id: "acct_123",
+      organization_id: "org_team",
+      plan_type: "team",
+      subscription_active_until: "1900000000",
+      account_name: "Aideck Team Workspace",
+      account_structure: "organization",
+      quota: {
+        hourly_percentage: 12,
+        weekly_percentage: 34,
+        code_review_percentage: 0,
+        updated_at: 123
+      },
+      tokens: {
+        id_token: createTokens("acct_123", "dev@example.com", { organizationId: "org_team", userId: "user_same" }).idToken,
+        access_token: createTokens("acct_123", "dev@example.com", { organizationId: "org_team", userId: "user_same" }).accessToken,
+        refresh_token: "old-aideck-refresh",
+        account_id: "acct_123"
+      }
+    });
+
+    const repo = new AccountsRepository(context);
+    const updatedTokens = createTokens("acct_123", "dev@example.com", {
+      organizationId: "org_team",
+      userId: "user_same"
+    });
+    updatedTokens.refreshToken = "shared-refresh-token";
+
+    await repo.updateQuota(
+      storageId,
+      {
+        hourlyPercentage: 91,
+        hourlyResetTime: 1_800_000_000,
+        hourlyWindowMinutes: 300,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 64,
+        weeklyResetTime: 1_800_100_000,
+        weeklyWindowMinutes: 10080,
+        weeklyWindowPresent: true,
+        codeReviewPercentage: 64,
+        codeReviewWindowPresent: false
+      },
+      undefined,
+      updatedTokens,
+      undefined,
+      "1800000000"
+    );
+
+    const aideckAccountFile = path.join(
+      process.env.AIDECK_DATA_DIR as string,
+      "accounts",
+      "codex",
+      "accounts",
+      `${storageId}.json`
+    );
+    const aideckAccount = JSON.parse(await fs.readFile(aideckAccountFile, "utf8"));
+    expect(aideckAccount.tokens.refresh_token).toBe("shared-refresh-token");
+    expect(aideckAccount.plan_type).toBe("team");
+    expect(aideckAccount.subscription_active_until).toBe("1900000000");
+    expect(aideckAccount.account_name).toBe("Aideck Team Workspace");
+    expect(aideckAccount.account_structure).toBe("organization");
+    expect(aideckAccount.quota.hourly_percentage).toBe(12);
+    expect(aideckAccount.quota.weekly_percentage).toBe(34);
+
+    repo.dispose();
+  });
+
+  it("does not overwrite Aideck mirror tokens when supplied tokens do not match account identity", async () => {
+    const storageId = buildAccountStorageId("dev@example.com", "acct_123", "org_team");
+    const existingTokens = createTokens("acct_123", "dev@example.com", {
+      organizationId: "org_team",
+      userId: "user_same"
+    });
+    await writeAideckAccountJson(storageId, {
+      id: storageId,
+      email: "dev@example.com",
+      user_id: "user_same",
+      account_id: "acct_123",
+      organization_id: "org_team",
+      tokens: {
+        id_token: existingTokens.idToken,
+        access_token: existingTokens.accessToken,
+        refresh_token: existingTokens.refreshToken,
+        account_id: existingTokens.accountId
+      }
+    });
+
+    await mirrorAideckCodexAccount(
+      {
+        id: storageId,
+        email: "dev@example.com",
+        userId: "user_same",
+        accountId: "acct_123",
+        organizationId: "org_team",
+        isActive: false,
+        createdAt: 1,
+        updatedAt: 1
+      },
+      createTokens("acct_123", "dev@example.com", {
+        organizationId: "org_plus",
+        userId: "user_same"
+      })
+    );
+
+    const aideckAccountFile = path.join(
+      process.env.AIDECK_DATA_DIR as string,
+      "accounts",
+      "codex",
+      "accounts",
+      `${storageId}.json`
+    );
+    const aideckAccount = JSON.parse(await fs.readFile(aideckAccountFile, "utf8"));
+    expect(aideckAccount.tokens.id_token).toBe(existingTokens.idToken);
+    expect(aideckAccount.tokens.access_token).toBe(existingTokens.accessToken);
+    expect(aideckAccount.tokens.refresh_token).toBe(existingTokens.refreshToken);
   });
 
   it("repairs status visibility when force-activating an OAuth account", async () => {

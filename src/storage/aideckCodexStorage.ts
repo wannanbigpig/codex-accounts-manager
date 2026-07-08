@@ -2,10 +2,17 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens, SharedCodexAccountJson } from "../core/types";
+import { extractClaims } from "../utils/jwt";
 
 type JsonRecord = Record<string, unknown>;
 
-export async function readAideckCodexTokens(accountId: string): Promise<Partial<CodexTokens> | undefined> {
+export type AideckMirrorTokenSnapshot = Partial<CodexTokens> & {
+  email?: string;
+  userId?: string;
+  organizationId?: string;
+};
+
+export async function readAideckCodexTokens(accountId: string): Promise<AideckMirrorTokenSnapshot | undefined> {
   const filePath = getAideckCodexAccountFilePath(accountId);
   try {
     const parsed = (await readJsonFile(filePath)) ?? {};
@@ -28,12 +35,17 @@ export async function readAideckCodexTokens(accountId: string): Promise<Partial<
       return undefined;
     }
 
-    return {
+    const snapshot = {
       idToken,
       accessToken,
       refreshToken,
-      accountId: externalAccountId
+      accountId: externalAccountId,
+      email: readString(parsed["email"]),
+      userId: readString(parsed["user_id"]),
+      organizationId: readString(parsed["organization_id"])
     };
+
+    return isMirrorSnapshotConsistent(snapshot) ? snapshot : undefined;
   } catch {
     return undefined;
   }
@@ -88,13 +100,16 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const existing = (await readJsonFile(filePath)) ?? {};
     const existingTokens = getRecord(existing["tokens"]) ?? {};
-    const nextTokens = tokens
+    const existingQuota = getRecord(existing["quota"]);
+    const existingQuotaError = getSharedQuotaError(existing["quota_error"]);
+    const safeTokens = shouldMirrorTokensForAccount(account, tokens) ? tokens : undefined;
+    const nextTokens = safeTokens
       ? {
           ...existingTokens,
-          id_token: tokens.idToken,
-          access_token: tokens.accessToken,
-          refresh_token: tokens.refreshToken,
-          account_id: account.accountId ?? tokens.accountId ?? readString(existingTokens["account_id"]) ?? ""
+          id_token: safeTokens.idToken,
+          access_token: safeTokens.accessToken,
+          refresh_token: safeTokens.refreshToken,
+          account_id: account.accountId ?? safeTokens.accountId ?? readString(existingTokens["account_id"]) ?? ""
         }
       : existingTokens;
     const next = {
@@ -103,27 +118,31 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
       email: account.email.trim().toLowerCase(),
       auth_mode: readString(existing["auth_mode"]) ?? "",
       user_id: account.userId ?? readString(existing["user_id"]) ?? "",
-      plan_type: account.planType ?? readString(existing["plan_type"]) ?? "",
+      // The Aideck mirror is a compatibility layer, not an authority for workspace-scoped metadata.
+      // Preserve existing workspace/quota fields when they already exist to avoid amplifying stale context from VS Code.
+      plan_type: readString(existing["plan_type"]) ?? account.planType ?? "",
       subscription_active_until:
-        account.subscriptionActiveUntil ?? readString(existing["subscription_active_until"]) ?? "",
+        readString(existing["subscription_active_until"]) ?? account.subscriptionActiveUntil ?? "",
       account_id: account.accountId ?? readString(existing["account_id"]) ?? "",
       organization_id: account.organizationId ?? readString(existing["organization_id"]) ?? "",
-      account_name: account.accountName ?? readString(existing["account_name"]) ?? "",
-      account_structure: account.accountStructure ?? readString(existing["account_structure"]) ?? "",
+      account_name: readString(existing["account_name"]) ?? account.accountName ?? "",
+      account_structure: readString(existing["account_structure"]) ?? account.accountStructure ?? "",
       added_via: account.addedVia ?? readString(existing["added_via"]) ?? "",
       added_at: readNumber(existing["added_at"]) ?? account.createdAt ?? now,
       created_at: account.createdAt ?? readNumber(existing["created_at"]) ?? now,
       last_used: account.isActive ? now : (readNumber(existing["last_used"]) ?? account.updatedAt ?? 0),
       updated_at: now,
       tokens: nextTokens,
-      quota: account.quotaSummary ? toAideckQuota(account.quotaSummary, account.lastQuotaAt) : existing["quota"] ?? null,
-      quota_error: account.quotaError
-        ? {
-            code: account.quotaError.code,
-            message: account.quotaError.message,
-            timestamp: account.quotaError.timestamp
-          }
-        : null,
+      quota: existingQuota ?? (account.quotaSummary ? toAideckQuota(account.quotaSummary, account.lastQuotaAt) : null),
+      quota_error:
+        existingQuotaError ??
+        (account.quotaError
+          ? {
+              code: account.quotaError.code,
+              message: account.quotaError.message,
+              timestamp: account.quotaError.timestamp
+            }
+          : null),
       tags: account.tags?.length ? [...account.tags] : []
     };
 
@@ -368,6 +387,76 @@ function getStringArray(value: unknown): string[] | undefined {
   }
   const out = value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean);
   return out.length ? out : undefined;
+}
+
+function shouldMirrorTokensForAccount(account: CodexAccountRecord, tokens: CodexTokens | undefined): tokens is CodexTokens {
+  if (!tokens?.idToken || !tokens.accessToken) {
+    return false;
+  }
+
+  const claims = safeExtractMirrorClaims(tokens);
+  if (!claims) {
+    return false;
+  }
+
+  return !(
+    hasRequiredIdentityMismatch(normalizeEmail(account.email), claims.email) ||
+    hasRequiredIdentityMismatch(account.userId, claims.userId) ||
+    hasRequiredIdentityMismatch(account.accountId, tokens.accountId ?? claims.accountId) ||
+    hasRequiredIdentityMismatch(account.organizationId, claims.organizationId)
+  );
+}
+
+function isMirrorSnapshotConsistent(snapshot: AideckMirrorTokenSnapshot): boolean {
+  if (!snapshot.idToken) {
+    return true;
+  }
+
+  const claims = safeExtractMirrorClaims(snapshot);
+  if (!claims) {
+    return false;
+  }
+
+  return !(
+    hasRequiredIdentityMismatch(normalizeEmail(snapshot.email), claims.email) ||
+    hasRequiredIdentityMismatch(snapshot.userId, claims.userId) ||
+    hasRequiredIdentityMismatch(snapshot.accountId, claims.accountId) ||
+    hasRequiredIdentityMismatch(snapshot.organizationId, claims.organizationId)
+  );
+}
+
+function safeExtractMirrorClaims(tokens: Partial<CodexTokens> | undefined):
+  | {
+      email?: string;
+      userId?: string;
+      accountId?: string;
+      organizationId?: string;
+    }
+  | undefined {
+  if (!tokens?.idToken) {
+    return undefined;
+  }
+
+  try {
+    const claims = extractClaims(tokens.idToken, tokens.accessToken);
+    return {
+      email: normalizeEmail(claims.email),
+      userId: claims.userId,
+      accountId: claims.accountId,
+      organizationId: claims.organizationId
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeEmail(email: string | undefined): string | undefined {
+  const trimmed = email?.trim().toLowerCase();
+  return trimmed || undefined;
+}
+
+function hasRequiredIdentityMismatch(expected: string | undefined, candidate: string | undefined): boolean {
+  return Boolean(expected && expected !== candidate);
 }
 
 async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {
