@@ -20,6 +20,7 @@ import { getDashboardCopy } from "../dashboard/copy";
 import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
 
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
+const HOURLY_QUOTA_CONTROL_ENABLED = "hourlyQuotaControlEnabled";
 const AUTO_SWITCH_RELOAD_WINDOW_ENABLED = "autoSwitchReloadWindowEnabled";
 const AUTO_SWITCH_HOURLY_THRESHOLD = "autoSwitchHourlyThreshold";
 const AUTO_SWITCH_WEEKLY_THRESHOLD = "autoSwitchWeeklyThreshold";
@@ -35,6 +36,7 @@ export type RefreshView = {
 
 type RefreshSingleQuotaOptions = {
   announce?: boolean;
+  awaitSubscriptionRefresh?: boolean;
   forceRefresh?: boolean;
   refreshView?: boolean;
   warnQuota?: boolean;
@@ -48,6 +50,7 @@ export async function refreshSingleQuota(
 ): Promise<void> {
   const announce = options.announce ?? true;
   const forceRefresh = options.forceRefresh ?? announce;
+  const awaitSubscriptionRefresh = options.awaitSubscriptionRefresh ?? false;
   const shouldRefreshView = options.refreshView ?? true;
   const warnQuota = options.warnQuota ?? true;
   const account = await repo.getAccount(accountId);
@@ -69,8 +72,14 @@ export async function refreshSingleQuota(
     result.updatedPlanType,
     result.updatedSubscriptionActiveUntil
   );
-  // 后台异步刷新订阅到期时间（对齐 cockpit refresh_subscription_state），不阻塞配额刷新
-  void repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
+  const subscriptionRefresh = repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
+  if (awaitSubscriptionRefresh) {
+    // 账号信息同步需要等订阅写入完成后再发布页面状态，避免继续展示旧套餐和旧到期时间。
+    await subscriptionRefresh;
+  } else {
+    // 普通配额刷新保持后台更新，避免订阅接口拖慢操作。
+    void subscriptionRefresh;
+  }
   // 后台异步拉取重置次数明细（含最新可用次数与最近到期时间），不阻塞配额刷新
   if (!result.error && updatedAccount.quotaSummary) {
     const credTokens = result.updatedTokens ?? tokens;
@@ -199,6 +208,7 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
 
   const hourlyThreshold = normalizeAutoSwitchThreshold(config.get<number>(AUTO_SWITCH_HOURLY_THRESHOLD, 20));
   const weeklyThreshold = normalizeAutoSwitchThreshold(config.get<number>(AUTO_SWITCH_WEEKLY_THRESHOLD, 20));
+  const hourlyQuotaControlEnabled = config.get<boolean>(HOURLY_QUOTA_CONTROL_ENABLED, false);
   const accounts = await repo.listAccounts();
   const active = accounts.find((account) => account.isActive);
   if (!active?.quotaSummary || active.quotaError) {
@@ -209,7 +219,9 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
   }
 
   const activeHourlyTriggered =
-    hasComparableHourlyWindow(active) && active.quotaSummary.hourlyPercentage <= hourlyThreshold;
+    hourlyQuotaControlEnabled &&
+    hasComparableHourlyWindow(active) &&
+    active.quotaSummary.hourlyPercentage <= hourlyThreshold;
   const activeWeeklyTriggered =
     hasComparableWeeklyWindow(active) && active.quotaSummary.weeklyPercentage <= weeklyThreshold;
   const shouldSwitch = activeHourlyTriggered || activeWeeklyTriggered;
@@ -286,19 +298,31 @@ export async function maybeWarnForAccount(repo: AccountsRepository, accountId: s
   }
 
   const threshold = normalizeQuotaWarningThreshold(config.get<number>(QUOTA_WARNING_THRESHOLD, 20));
+  const hourlyQuotaControlEnabled = config.get<boolean>(HOURLY_QUOTA_CONTROL_ENABLED, false);
   const account = await repo.getAccount(accountId);
   if (!account?.isActive || !account.quotaSummary) {
     return;
   }
 
   const copy = getQuotaWarningCopy();
-  const checks = [
-    { label: copy.hourlyLabel, value: account.quotaSummary.hourlyPercentage },
-    { label: copy.weeklyLabel, value: account.quotaSummary.weeklyPercentage }
-  ];
+  if (!hourlyQuotaControlEnabled) {
+    clearQuotaWarningCountsForDimension("hourly");
+  }
+
+  const checks: Array<{ dimension: "hourly" | "weekly"; label: string; value: number }> = [];
+  if (hourlyQuotaControlEnabled && hasComparableHourlyWindow(account)) {
+    checks.push({ dimension: "hourly", label: copy.hourlyLabel, value: account.quotaSummary.hourlyPercentage });
+  } else {
+    clearQuotaWarningCount(account.id, "hourly");
+  }
+  if (hasComparableWeeklyWindow(account)) {
+    checks.push({ dimension: "weekly", label: copy.weeklyLabel, value: account.quotaSummary.weeklyPercentage });
+  } else {
+    clearQuotaWarningCount(account.id, "weekly");
+  }
 
   for (const check of checks) {
-    const warnKey = `${account.id}:${check.label}:${threshold}`;
+    const warnKey = `${account.id}:${check.dimension}:${threshold}`;
     if (typeof check.value !== "number" || check.value > threshold) {
       quotaWarningCounts.delete(warnKey);
       continue;
@@ -321,6 +345,23 @@ export async function maybeWarnForAccount(repo: AccountsRepository, accountId: s
           void vscode.commands.executeCommand("codexAccounts.switchAccount");
         }
       });
+  }
+}
+
+function clearQuotaWarningCountsForDimension(dimension: "hourly" | "weekly"): void {
+  for (const key of quotaWarningCounts.keys()) {
+    if (key.includes(`:${dimension}:`)) {
+      quotaWarningCounts.delete(key);
+    }
+  }
+}
+
+function clearQuotaWarningCount(accountId: string, dimension: "hourly" | "weekly"): void {
+  const prefix = `${accountId}:${dimension}:`;
+  for (const key of quotaWarningCounts.keys()) {
+    if (key.startsWith(prefix)) {
+      quotaWarningCounts.delete(key);
+    }
   }
 }
 
@@ -382,7 +423,13 @@ function hasComparableHourlyWindow(account: CodexAccountRecord): boolean {
   }
 
   const windowMinutes = quota.hourlyWindowMinutes;
-  return typeof windowMinutes === "number" && windowMinutes > 0 && windowMinutes <= 360;
+  return (
+    typeof quota.hourlyPercentage === "number" &&
+    Number.isFinite(quota.hourlyPercentage) &&
+    typeof windowMinutes === "number" &&
+    windowMinutes > 0 &&
+    windowMinutes <= 360
+  );
 }
 
 function hasComparableWeeklyWindow(account: CodexAccountRecord): boolean {
@@ -392,7 +439,12 @@ function hasComparableWeeklyWindow(account: CodexAccountRecord): boolean {
   }
 
   const windowMinutes = quota.weeklyWindowMinutes;
-  return typeof windowMinutes === "number" && windowMinutes >= 1440;
+  return (
+    typeof quota.weeklyPercentage === "number" &&
+    Number.isFinite(quota.weeklyPercentage) &&
+    typeof windowMinutes === "number" &&
+    windowMinutes >= 1440
+  );
 }
 
 function buildMatchedRules(): string[] {

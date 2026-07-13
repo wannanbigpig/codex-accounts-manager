@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { sortDashboardAccounts } from "../src/application/dashboard/buildDashboardState";
+import { formatPlanType } from "../src/application/dashboard/copy";
 
 describe("sortDashboardAccounts", () => {
   it("puts the current window account before active accounts", () => {
@@ -12,5 +13,12 @@ describe("sortDashboardAccounts", () => {
     const sorted = sortDashboardAccounts(accounts, "current");
 
     expect(sorted.map((account) => account.id)).toEqual(["current", "active", "other"]);
+  });
+});
+
+describe("formatPlanType", () => {
+  it("normalizes raw ChatGPT plan identifiers", () => {
+    expect(formatPlanType("chatgptteamplan", "zh")).toBe("Team");
+    expect(formatPlanType("chatgptplusplan", "zh")).toBe("Plus");
   });
 });

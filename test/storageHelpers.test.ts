@@ -396,6 +396,44 @@ describe("accountMutations helpers", () => {
 });
 
 describe("accountProfileMaintenance helpers", () => {
+  it("allows an explicitly selected workspace profile to repair a stale accountId", () => {
+    const tokens = {
+      idToken: createJwt({
+        email: "dev@example.com",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct_team" }
+      }),
+      accessToken: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct_team" }
+      })
+    };
+    const account: CodexAccountRecord = {
+      id: "personal",
+      email: "dev@example.com",
+      accountId: "acct_team",
+      accountName: "Personal",
+      accountStructure: "personal",
+      planType: "team",
+      createdAt: 1,
+      updatedAt: 1
+    };
+
+    const repaired = applyRemoteProfileFromTokens({
+      account,
+      tokens,
+      remoteProfile: {
+        accountId: "acct_personal",
+        accountStructure: "personal",
+        planType: "plus"
+      },
+      allowAccountIdRepair: true
+    });
+
+    expect(repaired).toBe(true);
+    expect(account.accountId).toBe("acct_personal");
+    expect(account.planType).toBe("plus");
+    expect(account.accountStructure).toBe("personal");
+  });
+
   it("applies quota updates and repairs profile metadata from tokens", () => {
     const tokens = {
       idToken: createJwt({

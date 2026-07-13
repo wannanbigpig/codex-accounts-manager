@@ -28,7 +28,7 @@ vi.mock("../src/application/accounts/switchEffects", () => ({
   autoReloadWindowForAccount: autoReloadWindowForAccountMock
 }));
 
-import { maybeAutoSwitchForActiveQuota, refreshSingleQuota } from "../src/application/accounts/quota";
+import { maybeAutoSwitchForActiveQuota, maybeWarnForAccount, refreshSingleQuota } from "../src/application/accounts/quota";
 import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/windowRuntimeAccount";
 
 type QuotaRefreshRepo = Pick<
@@ -121,6 +121,38 @@ describe("refreshSingleQuota token automation state", () => {
       "pro",
       "1800000000"
     );
+  });
+
+  it("can wait for the subscription refresh before completing account info sync", async () => {
+    let finishSubscriptionRefresh: (() => void) | undefined;
+    const subscriptionRefresh = new Promise<void>((resolve) => {
+      finishSubscriptionRefresh = resolve;
+    });
+    const repo: QuotaRefreshRepo = {
+      getAccount: vi.fn(async () => account),
+      getTokens: vi.fn(async () => tokens),
+      updateQuota: vi.fn(async () => account),
+      refreshSubscriptionState: vi.fn(() => subscriptionRefresh),
+      updateResetCreditsSnapshot: vi.fn(async () => undefined)
+    };
+    refreshQuotaMock.mockResolvedValue({ quota: undefined, error: undefined, updatedTokens: tokens });
+
+    let completed = false;
+    const refresh = refreshSingleQuota(repo as AccountsRepository, { refresh: vi.fn() }, account.id, {
+      announce: false,
+      awaitSubscriptionRefresh: true,
+      forceRefresh: true,
+      refreshView: false,
+      warnQuota: false
+    }).then(() => {
+      completed = true;
+    });
+
+    await vi.waitFor(() => expect(repo.refreshSubscriptionState).toHaveBeenCalledWith(account.id, true));
+    expect(completed).toBe(false);
+    finishSubscriptionRefresh?.();
+    await refresh;
+    expect(completed).toBe(true);
   });
 
   it("keeps automation error when refresh still fails", async () => {
@@ -297,6 +329,60 @@ describe("refreshSingleQuota token automation state", () => {
     expect(repo.switchAccount).not.toHaveBeenCalledWith(sameEmailButLowerQuota.id);
   });
 
+  it("does not auto-switch for an hourly-only threshold when hourly quota control is disabled", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          autoSwitchEnabled: true,
+          hourlyQuotaControlEnabled: false,
+          autoSwitchHourlyThreshold: 20,
+          autoSwitchWeeklyThreshold: 20
+        };
+        return values[key] ?? defaultValue;
+      }),
+      update: vi.fn()
+    } as never);
+
+    const active = createAccount("active", true, 0, 80);
+    const candidate = createAccount("candidate", false, 100, 100);
+    const repo = {
+      listAccounts: vi.fn(async () => [active, candidate]),
+      switchAccount: vi.fn(async () => undefined)
+    };
+
+    const switched = await maybeAutoSwitchForActiveQuota(repo as unknown as AccountsRepository, { refresh: vi.fn() });
+
+    expect(switched).toBe(false);
+    expect(repo.switchAccount).not.toHaveBeenCalled();
+  });
+
+  it("auto-switches for a valid hourly threshold when hourly quota control is enabled", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          autoSwitchEnabled: true,
+          hourlyQuotaControlEnabled: true,
+          autoSwitchHourlyThreshold: 20,
+          autoSwitchWeeklyThreshold: 20
+        };
+        return values[key] ?? defaultValue;
+      }),
+      update: vi.fn()
+    } as never);
+
+    const active = createAccount("active", true, 0, 80);
+    const candidate = createAccount("candidate", false, 100, 100);
+    const repo = {
+      listAccounts: vi.fn(async () => [active, candidate]),
+      switchAccount: vi.fn(async () => undefined)
+    };
+
+    const switched = await maybeAutoSwitchForActiveQuota(repo as unknown as AccountsRepository, { refresh: vi.fn() });
+
+    expect(switched).toBe(true);
+    expect(repo.switchAccount).toHaveBeenCalledWith(candidate.id);
+  });
+
   it("auto reloads the window after auto switch when the setting is enabled", async () => {
     vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
       get: vi.fn((key: string, defaultValue?: unknown) => {
@@ -346,6 +432,70 @@ describe("refreshSingleQuota token automation state", () => {
     expect(autoReloadWindowForAccountMock).toHaveBeenCalledWith(next.id);
   });
 });
+
+describe("quota warning window validation", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("ignores the hourly quota while control is disabled and still warns for weekly quota", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          quotaWarningEnabled: true,
+          hourlyQuotaControlEnabled: false,
+          quotaWarningThreshold: 10
+        };
+        return values[key] ?? defaultValue;
+      })
+    } as never);
+    const showWarning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
+    showWarning.mockClear();
+    const account = createAccount("active", true, 0, 5);
+    const repo = { getAccount: vi.fn(async () => account) };
+
+    await maybeWarnForAccount(repo as unknown as AccountsRepository, account.id);
+
+    expect(showWarning).toHaveBeenCalledTimes(1);
+    expect(showWarning.mock.calls[0]?.[0]).toContain("5%");
+  });
+
+  it("does not warn for missing hourly and weekly windows", async () => {
+    vi.spyOn(vscode.workspace, "getConfiguration").mockReturnValue({
+      get: vi.fn((key: string, defaultValue?: unknown) => {
+        const values: Record<string, unknown> = {
+          quotaWarningEnabled: true,
+          hourlyQuotaControlEnabled: true,
+          quotaWarningThreshold: 10
+        };
+        return values[key] ?? defaultValue;
+      })
+    } as never);
+    const showWarning = vi.spyOn(vscode.window, "showWarningMessage").mockResolvedValue(undefined);
+    showWarning.mockClear();
+    const account = createAccount("missing-windows", true, 0, 0);
+    if (account.quotaSummary) {
+      account.quotaSummary.hourlyWindowPresent = false;
+      account.quotaSummary.weeklyWindowPresent = false;
+    }
+    const repo = { getAccount: vi.fn(async () => account) };
+
+    await maybeWarnForAccount(repo as unknown as AccountsRepository, account.id);
+
+    expect(showWarning).not.toHaveBeenCalled();
+  });
+});
+
+function createAccount(id: string, isActive: boolean, hourly: number, weekly: number): CodexAccountRecord {
+  return {
+    id,
+    email: `${id}@example.com`,
+    isActive,
+    createdAt: 1,
+    updatedAt: 1,
+    quotaSummary: createQuotaSummary({ hourly, weekly })
+  };
+}
 
 function createQuotaSummary(values: { hourly: number; weekly: number }) {
   return {

@@ -120,27 +120,41 @@ export function SettingsOverlay(props: {
             </div>
           </SettingsToggleBlock>
           <SettingsToggleBlock
+            title={props.copy.hourlyQuotaControlTitle}
+            sub={props.copy.hourlyQuotaControlSub}
+            enabled={props.settings.hourlyQuotaControlEnabled}
+            onToggle={(enabled) => patchAndSend("hourlyQuotaControlEnabled", enabled)}
+          >
+            <div class="settings-note">
+              {props.settings.hourlyQuotaControlEnabled
+                ? props.copy.hourlyQuotaControlOnDesc
+                : props.copy.hourlyQuotaControlOffDesc}
+            </div>
+          </SettingsToggleBlock>
+          <SettingsToggleBlock
             title={props.copy.autoSwitchTitle}
             sub={props.copy.autoSwitchSub}
             enabled={props.settings.autoSwitchEnabled}
             onToggle={(enabled) => patchAndSend("autoSwitchEnabled", enabled)}
           >
             <div class={`settings-stack ${props.settings.autoSwitchEnabled ? "" : "is-hidden"}`}>
-              <SettingsDiscreteSlider
-                value={props.settings.autoSwitchHourlyThreshold}
-                values={AUTO_SWITCH_VALUES}
-                accent="violet"
-                sparseScale
-                valueLabel={(value) => `${value}%`}
-                description={(value) =>
-                  formatTemplate(props.copy.autoSwitchThresholdDescTemplate, {
-                    label: props.copy.hourlyLabel,
-                    value
-                  })
-                }
-                onPreview={(value) => props.onPatchSettings({ autoSwitchHourlyThreshold: value })}
-                onCommit={(value) => patchAndSend("autoSwitchHourlyThreshold", value)}
-              />
+              {props.settings.hourlyQuotaControlEnabled ? (
+                <SettingsDiscreteSlider
+                  value={props.settings.autoSwitchHourlyThreshold}
+                  values={AUTO_SWITCH_VALUES}
+                  accent="violet"
+                  sparseScale
+                  valueLabel={(value) => `${value}%`}
+                  description={(value) =>
+                    formatTemplate(props.copy.autoSwitchThresholdDescTemplate, {
+                      label: props.copy.hourlyLabel,
+                      value
+                    })
+                  }
+                  onPreview={(value) => props.onPatchSettings({ autoSwitchHourlyThreshold: value })}
+                  onCommit={(value) => patchAndSend("autoSwitchHourlyThreshold", value)}
+                />
+              ) : null}
               <SettingsDiscreteSlider
                 value={props.settings.autoSwitchWeeklyThreshold}
                 values={AUTO_SWITCH_VALUES}
@@ -187,7 +201,7 @@ export function SettingsOverlay(props: {
           </SettingsToggleBlock>
           <SettingsToggleBlock
             title={props.copy.warningTitle}
-            sub={props.copy.warningSub}
+            sub={props.settings.hourlyQuotaControlEnabled ? props.copy.warningSub : props.copy.warningWeeklyOnlySub}
             enabled={props.settings.quotaWarningEnabled}
             onToggle={(enabled) => patchAndSend("quotaWarningEnabled", enabled)}
           >

@@ -75,10 +75,19 @@ export function clearSubscriptionRetryPending(account: CodexAccountRecord): void
  */
 export async function fetchSubscriptionStatus(
   accessToken: string,
-  accountId?: string
+  accountId?: string,
+  organizationId?: string,
+  accountName?: string,
+  accountStructure?: string
 ): Promise<SubscriptionStatusSnapshot> {
   // 第一步：accounts/check
-  const snapshot = await fetchAccountCheck(accessToken, accountId);
+  const snapshot = await fetchAccountCheck(
+    accessToken,
+    accountId,
+    organizationId,
+    accountName,
+    accountStructure
+  );
 
   // 第二步：如果 expires_at 缺失/过期，降级到 subscriptions
   if (!subscriptionMissingOrExpired(snapshot.subscriptionActiveUntil)) {
@@ -134,10 +143,15 @@ function buildSubscriptionHeaders(
 
 async function fetchAccountCheck(
   accessToken: string,
-  accountId?: string
+  accountId?: string,
+  organizationId?: string,
+  accountName?: string,
+  accountStructure?: string
 ): Promise<SubscriptionStatusSnapshot> {
   const url = `${SUBSCRIPTION_ACCOUNTS_CHECK_URL}?timezone_offset_min=${currentTimezoneOffsetMin()}`;
-  const headers = buildSubscriptionHeaders(accessToken, "/backend-api/accounts/check/v4-2023-04-27", accountId);
+  // accounts/check 需要返回该登录用户的完整 workspace 列表，再在响应中按 accountId 选择。
+  // 与 cockpit-tools 保持一致，不在此请求上附加 ChatGPT-Account-Id，避免服务端先错误收窄上下文。
+  const headers = buildSubscriptionHeaders(accessToken, "/backend-api/accounts/check/v4-2023-04-27");
 
   const response = await fetchWithTimeout(url, { method: "GET", headers }, 15000, "Subscription account check");
 
@@ -157,7 +171,7 @@ async function fetchAccountCheck(
   }
 
   const payload = JSON.parse(raw) as Record<string, unknown>;
-  return parseAccountCheckSnapshot(payload, accountId);
+  return parseAccountCheckSnapshot(payload, accountId, organizationId, accountName, accountStructure);
 }
 
 async function fetchSubscriptions(
@@ -197,7 +211,10 @@ async function fetchSubscriptions(
 
 function parseAccountCheckSnapshot(
   payload: Record<string, unknown>,
-  preferredAccountId?: string
+  preferredAccountId?: string,
+  preferredOrganizationId?: string,
+  preferredAccountName?: string,
+  preferredAccountStructure?: string
 ): SubscriptionStatusSnapshot {
   const records = collectAccountRecords(payload);
   if (!records.length) {
@@ -211,8 +228,13 @@ function parseAccountCheckSnapshot(
     undefined;
 
   const selected =
+    records.find((r) => matchesWorkspaceRecord(r, preferredAccountId, preferredOrganizationId, true)) ??
+    records.find((r) => matchesWorkspaceRecord(r, undefined, preferredOrganizationId, false)) ??
+    records.find((r) => matchesWorkspaceName(r, preferredAccountName)) ??
+    records.find((r) => matchesWorkspaceStructure(r, preferredAccountStructure)) ??
     records.find((r) => {
-      const id = readField(r, ["account_id", "id", "chatgpt_account_id", "workspace_id"]);
+      const accountRecord = isRecord(r["account"]) ? r["account"] : r;
+      const id = readField(accountRecord, ["account_id", "id", "chatgpt_account_id", "workspace_id"]);
       return preferredAccountId && id === preferredAccountId;
     }) ??
     records.find((r) => {
@@ -239,13 +261,73 @@ function parseAccountCheckSnapshot(
   };
 }
 
+function matchesWorkspaceName(
+  record: Record<string, unknown>,
+  accountName: string | undefined
+): boolean {
+  const normalizedName = accountName?.trim().toLowerCase();
+  if (!normalizedName) {
+    return false;
+  }
+  const accountRecord = isRecord(record["account"]) ? record["account"] : record;
+  const candidateName = readField(accountRecord, [
+    "name",
+    "display_name",
+    "account_name",
+    "organization_name",
+    "workspace_name",
+    "title"
+  ]);
+  return candidateName?.toLowerCase() === normalizedName;
+}
+
+function matchesWorkspaceStructure(
+  record: Record<string, unknown>,
+  accountStructure: string | undefined
+): boolean {
+  const normalizedStructure = accountStructure?.trim().toLowerCase();
+  if (!normalizedStructure) {
+    return false;
+  }
+  const accountRecord = isRecord(record["account"]) ? record["account"] : record;
+  const entitlement = isRecord(record["entitlement"]) ? record["entitlement"] : undefined;
+  const candidateStructure = readField(accountRecord, ["structure", "account_structure", "kind", "type"])
+    ?.trim()
+    .toLowerCase();
+  const candidatePlan =
+    readField(entitlement, ["subscription_plan"])?.toLowerCase() ??
+    readField(accountRecord, ["plan_type", "planType"])?.toLowerCase() ??
+    "";
+  const candidateIsTeam =
+    Boolean(candidateStructure && candidateStructure !== "personal") ||
+    ["team", "business", "enterprise"].some((plan) => candidatePlan.includes(plan));
+  return normalizedStructure === "personal" ? !candidateIsTeam : candidateIsTeam;
+}
+
+function matchesWorkspaceRecord(
+  record: Record<string, unknown>,
+  accountId: string | undefined,
+  organizationId: string | undefined,
+  requireBoth: boolean
+): boolean {
+  if (!organizationId || (requireBoth && !accountId)) {
+    return false;
+  }
+  const accountRecord = isRecord(record["account"]) ? record["account"] : record;
+  const candidateAccountId = readField(accountRecord, ["account_id", "id", "chatgpt_account_id"]);
+  const candidateOrganizationId = readField(accountRecord, ["organization_id", "org_id", "workspace_id"]);
+  return candidateOrganizationId === organizationId && (!requireBoth || candidateAccountId === accountId);
+}
+
 function collectAccountRecords(payload: Record<string, unknown>): Array<Record<string, unknown>> {
   const accountsValue = payload["accounts"];
   if (Array.isArray(accountsValue)) {
     return accountsValue.filter(isRecord);
   }
   if (isRecord(accountsValue)) {
-    return Object.values(accountsValue).filter(isRecord);
+    return Object.entries(accountsValue).flatMap(([key, value]) =>
+      isRecord(value) ? [{ ...value, key: readField(value, ["key"]) ?? key }] : []
+    );
   }
   // 兜底：整个 payload 本身是数组
   if (Array.isArray(payload)) {

@@ -201,9 +201,10 @@ export function applyRemoteProfileToAccount(params: {
   claims: Pick<DecodedAuthClaims, "accountId" | "email" | "organizationId" | "planType" | "subscriptionActiveUntil" | "userId">;
   remoteProfile?: RemoteAccountProfileLike;
   planType?: string;
+  allowAccountIdRepair?: boolean;
 }): boolean {
   const claimsAccountId = params.claims.accountId ?? params.account.accountId;
-  if (!didRemoteAccountMatchClaims(params.remoteProfile, claimsAccountId)) {
+  if (!params.allowAccountIdRepair && !didRemoteAccountMatchClaims(params.remoteProfile, claimsAccountId)) {
     return false;
   }
 

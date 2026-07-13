@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-07-codex-tools-0-1-15",
+      "id": "ann-2026-07-codex-tools-0-1-16",
       "type": "info",
-      "priority": 570,
-      "releaseVersion": "0.1.15",
-      "title": "Codex Accounts Manager 0.1.15 — multi-workspace identity and mirror sync fixes",
-      "summary": "Fixes same-email Plus and Team workspaces being mixed together, and hardens Aideck mirror token sync to stop cross-workspace bleed-through.",
-      "content": "This release focuses on isolating same-email multi-workspace accounts correctly and stopping bad mirror data from spreading between Codex Accounts Manager and Aideck.\n1. Workspace identity fix: remote profile parsing now prefers the selected workspace record and includes organization identity in the profile cache key, so same-email Plus and Team accounts no longer collapse into the same context.\n2. Plan metadata fix: when accounts/check returns both personal and team records under the same accountId, workspace-scoped plan_type and subscription fields now win over top-level user metadata.\n3. Mirror token safety: Aideck mirror tokens are now adopted only when their email, userId, accountId, organizationId, and embedded JWT claims agree with the target saved account.\n4. Corrupt mirror rejection: if a mirror snapshot's top-level identity disagrees with the token claims inside it, Codex Accounts Manager now ignores that snapshot instead of importing bad tokens into VS Code SecretStorage.\n5. Mirror write guard: token writes back to ~/.ai_deck/accounts/codex now verify identity first, and existing workspace/profile/quota fields are preserved by default to avoid amplifying stale or cross-workspace data.\n6. Regression coverage: added tests for same accountId with different organizationId, workspace-specific plan selection, mirror identity conflicts, and token write-back safety.",
+      "priority": 580,
+      "releaseVersion": "0.1.16",
+      "title": "Codex Accounts Manager 0.1.16 — quota automation and workspace identity fixes",
+      "summary": "Adds independent 5-hour quota automation control, prevents missing quota windows from causing false alerts, and repairs workspace identity selection for saved accounts.",
+      "content": "This release improves quota automation safety and account identity recovery.\n1. Independent 5-hour control: a new setting keeps the 5-hour quota visible while allowing it to be excluded from automatic switching and low-quota warnings; it is disabled by default.\n2. Missing-window protection: quota automation now validates that an API quota window actually exists before evaluating its percentage, preventing absent windows from being treated as 0%.\n3. Weekly quota independence: weekly switching and warnings continue to work even when 5-hour automation is disabled.\n4. Workspace identity repair: profile and subscription refreshes use saved workspace name and structure hints to select the correct Personal or Team record, and can repair a historically incorrect accountId.\n5. Refresh ordering: account information sync now waits for subscription refresh before publishing Dashboard state, so updated plan and expiration data appear immediately.\n6. Regression coverage: added tests for quota-window presence, independent automation controls, workspace selection, accountId self-repair, and subscription parsing.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -16,13 +16,13 @@
       "showOnce": true,
       "popup": true,
       "pinned": true,
-      "createdAt": "2026-07-08T04:00:00Z",
+      "createdAt": "2026-07-13T07:00:00Z",
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.15 — 多 workspace 身份隔离与镜像同步修复",
-          "summary": "修复同邮箱 Plus 与 Team workspace 被串成同一账号上下文的问题，并收紧 Aideck mirror 的 token 同步，阻止跨 workspace 串写。",
-          "content": "本次更新聚焦同邮箱多 workspace 账号的身份隔离，以及 Codex Accounts Manager 与 Aideck 之间 mirror 同步的止血与收口。\n1. Workspace 身份修复：远端 profile 解析现在优先使用当前选中的 workspace 记录，并把 organization 身份纳入 profile 缓存键，同邮箱的 Plus 与 Team 账号不会再落到同一个上下文。\n2. 套餐元数据修复：当 accounts/check 在同一个 accountId 下同时返回个人与团队记录时，现在优先采用 workspace 记录上的 plan_type 和订阅字段，不再被顶层用户级元数据覆盖。\n3. Mirror token 安全校验：只有当 Aideck mirror 中的 email、userId、accountId、organizationId，以及嵌入 JWT claims 与目标保存账号一致时，才会吸收外部 token。\n4. 脏 mirror 快照拒收：如果 mirror 文件顶层 identity 与内部 token claims 自相矛盾，Codex Accounts Manager 现在会直接忽略该快照，不再把坏 token 导入 VS Code SecretStorage。\n5. Mirror 回写保护：回写 ~/.ai_deck/accounts/codex 时会先校验 token identity，且默认保留已有 workspace/profile/quota 字段，避免把陈旧或跨 workspace 的错误数据继续放大。\n6. 回归测试补强：新增“同 accountId 不同 organizationId”“workspace 套餐优先级”“mirror identity 冲突”“token 回写安全”相关测试。"
+          "title": "Codex Accounts Manager 0.1.16 — 配额自动化与 workspace 身份修复",
+          "summary": "新增独立的 5 小时配额自动化控制，避免缺失配额窗口触发误报，并修复保存账号的 workspace 身份选择与自修复。",
+          "content": "本次更新重点提升配额自动化安全性与账号身份恢复能力。\n1. 独立的 5 小时控制：新增设置项，关闭后 5 小时配额仍正常展示，但不参与自动切号和低配额提醒；该设置默认关闭。\n2. 缺失窗口保护：自动化判断会先确认接口确实返回了有效配额窗口，避免缺失窗口被按 0% 处理并触发误报。\n3. 每周配额独立生效：即使关闭 5 小时自动化，每周配额仍可独立触发自动切号和提醒。\n4. Workspace 身份修复：profile 与订阅刷新会结合已保存的 workspace 名称和结构选择正确的 Personal 或 Team 记录，并可修复历史保存错误的 accountId。\n5. 刷新时序修复：账号信息同步会等待订阅刷新完成后再发布 Dashboard 状态，新的套餐与到期时间可立即显示。\n6. 回归测试补强：新增配额窗口存在性、独立自动化开关、workspace 选择、accountId 自修复和订阅解析相关测试。"
         }
       }
     },

@@ -74,12 +74,14 @@ export function applyRemoteProfileFromTokens(params: {
   tokens: CodexTokens;
   remoteProfile?: RemoteAccountProfileLike;
   planType?: string;
+  allowAccountIdRepair?: boolean;
 }): boolean {
   const claims = extractClaims(params.tokens.idToken, params.tokens.accessToken);
   return applyRemoteProfileToAccount({
     account: params.account,
     claims,
     remoteProfile: params.remoteProfile,
-    planType: params.planType ?? params.account.planType
+    planType: params.planType ?? params.account.planType,
+    allowAccountIdRepair: params.allowAccountIdRepair
   });
 }

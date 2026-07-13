@@ -543,6 +543,7 @@ async function resyncAccountInfo(repo: AccountsRepository, accountId: string): P
   await repo.refreshAccountProfileMetadata(accountId);
   await refreshSingleQuota(repo, { refresh() {} }, accountId, {
     announce: false,
+    awaitSubscriptionRefresh: true,
     forceRefresh: true,
     refreshView: false,
     warnQuota: false

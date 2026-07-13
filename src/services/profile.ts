@@ -63,13 +63,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export async function fetchRemoteAccountProfile(
   tokens: CodexTokens,
-  options: { forceRefresh?: boolean } = {}
+  options: { forceRefresh?: boolean; preferredAccountName?: string; preferredAccountStructure?: string } = {}
 ): Promise<RemoteAccountProfile | undefined> {
   const claims = extractClaims(tokens.idToken, tokens.accessToken);
   const accountId = tokens.accountId ?? claims.accountId;
   const organizationId = claims.organizationId;
   pruneProfileCache();
-  const cacheKey = buildProfileCacheKey(tokens.accessToken, accountId, organizationId);
+  const cacheKey = buildProfileCacheKey(
+    tokens.accessToken,
+    accountId,
+    organizationId,
+    options.preferredAccountName,
+    options.preferredAccountStructure
+  );
   const cached = profileCache.get(cacheKey);
   if (cached && !options.forceRefresh) {
     return cached.profile;
@@ -78,7 +84,15 @@ export async function fetchRemoteAccountProfile(
   const primary = await requestAccountProfile(ACCOUNT_CHECK_URL, tokens.accessToken, accountId);
   const shouldRetry =
     accountId &&
-    (!primary.ok ? shouldRetryWithoutWorkspace(primary.status, primary.raw) : !parseAccountProfile(primary.payload, accountId, claims.organizationId));
+    (!primary.ok
+      ? shouldRetryWithoutWorkspace(primary.status, primary.raw)
+      : !parseAccountProfile(
+          primary.payload,
+          accountId,
+          claims.organizationId,
+          options.preferredAccountName,
+          options.preferredAccountStructure
+        ));
 
   if (shouldRetry) {
     logNetworkEvent("profile.retry-without-workspace", {
@@ -87,7 +101,13 @@ export async function fetchRemoteAccountProfile(
     });
     const fallback = await requestAccountProfile(ACCOUNT_CHECK_URL, tokens.accessToken);
     if (fallback.ok) {
-      const fallbackProfile = parseAccountProfile(fallback.payload, accountId, claims.organizationId);
+      const fallbackProfile = parseAccountProfile(
+        fallback.payload,
+        accountId,
+        claims.organizationId,
+        options.preferredAccountName,
+        options.preferredAccountStructure
+      );
       if (fallbackProfile) {
         profileCache.set(cacheKey, {
           profile: fallbackProfile,
@@ -105,7 +125,13 @@ export async function fetchRemoteAccountProfile(
     });
   }
 
-  const profile = parseAccountProfile(primary.payload, accountId, claims.organizationId);
+  const profile = parseAccountProfile(
+    primary.payload,
+    accountId,
+    claims.organizationId,
+    options.preferredAccountName,
+    options.preferredAccountStructure
+  );
   if (profile) {
     profileCache.set(cacheKey, {
       profile,
@@ -179,7 +205,9 @@ function parseProfilePayload(raw: string): Record<string, unknown> {
 function parseAccountProfile(
   payload: Record<string, unknown>,
   expectedAccountId?: string,
-  expectedOrgId?: string
+  expectedOrgId?: string,
+  preferredAccountName?: string,
+  preferredAccountStructure?: string
 ): RemoteAccountProfile | undefined {
   const records = collectAccountRecords(payload);
   if (!records.length) {
@@ -190,6 +218,8 @@ function parseAccountProfile(
 
   if (expectedAccountId) {
     selected =
+      findByName(records, preferredAccountName) ??
+      findByStructure(records, preferredAccountStructure) ??
       findByIdAndOrg(records, expectedAccountId, expectedOrgId) ??
       findByOrg(records, expectedOrgId) ??
       findById(records, expectedAccountId);
@@ -239,6 +269,37 @@ function parseAccountProfile(
     accountStructure: readField(selected, ["structure", "account_structure", "kind", "type", "account_type"]),
     accountId: readField(selected, ["id", "account_id", "chatgpt_account_id", "workspace_id"])
   };
+}
+
+function findByName(
+  records: Array<Record<string, unknown>>,
+  expectedName?: string
+): Record<string, unknown> | undefined {
+  const normalized = expectedName?.trim().toLowerCase();
+  if (!normalized || normalized === "personal") {
+    return undefined;
+  }
+  return records.find((record) =>
+    ["name", "display_name", "account_name", "organization_name", "workspace_name", "title"].some(
+      (key) => readField(record, [key])?.toLowerCase() === normalized
+    )
+  );
+}
+
+function findByStructure(
+  records: Array<Record<string, unknown>>,
+  expectedStructure?: string
+): Record<string, unknown> | undefined {
+  const normalized = expectedStructure?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  return records.find((record) => {
+    const structure = readField(record, ["structure", "account_structure", "kind", "type", "account_type"])
+      ?.trim()
+      .toLowerCase();
+    return normalized === "personal" ? structure === "personal" : Boolean(structure && structure !== "personal");
+  });
 }
 
 /**
@@ -336,8 +397,14 @@ function readScalarField(record: Record<string, unknown> | undefined, keys: stri
   return undefined;
 }
 
-function buildProfileCacheKey(accessToken: string, accountId?: string, organizationId?: string): string {
-  return `${accessToken}::${accountId ?? ""}::${organizationId ?? ""}`;
+function buildProfileCacheKey(
+  accessToken: string,
+  accountId?: string,
+  organizationId?: string,
+  accountName?: string,
+  accountStructure?: string
+): string {
+  return `${accessToken}::${accountId ?? ""}::${organizationId ?? ""}::${accountName ?? ""}::${accountStructure ?? ""}`;
 }
 
 function pruneProfileCache(): void {

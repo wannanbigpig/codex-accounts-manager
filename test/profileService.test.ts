@@ -32,6 +32,42 @@ describe("fetchRemoteAccountProfile", () => {
     fetchWithTimeoutMock.mockReset();
   });
 
+  it("repairs a stale Team accountId by selecting the saved Personal structure", async () => {
+    const tokens: CodexTokens = {
+      idToken: createJwt({
+        email: "dev@example.com",
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct_team" }
+      }),
+      accessToken: createJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "acct_team" }
+      }),
+      accountId: "acct_team"
+    };
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          accounts: [
+            { id: "acct_personal", structure: "personal", plan_type: "plus", name: null },
+            { id: "acct_team", structure: "workspace", plan_type: "team", name: "Team Workspace" }
+          ]
+        }),
+        { status: 200 }
+      )
+    );
+
+    const profile = await fetchRemoteAccountProfile(tokens, {
+      forceRefresh: true,
+      preferredAccountName: "Personal",
+      preferredAccountStructure: "personal"
+    });
+
+    expect(profile).toMatchObject({
+      accountId: "acct_personal",
+      accountStructure: "personal",
+      planType: "plus"
+    });
+  });
+
   it("prefers selected workspace plan metadata over top-level user plan metadata", async () => {
     const tokens: CodexTokens = {
       idToken: createJwt({

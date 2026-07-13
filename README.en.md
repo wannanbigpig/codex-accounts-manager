@@ -4,7 +4,7 @@ English · [简体中文](README.md)
 
 VS Code extension for managing multiple Codex accounts, viewing quota usage, and switching the active global `auth.json`.
 
-![Version](https://img.shields.io/badge/version-0.1.9-blue)
+![Version](https://img.shields.io/badge/version-0.1.16-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
 ![License](https://img.shields.io/github/license/wannanbigpig/codex-tools)
 ![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-tools?style=flat)
@@ -115,10 +115,14 @@ You can change these directly from the settings button in the top-right corner o
   - Can be disabled, or set to `5 / 10 / 15 / 30 / 60` minutes
   - Disabled by default
   - When disabled, no timed refresh runs
+- `5-hour Quota Control`
+  - Disabled by default; the 5-hour quota remains visible while disabled
+  - Controls whether a valid 5-hour quota can trigger automatic switching or quota warnings
 - `Automatic Account Switching`
   - Disabled by default
   - When enabled, set separate thresholds for `5-hour` and `weekly` quota
   - After refresh, the extension can switch to another saved account when the active one hits a threshold
+  - The 5-hour threshold only applies while `5-hour Quota Control` is enabled; the weekly threshold remains independent
 - `Codex App Launch Path`
   - Optional custom desktop app path
   - Leave empty to use auto-detection
@@ -129,6 +133,7 @@ You can change these directly from the settings button in the top-right corner o
   - Disabled by default
   - When enabled, choose a threshold from `5%` to `90%`
   - After refresh, the extension shows a localized warning when the active account drops below the configured threshold
+  - Only quota windows returned by the API are checked; while 5-hour control is disabled, only the weekly quota is checked
 
 ---
 

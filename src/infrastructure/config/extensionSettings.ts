@@ -20,6 +20,7 @@ export class ExtensionSettingsStore {
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
       autoRefreshMinutes: normalizeAutoRefreshMinutes(config.get<number>("autoRefreshMinutes", 0)),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
+      hourlyQuotaControlEnabled: config.get<boolean>("hourlyQuotaControlEnabled", false),
       autoSwitchReloadWindowEnabled: config.get<boolean>("autoSwitchReloadWindowEnabled", false),
       autoSwitchHourlyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchHourlyThreshold", 20)),
       autoSwitchWeeklyThreshold: normalizeAutoSwitchThreshold(config.get<number>("autoSwitchWeeklyThreshold", 20)),

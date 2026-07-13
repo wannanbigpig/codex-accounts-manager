@@ -441,14 +441,26 @@ export class AccountsRepository {
       });
     }
 
-    const remoteProfile = await fetchRemoteAccountProfile(tokens, { forceRefresh: true });
+    const remoteProfile = await fetchRemoteAccountProfile(tokens, {
+      forceRefresh: true,
+      preferredAccountName: account.accountName,
+      preferredAccountStructure: account.accountStructure
+    });
     if (!remoteProfile) {
       throw new AccountError(`No remote profile returned for ${account.email}`, {
         code: ErrorCode.ACCOUNT_INVALID_DATA
       });
     }
 
-    if (applyRemoteProfileFromTokens({ account, tokens, remoteProfile, planType: account.planType })) {
+    if (
+      applyRemoteProfileFromTokens({
+        account,
+        tokens,
+        remoteProfile,
+        planType: account.planType,
+        allowAccountIdRepair: true
+      })
+    ) {
       account.updatedAt = Date.now();
       account.dismissedHealthIssueKey = undefined;
       await mirrorAideckCodexAccount(account, tokens);
@@ -989,11 +1001,11 @@ export class AccountsRepository {
       return;
     }
 
-    // 归一化：若当前已有有效 subscription，清除重试标记
+    // 归一化：若当前已有有效 subscription，清除重试标记。
+    // 这里不能直接返回；force=true 时仍需重新查询，才能纠正已缓存但属于其他 workspace 的有效时间。
     if (!subscriptionMissingOrExpired(account.subscriptionActiveUntil)) {
       clearSubscriptionRetryPending(account);
       this.writeIndex(index);
-      return;
     }
 
     if (!shouldAttemptSubscriptionRefresh(account, force)) {
@@ -1011,7 +1023,13 @@ export class AccountsRepository {
     let snapshotResult: { planType?: string; subscriptionActiveUntil?: string; accountId?: string } | undefined;
     let fetchError: string | undefined;
     try {
-      snapshotResult = await fetchSubscriptionStatus(tokens.accessToken, effectiveAccountId);
+      snapshotResult = await fetchSubscriptionStatus(
+        tokens.accessToken,
+        effectiveAccountId,
+        account.organizationId,
+        account.accountName,
+        account.accountStructure
+      );
     } catch (error) {
       fetchError = error instanceof Error ? error.message : String(error);
     }
@@ -1035,7 +1053,10 @@ export class AccountsRepository {
         freshAccount.planType = snapshotResult.planType;
         changed = true;
       }
-      if (snapshotResult.subscriptionActiveUntil && snapshotResult.subscriptionActiveUntil !== freshAccount.subscriptionActiveUntil) {
+      if (
+        snapshotResult.subscriptionActiveUntil &&
+        snapshotResult.subscriptionActiveUntil !== freshAccount.subscriptionActiveUntil
+      ) {
         freshAccount.subscriptionActiveUntil = snapshotResult.subscriptionActiveUntil;
         changed = true;
       }

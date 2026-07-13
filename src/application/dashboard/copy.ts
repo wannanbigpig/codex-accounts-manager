@@ -141,7 +141,9 @@ export function formatAccountStructure(value: string | undefined, language: Dash
 }
 
 export function formatPlanType(value: string | undefined, language: DashboardLanguage): string {
-  const normalized = (value ?? "").trim().toLowerCase();
+  const raw = (value ?? "").trim().toLowerCase();
+  const normalized =
+    ["enterprise", "business", "team", "plus", "pro", "free"].find((plan) => raw.includes(plan)) ?? raw;
   if (!normalized) {
     return UNKNOWN_LABELS[language] ?? UNKNOWN_LABELS.en;
   }

@@ -17,6 +17,7 @@ function createState(overrides?: {
       autoRefreshMinutes: 0,
       backgroundTokenRefreshEnabled: true,
       autoSwitchEnabled: false,
+      hourlyQuotaControlEnabled: false,
       autoSwitchReloadWindowEnabled: false,
       autoSwitchHourlyThreshold: 20,
       autoSwitchWeeklyThreshold: 20,
