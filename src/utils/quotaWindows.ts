@@ -41,7 +41,7 @@ export function normalizeQuotaSummary(summary?: CodexQuotaSummary): CodexQuotaSu
   const resolvedWeekly = classified.weekly ?? (isWeeklyWindow(weeklyWindow) ? weeklyWindow : undefined);
 
   return {
-    hourlyPercentage: resolvedHourly?.percentage ?? 0,
+    hourlyPercentage: resolvedHourly?.percentage ?? 100,
     hourlyResetTime: resolvedHourly?.resetTime,
     hourlyRequestsLeft: resolvedHourly?.requestsLeft,
     hourlyRequestsLimit: resolvedHourly?.requestsLimit,
