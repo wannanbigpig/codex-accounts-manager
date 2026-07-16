@@ -1,7 +1,5 @@
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
-import * as http from "http";
-import * as https from "https";
 import * as path from "path";
 import type {
   CodexAnnouncement,
@@ -9,6 +7,7 @@ import type {
   CodexAnnouncementImage,
   CodexAnnouncementState
 } from "../core/types";
+import { fetchWithTimeout } from "../utils/network";
 
 const DEFAULT_ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/announcements.json";
 const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -488,50 +487,31 @@ async function readJsonSafe<T>(filePath: string, fallback: T): Promise<unknown> 
   }
 }
 
-function fetchJson(url: string): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const target = url.trim();
-    if (!target) {
-      reject(new Error("Announcement URL is empty"));
-      return;
-    }
+async function fetchJson(url: string): Promise<unknown> {
+  const target = url.trim();
+  if (!target) {
+    throw new Error("Announcement URL is empty");
+  }
 
-    if (target.startsWith("file://")) {
-      fs.readFile(decodeURIComponent(target.replace(/^file:\/\//, "")), "utf8")
-        .then((raw) => resolve(JSON.parse(raw) as unknown))
-        .catch(reject);
-      return;
-    }
+  if (target.startsWith("file://")) {
+    const raw = await fs.readFile(decodeURIComponent(target.replace(/^file:\/\//, "")), "utf8");
+    return JSON.parse(raw) as unknown;
+  }
 
-    const client = target.startsWith("http://") ? http : https;
-    const request = client.get(
-      `${target}${target.includes("?") ? "&" : "?"}t=${Date.now()}`,
-      {
-        headers: {
-          "User-Agent": "Codex-Accounts-Manager",
-          "Cache-Control": "no-cache",
-          Pragma: "no-cache"
-        },
-        timeout: 10_000
-      },
-      (response) => {
-        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-          response.resume();
-          reject(new Error(`Announcement endpoint returned ${response.statusCode}`));
-          return;
-        }
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk: Buffer) => chunks.push(chunk));
-        response.on("end", () => {
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown);
-          } catch (error) {
-            reject(error);
-          }
-        });
+  const response = await fetchWithTimeout(
+    `${target}${target.includes("?") ? "&" : "?"}t=${Date.now()}`,
+    {
+      headers: {
+        "User-Agent": "Codex-Accounts-Manager",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache"
       }
-    );
-    request.on("timeout", () => request.destroy(new Error("Announcement request timed out")));
-    request.on("error", reject);
-  });
+    },
+    10_000,
+    "Announcement request"
+  );
+  if (!response.ok) {
+    throw new Error(`Announcement endpoint returned ${response.status}`);
+  }
+  return response.json() as Promise<unknown>;
 }

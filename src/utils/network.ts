@@ -1,4 +1,6 @@
 import { NetworkError, ErrorCode } from "../core/errors";
+import { fetch as undiciFetch } from "undici";
+import { getCodexProxyDispatcher } from "../infrastructure/config/proxyEnvironment";
 
 const DEFAULT_FETCH_TIMEOUT_MS = 15000;
 const DEFAULT_RETRY_DELAYS_MS = [300, 800, 1500] as const;
@@ -19,6 +21,14 @@ export async function fetchWithTimeout(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const dispatcher = getCodexProxyDispatcher();
+    if (dispatcher) {
+      return (await undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+        ...init,
+        signal: controller.signal,
+        dispatcher
+      } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+    }
     return await fetch(input, {
       ...init,
       signal: controller.signal

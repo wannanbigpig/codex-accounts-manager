@@ -1,5 +1,9 @@
 import * as vscode from "vscode";
 import { AccountsWorkbench } from "./presentation/workbench/accountsWorkbench";
+import {
+  disposeCodexProxyEnvironment,
+  initializeCodexProxyEnvironment
+} from "./infrastructure/config/proxyEnvironment";
 
 let workbench: AccountsWorkbench | undefined;
 
@@ -9,6 +13,7 @@ let workbench: AccountsWorkbench | undefined;
  * @param context - 扩展上下文
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  await initializeCodexProxyEnvironment();
   workbench = new AccountsWorkbench(context);
   await workbench.activate();
 }
@@ -19,4 +24,5 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 export function deactivate(): void {
   workbench?.dispose();
   workbench = undefined;
+  disposeCodexProxyEnvironment();
 }
