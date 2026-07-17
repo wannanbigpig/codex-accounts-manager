@@ -5,11 +5,24 @@ import { getCodexHome } from "../../codex/authFile";
 
 const PROXY_ENV_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"] as const;
 let proxyDispatcher: Dispatcher | undefined;
+let proxyConfigurationError: CodexProxyConfigurationError | undefined;
 
 export interface ProxySettings {
   httpProxy?: string;
   httpsProxy?: string;
   noProxy?: string;
+}
+
+interface EnvironmentEntry {
+  present: boolean;
+  value?: string;
+}
+
+export class CodexProxyConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexProxyConfigurationError";
+  }
 }
 
 /**
@@ -20,28 +33,44 @@ export interface ProxySettings {
  * default non-overriding behavior.
  */
 export async function initializeCodexProxyEnvironment(): Promise<boolean> {
-  const fileEnvironment = await readProxyEnvironmentFile(path.join(getCodexHome(), ".env"));
-  const settings = resolveProxySettings(process.env, fileEnvironment);
+  try {
+    const fileEnvironment = await readProxyEnvironmentFile(path.join(getCodexHome(), ".env"));
+    return configureCodexProxyEnvironment(resolveProxySettings(process.env, fileEnvironment));
+  } catch (error) {
+    return rejectProxyConfiguration(error);
+  }
+}
+
+export function configureCodexProxyEnvironment(settings: ProxySettings): boolean {
+  disposeCodexProxyEnvironment();
   if (!settings.httpProxy && !settings.httpsProxy) {
     return false;
   }
 
   try {
+    validateProxySettings(settings);
     proxyDispatcher = new EnvHttpProxyAgent(settings);
     return true;
-  } catch {
-    console.warn("[codexAccounts] ignored invalid proxy settings from the process environment or Codex .env");
-    return false;
+  } catch (error) {
+    return rejectProxyConfiguration(error);
   }
 }
 
 export function getCodexProxyDispatcher(): Dispatcher | undefined {
+  if (proxyConfigurationError) {
+    throw new CodexProxyConfigurationError(proxyConfigurationError.message);
+  }
   return proxyDispatcher;
+}
+
+export function getCodexProxyConfigurationError(): CodexProxyConfigurationError | undefined {
+  return proxyConfigurationError;
 }
 
 export function disposeCodexProxyEnvironment(): void {
   const dispatcher = proxyDispatcher;
   proxyDispatcher = undefined;
+  proxyConfigurationError = undefined;
   if (dispatcher) {
     void dispatcher.close().catch(() => undefined);
   }
@@ -54,8 +83,9 @@ export async function readProxyEnvironmentFile(filePath: string): Promise<Record
     if (isFileNotFound(error)) {
       return {};
     }
-    console.warn("[codexAccounts] unable to read proxy settings from .env:", formatError(error));
-    return {};
+    throw new CodexProxyConfigurationError(
+      "Unable to read the Codex proxy environment file. Check the CODEX_HOME/.env permissions."
+    );
   }
 }
 
@@ -63,14 +93,19 @@ export function resolveProxySettings(
   processEnvironment: NodeJS.ProcessEnv,
   fileEnvironment: Readonly<Record<string, string>>
 ): ProxySettings {
-  const getValue = (key: (typeof PROXY_ENV_KEYS)[number]): string | undefined =>
-    readEnvironmentValue(processEnvironment, key) ?? readEnvironmentValue(fileEnvironment, key);
+  const getEntry = (key: (typeof PROXY_ENV_KEYS)[number]): EnvironmentEntry => {
+    const processEntry = readEnvironmentEntry(processEnvironment, key);
+    return processEntry.present ? processEntry : readEnvironmentEntry(fileEnvironment, key);
+  };
 
-  const allProxy = getValue("ALL_PROXY");
+  const allProxy = getEntry("ALL_PROXY");
+  const httpProxy = getEntry("HTTP_PROXY");
+  const httpsProxy = getEntry("HTTPS_PROXY");
+
   return {
-    httpProxy: getValue("HTTP_PROXY") ?? allProxy,
-    httpsProxy: getValue("HTTPS_PROXY") ?? allProxy,
-    noProxy: getValue("NO_PROXY")
+    httpProxy: httpProxy.value ?? allProxy.value,
+    httpsProxy: httpsProxy.value ?? allProxy.value,
+    noProxy: getEntry("NO_PROXY").value
   };
 }
 
@@ -123,11 +158,16 @@ function isProxyEnvironmentKey(key: string): boolean {
   return PROXY_ENV_KEYS.some((candidate) => candidate === normalized);
 }
 
-function readEnvironmentValue(
+function readEnvironmentEntry(
   environment: NodeJS.ProcessEnv | Readonly<Record<string, string>>,
   key: string
-): string | undefined {
-  return normalizeValue(environment[key.toLowerCase()]) ?? normalizeValue(environment[key]);
+): EnvironmentEntry {
+  for (const candidate of [key.toLowerCase(), key]) {
+    if (Object.prototype.hasOwnProperty.call(environment, candidate)) {
+      return { present: true, value: normalizeValue(environment[candidate]) };
+    }
+  }
+  return { present: false };
 }
 
 function normalizeValue(value: string | undefined): string | undefined {
@@ -139,6 +179,38 @@ function isFileNotFound(error: unknown): boolean {
   return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function validateProxySettings(settings: ProxySettings): void {
+  validateProxyUrl("HTTP proxy", settings.httpProxy);
+  validateProxyUrl("HTTPS proxy", settings.httpsProxy);
+}
+
+function validateProxyUrl(label: string, value: string | undefined): void {
+  if (!value) {
+    return;
+  }
+
+  let protocol: string;
+  try {
+    protocol = new URL(value).protocol;
+  } catch {
+    throw new CodexProxyConfigurationError(`${label} must be an absolute http:// or https:// URL.`);
+  }
+
+  if (protocol !== "http:" && protocol !== "https:") {
+    throw new CodexProxyConfigurationError(
+      `${label} uses the unsupported ${protocol || "unknown"} protocol. Only http:// and https:// proxy URLs are supported.`
+    );
+  }
+}
+
+function rejectProxyConfiguration(error: unknown): false {
+  disposeCodexProxyEnvironment();
+  proxyConfigurationError =
+    error instanceof CodexProxyConfigurationError
+      ? error
+      : new CodexProxyConfigurationError(
+          "Unable to initialize the Codex proxy. Check HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY."
+        );
+  console.error(`[codexAccounts] ${proxyConfigurationError.message}`);
+  return false;
 }

@@ -1,5 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { buildThinBar, renderMetricRow } from "../src/ui/statusBar";
+import type { CodexAccountRecord } from "../src/core/types";
+import { buildStatusText, buildThinBar, renderAccountPanel, renderMetricRow } from "../src/ui/statusBar";
+
+const account: CodexAccountRecord = {
+  id: "account-1",
+  email: "dev@example.com",
+  isActive: true,
+  createdAt: 1,
+  updatedAt: 1,
+  quotaSummary: {
+    hourlyPercentage: 37,
+    hourlyWindowPresent: true,
+    weeklyPercentage: 82,
+    weeklyWindowPresent: true,
+    codeReviewPercentage: 0,
+    additionalRateLimits: [
+      {
+        limitName: "Spark",
+        hourlyPercentage: 12,
+        hourlyWindowPresent: true,
+        weeklyPercentage: 71,
+        weeklyWindowPresent: true
+      }
+    ]
+  }
+};
+
+describe("buildStatusText", () => {
+  it("shows both quota values while 5-hour quota control is enabled", () => {
+    expect(buildStatusText(account, true)).toBe("$(dashboard) codex 37%/82%");
+  });
+
+  it("shows only the weekly quota while 5-hour quota control is disabled", () => {
+    expect(buildStatusText(account, false)).toBe("$(dashboard) codex 82%");
+  });
+});
+
+describe("renderAccountPanel", () => {
+  it("hides the 5-hour row while quota control is disabled", () => {
+    const panel = renderAccountPanel(account, true, true, false);
+
+    expect(panel).not.toContain("37%");
+    expect(panel).not.toContain("12%");
+    expect(panel).toContain("82%");
+    expect(panel).toContain("71%");
+  });
+
+  it("shows the 5-hour row while quota control is enabled", () => {
+    const panel = renderAccountPanel(account, true, true, true);
+
+    expect(panel).toContain("37%");
+    expect(panel).toContain("12%");
+    expect(panel).toContain("82%");
+    expect(panel).toContain("71%");
+  });
+});
 
 describe("buildThinBar", () => {
   it("renders an empty bar for zero percent", () => {

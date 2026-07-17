@@ -4,7 +4,7 @@ English · [简体中文](README.md)
 
 VS Code extension for managing multiple Codex accounts, viewing quota usage, and switching the active global `auth.json`.
 
-![Version](https://img.shields.io/badge/version-0.1.16-blue)
+![Version](https://img.shields.io/badge/version-0.1.17-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
 ![License](https://img.shields.io/github/license/wannanbigpig/codex-tools)
 ![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-tools?style=flat)
@@ -18,7 +18,7 @@ Manage multiple Codex accounts inside VS Code, inspect quota usage, switch the a
 
 **Language:** follows the current VS Code display language. Primary support is for Simplified Chinese and English, with additional localization for other languages.
 
-**Proxy:** on startup, the extension automatically loads `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` (including lowercase variants) from `~/.codex/.env` or `CODEX_HOME/.env`. Existing process environment variables take precedence, and the proxy is used for quota, OAuth, subscription, and other API requests.
+**Proxy:** on startup, the extension automatically loads `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` (including lowercase variants) from `~/.codex/.env` or `CODEX_HOME/.env`. Existing process environment variables take precedence, including empty values that explicitly disable a setting. Proxy URLs support `http://` and `https://`; invalid or unsupported configurations block extension network requests instead of silently falling back to a direct connection.
 
 ---
 
@@ -118,7 +118,7 @@ You can change these directly from the settings button in the top-right corner o
   - Disabled by default
   - When disabled, no timed refresh runs
 - `5-hour Quota Control`
-  - Disabled by default; the 5-hour quota remains visible while disabled
+  - Disabled by default; while disabled, the status bar hides the 5-hour quota and the dashboard keeps it visible
   - Controls whether a valid 5-hour quota can trigger automatic switching or quota warnings
 - `Automatic Account Switching`
   - Disabled by default

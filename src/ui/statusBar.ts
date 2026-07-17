@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { AccountsRepository } from "../storage";
 import { CodexAccountRecord } from "../core/types";
+import { isHourlyQuotaControlEnabled } from "../infrastructure/config/extensionSettings";
 import { getCurrentWindowRuntimeAccountId } from "../presentation/workbench/windowRuntimeAccount";
 import { formatRelativeReset } from "../utils/time";
 import { t } from "../utils";
@@ -25,7 +26,8 @@ export class AccountsStatusBarProvider {
           event.affectsConfiguration("codexAccounts.displayLanguage") ||
           event.affectsConfiguration("codexAccounts.dashboardTheme") ||
           event.affectsConfiguration("codexAccounts.quotaGreenThreshold") ||
-          event.affectsConfiguration("codexAccounts.quotaYellowThreshold")
+          event.affectsConfiguration("codexAccounts.quotaYellowThreshold") ||
+          event.affectsConfiguration("codexAccounts.hourlyQuotaControlEnabled")
         ) {
           void this.refresh();
         }
@@ -38,6 +40,7 @@ export class AccountsStatusBarProvider {
     const active = accounts.find((item) => item.isActive);
     const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
     const primary = accounts.find((item) => item.id === currentWindowAccountId) ?? active ?? accounts[0];
+    const showHourlyQuota = isHourlyQuotaControlEnabled();
     const _t = t();
 
     if (!primary) {
@@ -51,15 +54,18 @@ export class AccountsStatusBarProvider {
       return;
     }
 
-    this.item.text = buildStatusText(primary);
-    this.item.tooltip = buildTooltip(primary, active, accounts);
+    this.item.text = buildStatusText(primary, showHourlyQuota);
+    this.item.tooltip = buildTooltip(primary, active, accounts, showHourlyQuota);
     this.item.show();
   }
 }
 
-function buildStatusText(account: CodexAccountRecord): string {
+export function buildStatusText(account: CodexAccountRecord, showHourlyQuota: boolean): string {
   const hourly = account.quotaSummary?.hourlyPercentage;
   const weekly = account.quotaSummary?.weeklyPercentage;
+  if (!showHourlyQuota && typeof weekly === "number") {
+    return `${STATUS_BAR_ICON} codex ${weekly}%`;
+  }
   if (typeof hourly === "number" && typeof weekly === "number") {
     return `${STATUS_BAR_ICON} codex ${hourly}%/${weekly}%`;
   }
@@ -69,7 +75,8 @@ function buildStatusText(account: CodexAccountRecord): string {
 function buildTooltip(
   primary: CodexAccountRecord,
   active: CodexAccountRecord | undefined,
-  accounts: CodexAccountRecord[]
+  accounts: CodexAccountRecord[],
+  showHourlyQuota: boolean
 ): vscode.MarkdownString {
   const _t = t();
   const md = new vscode.MarkdownString(undefined, true);
@@ -81,20 +88,21 @@ function buildTooltip(
     .slice(0, 2);
 
   md.appendMarkdown(`**${_t("panel.dashboard.title")}**\n\n`);
-  md.appendMarkdown(renderAccountPanel(primary, true, primary.id === active?.id));
+  md.appendMarkdown(renderAccountPanel(primary, true, primary.id === active?.id, showHourlyQuota));
   for (const account of [...fallbackActive, ...selectedExtras]) {
     md.appendMarkdown(`\n---\n\n`);
-    md.appendMarkdown(renderAccountPanel(account, false, account.id === active?.id));
+    md.appendMarkdown(renderAccountPanel(account, false, account.id === active?.id, showHourlyQuota));
   }
 
   md.appendMarkdown(`\n\n---\n${_t("status.tooltip")}`);
   return md;
 }
 
-function renderAccountPanel(
+export function renderAccountPanel(
   account: CodexAccountRecord,
   current: boolean,
-  primary: boolean
+  primary: boolean,
+  showHourlyQuota: boolean
 ): string {
   const _t = t();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
@@ -108,7 +116,7 @@ function renderAccountPanel(
 
   const lines = [
     header,
-    ...(account.quotaSummary?.hourlyWindowPresent
+    ...(showHourlyQuota && account.quotaSummary?.hourlyWindowPresent
       ? [renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime)]
       : []),
     ...(account.quotaSummary?.weeklyWindowPresent
@@ -117,7 +125,7 @@ function renderAccountPanel(
   ];
 
   for (const limit of account.quotaSummary?.additionalRateLimits ?? []) {
-    if (limit.hourlyWindowPresent) {
+    if (showHourlyQuota && limit.hourlyWindowPresent) {
       lines.push(renderMetricRow(`${limit.limitName} ${_t("quota.hourly")}`, limit.hourlyPercentage, limit.hourlyResetTime));
     }
     if (limit.weeklyWindowPresent) {

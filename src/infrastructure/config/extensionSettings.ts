@@ -74,6 +74,10 @@ export function isBackgroundTokenRefreshEnabled(): boolean {
   return getCodexAccountsConfiguration().get<boolean>("backgroundTokenRefreshEnabled", true);
 }
 
+export function isHourlyQuotaControlEnabled(): boolean {
+  return getCodexAccountsConfiguration().get<boolean>("hourlyQuotaControlEnabled", false);
+}
+
 export function normalizeAutoSwitchThreshold(value: number): number {
   if (!Number.isFinite(value)) {
     return 20;
