@@ -3,6 +3,19 @@ import { normalizeQuotaSummary } from "../src/utils/quotaWindows";
 import { normalizeQuotaColorThresholds } from "../src/utils/ui";
 
 describe("normalizeQuotaSummary", () => {
+  it("normalizes a missing 5-hour window to 100 percent", () => {
+    const normalized = normalizeQuotaSummary({
+      hourlyPercentage: 0,
+      hourlyWindowPresent: false,
+      weeklyPercentage: 72,
+      weeklyWindowMinutes: 10080,
+      weeklyWindowPresent: true
+    });
+
+    expect(normalized?.hourlyPercentage).toBe(100);
+    expect(normalized?.hourlyWindowPresent).toBe(false);
+  });
+
   it("reclassifies swapped hourly and weekly windows by duration", () => {
     const normalized = normalizeQuotaSummary({
       hourlyPercentage: 10,
