@@ -37,6 +37,16 @@ describe("buildStatusText", () => {
 });
 
 describe("renderAccountPanel", () => {
+  it("normalizes raw ChatGPT plan identifiers", () => {
+    const teamPanel = renderAccountPanel({ ...account, planType: "chatgptteamplan" }, true, true, false);
+    const plusPanel = renderAccountPanel({ ...account, planType: "chatgptplusplan" }, false, false, false);
+
+    expect(teamPanel).toContain("Team");
+    expect(teamPanel).not.toContain("CHATGPTTEAMPLAN");
+    expect(plusPanel).toContain("Plus");
+    expect(plusPanel).not.toContain("CHATGPTPLUSPLAN");
+  });
+
   it("hides the 5-hour row while quota control is disabled", () => {
     const panel = renderAccountPanel(account, true, true, false);
 

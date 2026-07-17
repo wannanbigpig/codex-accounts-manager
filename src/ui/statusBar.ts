@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
 import { AccountsRepository } from "../storage";
 import { CodexAccountRecord } from "../core/types";
+import { formatPlanType } from "../application/dashboard/copy";
 import { isHourlyQuotaControlEnabled } from "../infrastructure/config/extensionSettings";
 import { getCurrentWindowRuntimeAccountId } from "../presentation/workbench/windowRuntimeAccount";
 import { formatRelativeReset } from "../utils/time";
-import { t } from "../utils";
-import { escapeMarkdown, quotaMarkerForPercentage } from "../utils";
+import { escapeMarkdown, getLanguage, quotaMarkerForPercentage, t } from "../utils";
 
 const STATUS_BAR_ICON = "$(dashboard)";
 
@@ -106,7 +106,7 @@ export function renderAccountPanel(
 ): string {
   const _t = t();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
-  const plan = (account.planType ?? "team").toUpperCase();
+  const plan = formatPlanType(account.planType ?? "team", getLanguage());
   const markers = [
     current ? _t("account.current") : undefined,
     primary ? _t("account.primary") : undefined,
@@ -117,19 +117,35 @@ export function renderAccountPanel(
   const lines = [
     header,
     ...(showHourlyQuota && account.quotaSummary?.hourlyWindowPresent
-      ? [renderMetricRow(_t("quota.hourly"), account.quotaSummary?.hourlyPercentage, account.quotaSummary?.hourlyResetTime)]
+      ? [
+          renderMetricRow(
+            _t("quota.hourly"),
+            account.quotaSummary?.hourlyPercentage,
+            account.quotaSummary?.hourlyResetTime
+          )
+        ]
       : []),
     ...(account.quotaSummary?.weeklyWindowPresent
-      ? [renderMetricRow(_t("quota.weekly"), account.quotaSummary?.weeklyPercentage, account.quotaSummary?.weeklyResetTime)]
+      ? [
+          renderMetricRow(
+            _t("quota.weekly"),
+            account.quotaSummary?.weeklyPercentage,
+            account.quotaSummary?.weeklyResetTime
+          )
+        ]
       : [])
   ];
 
   for (const limit of account.quotaSummary?.additionalRateLimits ?? []) {
     if (showHourlyQuota && limit.hourlyWindowPresent) {
-      lines.push(renderMetricRow(`${limit.limitName} ${_t("quota.hourly")}`, limit.hourlyPercentage, limit.hourlyResetTime));
+      lines.push(
+        renderMetricRow(`${limit.limitName} ${_t("quota.hourly")}`, limit.hourlyPercentage, limit.hourlyResetTime)
+      );
     }
     if (limit.weeklyWindowPresent) {
-      lines.push(renderMetricRow(`${limit.limitName} ${_t("quota.weekly")}`, limit.weeklyPercentage, limit.weeklyResetTime));
+      lines.push(
+        renderMetricRow(`${limit.limitName} ${_t("quota.weekly")}`, limit.weeklyPercentage, limit.weeklyResetTime)
+      );
     }
   }
 
