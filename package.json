@@ -235,6 +235,9 @@
     "format": "prettier --write \"src/**/*.ts\" \"webview-src/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"webview-src/**/*.{ts,tsx}\""
   },
+  "dependencies": {
+    "undici": "6.21.3"
+  },
   "devDependencies": {
     "@types/node": "^20.16.11",
     "@types/vscode": "^1.96.0",

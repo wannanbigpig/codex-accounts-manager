@@ -18,6 +18,8 @@ Manage multiple Codex accounts inside VS Code, inspect quota usage, switch the a
 
 **Language:** follows the current VS Code display language. Primary support is for Simplified Chinese and English, with additional localization for other languages.
 
+**Proxy:** on startup, the extension automatically loads `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` (including lowercase variants) from `~/.codex/.env` or `CODEX_HOME/.env`. Existing process environment variables take precedence, and the proxy is used for quota, OAuth, subscription, and other API requests.
+
 ---
 
 ## Preview
