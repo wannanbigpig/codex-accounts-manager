@@ -37,8 +37,8 @@ export function normalizeQuotaSummary(summary?: CodexQuotaSummary): CodexQuotaSu
   );
 
   const classified = classifyQuotaWindows([hourlyWindow, weeklyWindow].filter(Boolean) as QuotaWindowSnapshot[]);
-  const resolvedHourly = classified.hourly ?? (isHourlyWindow(hourlyWindow) ? hourlyWindow : undefined);
-  const resolvedWeekly = classified.weekly ?? (isWeeklyWindow(weeklyWindow) ? weeklyWindow : undefined);
+  const resolvedHourly = classified.hourly ?? (hourlyWindow && !isWeeklyWindow(hourlyWindow) ? hourlyWindow : undefined);
+  const resolvedWeekly = classified.weekly ?? (weeklyWindow && !isHourlyWindow(weeklyWindow) ? weeklyWindow : undefined);
 
   return {
     hourlyPercentage: resolvedHourly?.percentage ?? 100,
@@ -113,7 +113,46 @@ function readAdditionalRateLimitsFromRawData(rawData: unknown): CodexAdditionalQ
 }
 
 function readCreditsFromRawData(rawData: unknown): CodexCreditsSummary | undefined {
-  const credits = getRecord(getRecord(rawData)?.["credits"]);
+  const raw = getRecord(rawData);
+  const individualLimit = getRecord(getRecord(raw?.["spend_control"])?.["individual_limit"]);
+  if (individualLimit) {
+    const total = readFiniteNumber(individualLimit["limit"]);
+    const used = readFiniteNumber(individualLimit["used"]);
+    const remaining =
+      readFiniteNumber(individualLimit["remaining"]) ??
+      (total !== undefined && used !== undefined ? Math.max(0, total - used) : undefined);
+    const remainingPercentRaw =
+      readFiniteNumber(individualLimit["remaining_percent"]) ??
+      (total !== undefined && total > 0 && remaining !== undefined ? (remaining / total) * 100 : undefined);
+    const resetAt = readFiniteNumber(individualLimit["reset_at"]);
+    const resetAfterSeconds = readFiniteNumber(individualLimit["reset_after_seconds"]);
+    const resetTime =
+      resetAt !== undefined
+        ? resetAt > 1_000_000_000_000
+          ? Math.floor(resetAt / 1000)
+          : Math.floor(resetAt)
+        : resetAfterSeconds !== undefined && resetAfterSeconds >= 0
+          ? Math.floor(Date.now() / 1000) + resetAfterSeconds
+          : undefined;
+
+    if ([total, used, remaining, remainingPercentRaw].some((value) => value !== undefined)) {
+      return {
+        hasCredits: (remaining ?? 0) > 0,
+        unlimited: false,
+        overageLimitReached: remaining === 0,
+        balance: remaining === undefined ? "" : String(remaining),
+        approxLocalMessages: [],
+        approxCloudMessages: [],
+        total,
+        used,
+        remaining,
+        remainingPercent: remainingPercentRaw === undefined ? undefined : Math.round(clampPercent(remainingPercentRaw)),
+        resetTime
+      };
+    }
+  }
+
+  const credits = getRecord(raw?.["credits"]);
   if (!credits) {
     return undefined;
   }
@@ -134,6 +173,17 @@ function readCreditsFromRawData(rawData: unknown): CodexCreditsSummary | undefin
         ? credits["approxCloudMessages"]
         : []
   };
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function createQuotaWindowSnapshot(

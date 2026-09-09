@@ -14,6 +14,7 @@ export function buildWorkbenchRefreshSignature(params: {
         account.email,
         account.accountName ?? "",
         account.planType ?? "",
+        account.subscriptionActiveUntil ?? "",
         account.accountId ?? "",
         account.organizationId ?? "",
         account.userId ?? "",
@@ -37,6 +38,14 @@ export function buildWorkbenchRefreshSignature(params: {
         account.quotaSummary?.weeklyRequestsLimit ?? "",
         account.quotaSummary?.weeklyWindowMinutes ?? "",
         account.quotaSummary?.weeklyWindowPresent ? "1" : "0",
+        account.quotaSummary?.codeReviewPercentage ?? "",
+        account.quotaSummary?.codeReviewResetTime ?? "",
+        account.quotaSummary?.codeReviewRequestsLeft ?? "",
+        account.quotaSummary?.codeReviewRequestsLimit ?? "",
+        account.quotaSummary?.codeReviewWindowMinutes ?? "",
+        account.quotaSummary?.codeReviewWindowPresent ? "1" : "0",
+        account.quotaSummary?.resetCreditsAvailable ?? "",
+        account.quotaSummary?.resetCreditsNextExpiresAt ?? "",
         account.quotaSummary?.credits?.balance ?? "",
         account.quotaSummary?.additionalRateLimits
           ?.map(

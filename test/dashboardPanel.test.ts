@@ -146,4 +146,49 @@ describe("publishDashboardSnapshot", () => {
 
     expect(schedulePublishState).toHaveBeenCalledTimes(1);
   });
+
+  it("drops an older snapshot when a newer publish has started", async () => {
+    const olderState = createState();
+    olderState.panelTitle = "Older";
+    const newerState = createState();
+    newerState.panelTitle = "Newer";
+    let resolveOlder!: (state: DashboardState) => void;
+    buildDashboardStateMock
+      .mockImplementationOnce(() => new Promise<DashboardState>((resolve) => (resolveOlder = resolve)))
+      .mockResolvedValueOnce(newerState);
+    backfillMissingResetCreditExpiriesMock.mockResolvedValue(false);
+
+    let revision = 1;
+    const postMessage = vi.fn(async () => true);
+    const setPanelTitle = vi.fn();
+    const first = publishDashboardSnapshot({
+      repo: {} as never,
+      settingsStore: {} as never,
+      logoUri: "logo",
+      announcementsState: olderState.announcements,
+      setPanelTitle,
+      postMessage,
+      schedulePublishState: vi.fn(),
+      isCurrent: () => revision === 1
+    });
+
+    revision = 2;
+    await publishDashboardSnapshot({
+      repo: {} as never,
+      settingsStore: {} as never,
+      logoUri: "logo",
+      announcementsState: newerState.announcements,
+      setPanelTitle,
+      postMessage,
+      schedulePublishState: vi.fn(),
+      isCurrent: () => revision === 2
+    });
+    resolveOlder(olderState);
+    await first;
+
+    expect(setPanelTitle).toHaveBeenCalledTimes(1);
+    expect(setPanelTitle).toHaveBeenCalledWith("Newer");
+    expect(postMessage).toHaveBeenCalledTimes(1);
+    expect(postMessage).toHaveBeenCalledWith({ type: "dashboard:snapshot", state: newerState });
+  });
 });

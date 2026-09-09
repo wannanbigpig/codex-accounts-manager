@@ -142,8 +142,9 @@ export function formatAccountStructure(value: string | undefined, language: Dash
 
 export function formatPlanType(value: string | undefined, language: DashboardLanguage): string {
   const raw = (value ?? "").trim().toLowerCase();
-  const normalized =
+  const matchedPlan =
     ["enterprise", "business", "team", "plus", "pro", "free"].find((plan) => raw.includes(plan)) ?? raw;
+  const normalized = matchedPlan === "team" ? "business" : matchedPlan;
   if (!normalized) {
     return UNKNOWN_LABELS[language] ?? UNKNOWN_LABELS.en;
   }
@@ -158,10 +159,6 @@ export function formatPlanType(value: string | undefined, language: DashboardLan
       string
     >,
     pro: Object.fromEntries(Object.keys(UNKNOWN_LABELS).map((lang) => [lang, "Pro"])) as Record<
-      DashboardLanguage,
-      string
-    >,
-    team: Object.fromEntries(Object.keys(UNKNOWN_LABELS).map((lang) => [lang, "Team"])) as Record<
       DashboardLanguage,
       string
     >,

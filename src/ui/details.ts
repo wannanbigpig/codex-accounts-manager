@@ -3,8 +3,7 @@ import { needsRefresh, refreshTokens } from "../auth/oauth";
 import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
 import { resolveAccountHealth, isHealthDismissed } from "../application/accounts/health";
 import { resolveSubscriptionDisplay } from "../application/dashboard/buildDashboardState";
-import { formatAccountStructure } from "../application/dashboard/copy";
-import { getDashboardCopy } from "../application/dashboard/copy";
+import { formatAccountStructure, formatPlanType, getDashboardCopy } from "../application/dashboard/copy";
 import type { DashboardThemeOption } from "../domain/dashboard/types";
 import { getCodexAccountsConfiguration, normalizeDashboardTheme } from "../infrastructure/config/extensionSettings";
 import type { DashboardLanguage } from "../localization/languages";
@@ -303,6 +302,15 @@ function renderHtml(
       </div>`
         ]
       : []),
+    ...(quota?.codeReviewWindowPresent
+      ? [
+          `<div class="quota-card">
+        <h2>${escapeHtml(copy.reviewQuota)}</h2>
+        <div class="quota-value" style="--metric-color:${colorForPercentage(quota.codeReviewPercentage)};">${renderQuotaValue(quota.codeReviewPercentage)}</div>
+        <div class="meta">${escapeHtml(copy.reset)} ${renderLiveReset(quota.codeReviewResetTime, copy)}</div>
+      </div>`
+        ]
+      : []),
     ...(quota?.additionalRateLimits ?? []).flatMap((limit) => {
       const cards: string[] = [];
       if (limit.hourlyWindowPresent) {
@@ -358,7 +366,7 @@ function renderHtml(
           </div>
           <div class="badges">
             ${account.isActive ? `<span class="pill active">${escapeHtml(copy.current)}</span>` : `<span class="pill">${escapeHtml(copy.saved)}</span>`}
-            <span class="pill plan">${escapeHtml((account.planType ?? "unknown").toUpperCase())}</span>
+            <span class="pill plan">${escapeHtml(formatPlanType(account.planType, copy.lang))}</span>
             ${renderHealthBadge(health.kind, dismissedHealth, dashboardCopy)}
           </div>
         </div>

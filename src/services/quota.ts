@@ -113,10 +113,17 @@ export async function refreshQuota(
         : primary;
 
     if (!usageResult.ok) {
-      return { error: buildError(extractErrorMessage(usageResult.status, usageResult.raw)), updatedTokens: effectiveTokens };
+      const message =
+        usageResult.status >= 200 && usageResult.status < 300 && usageResult.payload === undefined
+          ? "Invalid quota response"
+          : extractErrorMessage(usageResult.status, usageResult.raw);
+      return { error: buildError(message), updatedTokens: effectiveTokens };
     }
 
     const usage = usageResult.payload;
+    if (!usage) {
+      return { error: buildError("Invalid quota response"), updatedTokens: effectiveTokens };
+    }
     const quotaSummary = parseUsage(usage);
 
     if (generation === getQuotaCacheGeneration(account.id)) {
@@ -148,7 +155,7 @@ async function requestQuotaUsage(accessToken: string, accountId?: string): Promi
   ok: boolean;
   status: number;
   raw: string;
-  payload: CodexUsageResponse;
+  payload?: CodexUsageResponse;
 }> {
   return retryWithBackoff(
     async () => {
@@ -179,11 +186,12 @@ async function requestQuotaUsage(accessToken: string, accountId?: string): Promi
         bodyPreview: raw
       });
 
+      const payload = parseUsagePayload(raw);
       return {
-        ok: response.ok,
+        ok: response.ok && payload !== undefined,
         status: response.status,
         raw,
-        payload: parseUsagePayload(raw)
+        payload
       };
     },
     {
@@ -193,11 +201,29 @@ async function requestQuotaUsage(accessToken: string, accountId?: string): Promi
   );
 }
 
-function parseUsagePayload(raw: string): CodexUsageResponse {
+function parseUsagePayload(raw: string): CodexUsageResponse | undefined {
   try {
-    return JSON.parse(raw) as CodexUsageResponse;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const hasQuotaData = [
+      "rate_limit",
+      "code_review_rate_limit",
+      "codeReviewRateLimit",
+      "code_review",
+      "additional_rate_limits",
+      "additionalRateLimits",
+      "credits",
+      "spend_control",
+      "rate_limit_reset_credits",
+      "rateLimitResetCredits"
+    ].some((key) => record[key] !== undefined && record[key] !== null);
+    return hasQuotaData ? (record as CodexUsageResponse) : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
@@ -236,23 +262,26 @@ function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
   const additionalRateLimitItems = normalizeAdditionalRateLimitItems(
     usage.additional_rate_limits ?? usage.additionalRateLimits
   );
-  const additionalWindows = additionalRateLimitItems.flatMap((item) => [
-    pickWindow(item.rateLimit, "primary"),
-    pickWindow(item.rateLimit, "secondary")
-  ]);
 
-  // code_review_rate_limit 结构与 rate_limit 一致，含 primary_window / secondary_window
-  const crPrimary = pickWindow(usage.code_review_rate_limit, "primary");
-  const crSecondary = pickWindow(usage.code_review_rate_limit, "secondary");
-  const crWindow = crPrimary ?? crSecondary;
+  // code_review_rate_limit 结构与 rate_limit 一致，兼容顶层、嵌套及驼峰字段。
+  const codeReviewRateLimit =
+    usage.code_review_rate_limit ??
+    usage.codeReviewRateLimit ??
+    usage.code_review ??
+    usage.rate_limit?.code_review_rate_limit ??
+    usage.rate_limit?.codeReviewRateLimit ??
+    usage.rate_limit?.code_review;
+  const crPrimary = pickWindow(codeReviewRateLimit, "primary");
+  const crSecondary = pickWindow(codeReviewRateLimit, "secondary");
 
-  const allWindows = [primary, secondary, crPrimary, crSecondary, ...additionalWindows];
-  const percentScale = detectUsagePercentScale(...allWindows);
+  const percentScale = detectUsagePercentScale(primary, secondary);
+  const codeReviewPercentScale = detectUsagePercentScale(crPrimary, crSecondary);
   const { hourlyWindow, weeklyWindow } = resolveRateLimitWindows(primary, secondary);
   const hourlyPercentage = resolveRemainingPercentage(hourlyWindow, percentScale);
   const weeklyPercentage = resolveRemainingPercentage(weeklyWindow, percentScale);
 
-  const crPercentage = resolveRemainingPercentage(extractCodeReviewWindow(crPrimary, crSecondary), percentScale);
+  const crWindow = extractCodeReviewWindow(crPrimary, crSecondary, codeReviewPercentScale);
+  const crPercentage = resolveRemainingPercentage(crWindow, codeReviewPercentScale);
 
   return {
     hourlyPercentage: hourlyPercentage ?? 0,
@@ -273,8 +302,8 @@ function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
     codeReviewRequestsLimit: crWindow ? pickNumberField(crWindow, "limit", "requests_limit", "requestsLimit") : undefined,
     codeReviewWindowMinutes: crWindow ? normalizeWindow(crWindow) : undefined,
     codeReviewWindowPresent: crPercentage !== undefined,
-    additionalRateLimits: parseAdditionalRateLimits(additionalRateLimitItems, percentScale),
-    credits: normalizeCredits(usage.credits),
+    additionalRateLimits: parseAdditionalRateLimits(additionalRateLimitItems),
+    credits: normalizeSpendControlCredits(usage) ?? normalizeCredits(usage.credits),
     resetCreditsAvailable: normalizeResetCreditsAvailable(usage),
     rawData: usage
   };
@@ -303,9 +332,14 @@ function normalizeResetCreditsAvailable(usage: CodexUsageResponse): number | und
  */
 function extractCodeReviewWindow(
   primary: UsageWindowInfo | undefined,
-  secondary: UsageWindowInfo | undefined
+  secondary: UsageWindowInfo | undefined,
+  percentScale: "percent" | "ratio"
 ): UsageWindowInfo | undefined {
-  return primary ?? secondary;
+  return (
+    [primary, secondary].find((window) => resolveRemainingPercentage(window, percentScale) !== undefined) ??
+    primary ??
+    secondary
+  );
 }
 
 type NormalizedAdditionalRateLimit = {
@@ -340,15 +374,15 @@ function normalizeAdditionalRateLimitItems(
   });
 }
 
-function parseAdditionalRateLimits(
-  items: NormalizedAdditionalRateLimit[],
-  percentScale: "percent" | "ratio"
-): CodexAdditionalQuotaLimit[] {
+function parseAdditionalRateLimits(items: NormalizedAdditionalRateLimit[]): CodexAdditionalQuotaLimit[] {
   return items.map((item) => {
+    const primary = pickWindow(item.rateLimit, "primary");
+    const secondary = pickWindow(item.rateLimit, "secondary");
     const { hourlyWindow, weeklyWindow } = resolveRateLimitWindows(
-      pickWindow(item.rateLimit, "primary"),
-      pickWindow(item.rateLimit, "secondary")
+      primary,
+      secondary
     );
+    const percentScale = detectUsagePercentScale(primary, secondary);
     const hourlyPercentage = resolveRemainingPercentage(hourlyWindow, percentScale);
     const weeklyPercentage = resolveRemainingPercentage(weeklyWindow, percentScale);
 
@@ -392,6 +426,60 @@ function normalizeCredits(credits: UsageCreditsInfo | null | undefined): CodexCr
         ? credits.approxCloudMessages
         : []
   };
+}
+
+function normalizeSpendControlCredits(usage: CodexUsageResponse): CodexCreditsSummary | undefined {
+  const limit = usage.spend_control?.individual_limit;
+  if (!limit || typeof limit !== "object") {
+    return undefined;
+  }
+
+  const total = normalizeFiniteNumber(limit.limit);
+  const used = normalizeFiniteNumber(limit.used);
+  const remaining = normalizeFiniteNumber(limit.remaining) ??
+    (total !== undefined && used !== undefined ? Math.max(0, total - used) : undefined);
+  const remainingPercentRaw = normalizeFiniteNumber(limit.remaining_percent) ??
+    (total !== undefined && total > 0 && remaining !== undefined ? (remaining / total) * 100 : undefined);
+  const remainingPercent = remainingPercentRaw === undefined ? undefined : Math.round(clampPercent(remainingPercentRaw));
+  const resetAt = normalizeFiniteNumber(limit.reset_at);
+  const resetAfterSeconds = normalizeFiniteNumber(limit.reset_after_seconds);
+  const resetTime =
+    resetAt !== undefined
+      ? resetAt > 1_000_000_000_000
+        ? Math.floor(resetAt / 1000)
+        : Math.floor(resetAt)
+      : resetAfterSeconds !== undefined && resetAfterSeconds >= 0
+        ? Math.floor(Date.now() / 1000) + resetAfterSeconds
+        : undefined;
+
+  if ([total, used, remaining, remainingPercent].every((value) => value === undefined)) {
+    return undefined;
+  }
+
+  return {
+    hasCredits: (remaining ?? 0) > 0,
+    unlimited: false,
+    overageLimitReached: remaining === 0,
+    balance: remaining === undefined ? "" : String(remaining),
+    approxLocalMessages: [],
+    approxCloudMessages: [],
+    total,
+    used,
+    remaining,
+    remainingPercent,
+    resetTime
+  };
+}
+
+function normalizeFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 function resolveRateLimitWindows(
@@ -519,7 +607,10 @@ function pickWindow(source: UsageRateLimitInfo | CodexUsageResponse["rate_limit"
 
 function detectUsagePercentScale(...windows: Array<UsageWindowInfo | undefined>): "percent" | "ratio" {
   const values = windows
-    .map((window) => pickNumberField(window, "used_percent", "usedPercent"))
+    .flatMap((window) => [
+      pickNumberField(window, "used_percent", "usedPercent"),
+      pickNumberField(window, "remaining_percent", "remainingPercent")
+    ])
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
 
   if (!values.length) {
@@ -670,7 +761,8 @@ export async function fetchResetCredits(
  */
 export async function consumeResetCredit(
   accessToken: string,
-  accountId?: string
+  accountId?: string,
+  redeemRequestId = crypto.randomUUID()
 ): Promise<void> {
   const headers = new Headers({
     Authorization: `Bearer ${accessToken}`,
@@ -680,9 +772,6 @@ export async function consumeResetCredit(
   if (accountId) {
     headers.set("ChatGPT-Account-Id", accountId);
   }
-
-  // redeem_request_id 使用随机 UUID v4 风格标识
-  const redeemRequestId = `cr-${crypto.randomUUID()}`;
 
   const response = await fetchWithTimeout(
     RESET_CREDITS_CONSUME_URL,

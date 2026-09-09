@@ -19,6 +19,7 @@ import { clearAutoSwitchLock, setAutoSwitchLock } from "../workbench/autoSwitchS
 import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
+import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -629,13 +630,10 @@ async function handleGetResetCredits(
     throw new Error("Account not found");
   }
 
-  const tokens = await repo.getTokens(account.id);
-  if (!tokens?.accessToken) {
-    throw new Error("No access token available");
-  }
-
   const accountId = account.accountId ?? undefined;
-  const snapshot = await fetchResetCredits(tokens.accessToken, accountId);
+  const snapshot = await runAuthenticatedAccountRequest(repo, account.id, (tokens) =>
+    fetchResetCredits(tokens.accessToken, accountId)
+  );
   return { resetCredits: snapshot };
 }
 
@@ -671,13 +669,11 @@ async function handleConsumeResetCredit(
     return undefined;
   }
 
-  const tokens = await repo.getTokens(account.id);
-  if (!tokens?.accessToken) {
-    throw new Error("No access token available");
-  }
-
   const accountId = account.accountId ?? undefined;
-  await consumeResetCredit(tokens.accessToken, accountId);
+  const redeemRequestId = crypto.randomUUID();
+  await runAuthenticatedAccountRequest(repo, account.id, (tokens) =>
+    consumeResetCredit(tokens.accessToken, accountId, redeemRequestId)
+  );
 
   void vscode.window.showInformationMessage(
     isZh ? "速率限制已重置，你可以继续工作了。" : "Rate limit has been reset. You can continue working."

@@ -143,6 +143,7 @@ export class DashboardOAuthCoordinator {
     try {
       const tokens = await completeOAuthLoginSession(session, callbackUrl.trim());
       const created = await this.repo.upsertFromTokens(tokens, false);
+      await refreshImportedAccountQuota(this.repo, created.id);
       this.oauthCancellationSources.get(oauthSessionId)?.dispose();
       this.oauthCancellationSources.delete(oauthSessionId);
       this.oauthSessions.delete(oauthSessionId);

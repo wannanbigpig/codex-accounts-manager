@@ -32,6 +32,7 @@ type PublishDashboardSnapshotParams = {
   schedulePublishState: () => void;
   lastPublishedStateSignature?: string;
   force?: boolean;
+  isCurrent?: () => boolean;
 };
 
 export async function publishDashboardSnapshot(params: PublishDashboardSnapshotParams): Promise<string | undefined> {
@@ -41,6 +42,9 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     params.logoUri,
     params.announcementsState
   );
+  if (params.isCurrent && !params.isCurrent()) {
+    return undefined;
+  }
   void backfillMissingResetCreditExpiries(params.repo, state.accounts, params.schedulePublishState).catch(() => undefined);
 
   params.setPanelTitle(state.panelTitle);
@@ -65,6 +69,7 @@ class DashboardPanelController {
   private webviewReady = false;
   private publishTimer: NodeJS.Timeout | undefined;
   private lastPublishedStateSignature: string | undefined;
+  private publishRevision = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -99,6 +104,7 @@ class DashboardPanelController {
         this.configWatcher?.dispose();
         this.configWatcher = undefined;
         this.lastPublishedStateSignature = undefined;
+        this.publishRevision += 1;
         this.panel = undefined;
         this.webviewReady = false;
       });
@@ -179,6 +185,7 @@ class DashboardPanelController {
       return;
     }
 
+    const revision = ++this.publishRevision;
     const logoUri = this.panel.webview
       .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "CT_logo_transparent_square_hd.png"))
       .toString();
@@ -195,9 +202,10 @@ class DashboardPanelController {
       postMessage: (message) => this.panel!.webview.postMessage(message),
       schedulePublishState: () => this.schedulePublishState(),
       lastPublishedStateSignature: this.lastPublishedStateSignature,
-      force
+      force,
+      isCurrent: () => revision === this.publishRevision
     });
-    if (!signature) {
+    if (!signature || revision !== this.publishRevision) {
       return;
     }
 

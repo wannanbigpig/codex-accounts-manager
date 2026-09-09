@@ -35,6 +35,23 @@ describe("normalizeQuotaSummary", () => {
     expect(normalized?.weeklyWindowMinutes).toBe(10080);
   });
 
+  it("preserves API slots when window durations are absent", () => {
+    const normalized = normalizeQuotaSummary({
+      hourlyPercentage: 42,
+      hourlyWindowPresent: true,
+      weeklyPercentage: 84,
+      weeklyWindowPresent: true,
+      codeReviewPercentage: 0
+    });
+
+    expect(normalized).toMatchObject({
+      hourlyPercentage: 42,
+      hourlyWindowPresent: true,
+      weeklyPercentage: 84,
+      weeklyWindowPresent: true
+    });
+  });
+
   it("derives additional model quota and credits from raw usage data without inventing missing values", () => {
     const normalized = normalizeQuotaSummary({
       hourlyPercentage: 90,

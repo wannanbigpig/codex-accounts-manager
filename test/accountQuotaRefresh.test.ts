@@ -222,9 +222,11 @@ describe("refreshSingleQuota token automation state", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(fetchResetCreditsMock).toHaveBeenCalledWith(tokens.accessToken, "acct-1");
-    expect(repo.updateResetCreditsSnapshot).toHaveBeenCalledWith(account.id, 1, 1_800_000_000);
-    expect(view.refresh).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(fetchResetCreditsMock).toHaveBeenCalledWith(tokens.accessToken, "acct-1");
+      expect(repo.updateResetCreditsSnapshot).toHaveBeenCalledWith(account.id, 1, 1_800_000_000);
+      expect(view.refresh).toHaveBeenCalled();
+    });
   });
 
   it("still refreshes reset credits when the updated quota count is zero", async () => {

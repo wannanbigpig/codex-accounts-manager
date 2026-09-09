@@ -21,6 +21,7 @@ vi.mock("../src/codex", async (importOriginal) => {
 
 import { AccountsRepository } from "../src/storage";
 import { mirrorAideckCodexAccount } from "../src/storage/aideckCodexStorage";
+import * as profileService from "../src/services/profile";
 import { buildAccountStorageId } from "../src/utils/accountIdentity";
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -571,7 +572,7 @@ describe("AccountsRepository token persistence", () => {
 
     const account = await repo.getAccount(storageId);
     expect(account?.accountName).toBe("VS Code Source");
-    expect(account?.planType).toBe("team");
+    expect(account?.planType).toBe("business");
 
     repo.dispose();
   });
@@ -913,7 +914,7 @@ describe("AccountsRepository token persistence", () => {
     );
     const aideckAccount = JSON.parse(await fs.readFile(aideckAccountFile, "utf8"));
     expect(aideckAccount.tokens.refresh_token).toBe("shared-refresh-token");
-    expect(aideckAccount.plan_type).toBe("team");
+    expect(aideckAccount.plan_type).toBe("business");
     expect(aideckAccount.subscription_active_until).toBe("1900000000");
     expect(aideckAccount.account_name).toBe("Aideck Team Workspace");
     expect(aideckAccount.account_structure).toBe("organization");
@@ -1078,6 +1079,35 @@ describe("AccountsRepository token persistence", () => {
 
     expect((await repo.getAccount("account-1"))?.quotaSummary?.resetCreditsNextExpiresAt).toBeUndefined();
 
+    repo.dispose();
+  });
+
+  it("keeps the usage plan authoritative while manually syncing profile metadata", async () => {
+    const secrets = new Map<string, string>();
+    const context = {
+      globalStorageUri: { fsPath: tempDir },
+      secrets: {
+        get: vi.fn(async (key: string) => secrets.get(key)),
+        store: vi.fn(async (key: string, value: string) => {
+          secrets.set(key, value);
+        }),
+        delete: vi.fn(async (key: string) => {
+          secrets.delete(key);
+        })
+      }
+    } as unknown as vscode.ExtensionContext;
+    const profileSpy = vi
+      .spyOn(profileService, "fetchRemoteAccountProfile")
+      .mockResolvedValueOnce({ accountId: "acct-1", planType: "business" })
+      .mockResolvedValueOnce({ accountId: "acct-1", planType: "plus", accountName: "Platform" });
+    const repo = new AccountsRepository(context);
+    const account = await repo.upsertFromTokens(createTokens("acct-1"));
+
+    const synced = await repo.refreshAccountProfileMetadata(account.id);
+
+    expect(synced.planType).toBe("business");
+    expect(synced.accountName).toBe("Platform");
+    profileSpy.mockRestore();
     repo.dispose();
   });
 

@@ -133,7 +133,12 @@ export function fromSharedQuota(quota: NonNullable<SharedCodexAccountJson["quota
             : [],
           approxCloudMessages: Array.isArray(quota.credits.approx_cloud_messages)
             ? quota.credits.approx_cloud_messages
-            : []
+            : [],
+          total: normalizeOptionalNumber(quota.credits.total),
+          used: normalizeOptionalNumber(quota.credits.used),
+          remaining: normalizeOptionalNumber(quota.credits.remaining),
+          remainingPercent: normalizeOptionalNumber(quota.credits.remaining_percent),
+          resetTime: normalizeOptionalNumber(quota.credits.reset_time)
         }
       : undefined,
     rawData: quota.raw_data ?? undefined
@@ -224,7 +229,12 @@ function toSharedQuota(summary?: CodexQuotaSummary): SharedCodexAccountJson["quo
           overage_limit_reached: summary.credits.overageLimitReached,
           balance: summary.credits.balance,
           approx_local_messages: summary.credits.approxLocalMessages,
-          approx_cloud_messages: summary.credits.approxCloudMessages
+          approx_cloud_messages: summary.credits.approxCloudMessages,
+          total: summary.credits.total,
+          used: summary.credits.used,
+          remaining: summary.credits.remaining,
+          remaining_percent: summary.credits.remainingPercent,
+          reset_time: summary.credits.resetTime
         }
       : null,
     raw_data: summary.rawData ?? null

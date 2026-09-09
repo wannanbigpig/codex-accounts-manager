@@ -211,6 +211,18 @@ export function buildMetrics(
     visible: quota ? Boolean(quota.weeklyWindowPresent) : true
   });
 
+  if (quota?.codeReviewWindowPresent) {
+    metrics.push({
+      key: "code-review",
+      label: copy.reviewLabel,
+      percentage: quota.codeReviewPercentage,
+      resetAt: quota.codeReviewResetTime,
+      requestsLeft: quota.codeReviewRequestsLeft,
+      requestsLimit: quota.codeReviewRequestsLimit,
+      visible: true
+    });
+  }
+
   for (const [index, limit] of quota?.additionalRateLimits?.entries() ?? []) {
     if (limit.hourlyWindowPresent) {
       metrics.push({
@@ -260,13 +272,13 @@ function formatHealthLabel(kind: DashboardAccountViewModel["healthKind"], copy: 
   }
 }
 
-function resolveWorkspaceDisplay(account: CodexAccountRecord): string {
+export function resolveWorkspaceDisplay(account: CodexAccountRecord): string {
   if (!isTeamWorkspace(account)) {
     return "Personal";
   }
 
   const name = account.accountName?.trim();
-  return name ? `Team | ${name}` : "Team";
+  return name ? `Workspace | ${name}` : "Workspace";
 }
 
 function isTeamWorkspace(account: CodexAccountRecord): boolean {
@@ -334,13 +346,19 @@ function formatPlanTypeWithQuota(account: CodexAccountRecord, lang: DashboardSta
   return multiplier ? `Pro ${multiplier}` : base;
 }
 
-function formatCreditsText(credits: CodexCreditsSummary | undefined, lang: DashboardState["lang"]): string | undefined {
+export function formatCreditsText(credits: CodexCreditsSummary | undefined, lang: DashboardState["lang"]): string | undefined {
   if (!credits) {
     return undefined;
   }
 
   const zh = lang === "zh" || lang === "zh-hant";
-  const value = credits.unlimited ? (zh ? "无限" : "Unlimited") : credits.balance || (credits.hasCredits ? (zh ? "可用" : "Available") : "0");
+  const value = credits.unlimited
+    ? zh
+      ? "无限"
+      : "Unlimited"
+    : credits.remaining !== undefined && credits.total !== undefined
+      ? `${credits.remaining} / ${credits.total}`
+      : credits.balance || (credits.hasCredits ? (zh ? "可用" : "Available") : "0");
   const label = zh ? "剩余额度" : "Credits left";
   return `${label}: ${value}`;
 }

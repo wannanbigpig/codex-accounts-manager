@@ -7,6 +7,7 @@ import type {
   SharedCodexAccountJson
 } from "../core/types";
 import { normalizeQuotaSummary } from "../utils/quotaWindows";
+import { normalizePlanType } from "../utils/quotaLabels";
 import {
   fromSharedQuota,
   fromSharedQuotaError,
@@ -66,7 +67,7 @@ export function createSharedImportIssue(
 
 export function applySharedAccountEntry(account: CodexAccountRecord, entry: SharedCodexAccountJson): void {
   account.userId = sanitizeOptionalValue(entry.user_id) ?? account.userId;
-  account.planType = sanitizeOptionalValue(entry.plan_type) ?? account.planType;
+  account.planType = normalizePlanType(sanitizeOptionalValue(entry.plan_type) ?? account.planType);
   account.subscriptionActiveUntil = sanitizeOptionalValue(entry.subscription_active_until) ?? account.subscriptionActiveUntil;
   account.accountId = sanitizeOptionalValue(entry.account_id) ?? account.accountId;
   account.organizationId = sanitizeOptionalValue(entry.organization_id) ?? account.organizationId;

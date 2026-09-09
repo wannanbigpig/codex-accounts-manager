@@ -44,6 +44,21 @@ export function isFreePlanType(planType?: string): boolean {
   return Boolean(planType?.trim().toLowerCase().includes("free"));
 }
 
+/** Normalize endpoint-specific plan aliases before persisting them. */
+export function normalizePlanType(planType?: string): string | undefined {
+  const raw = planType?.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("team") || normalized.includes("business")) {
+    return "business";
+  }
+
+  return normalized;
+}
+
 export function isMonthlyQuotaWindow(planType?: string, windowMinutes?: number): boolean {
   return (
     isFreePlanType(planType) ||

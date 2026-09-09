@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens, SharedCodexAccountJson } from "../core/types";
 import { extractClaims } from "../utils/jwt";
+import { normalizePlanType } from "../utils/quotaLabels";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -120,7 +121,7 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
       user_id: account.userId ?? readString(existing["user_id"]) ?? "",
       // The Aideck mirror is a compatibility layer, not an authority for workspace-scoped metadata.
       // Preserve existing workspace/quota fields when they already exist to avoid amplifying stale context from VS Code.
-      plan_type: readString(existing["plan_type"]) ?? account.planType ?? "",
+      plan_type: normalizePlanType(readString(existing["plan_type"]) ?? account.planType) ?? "",
       subscription_active_until:
         readString(existing["subscription_active_until"]) ?? account.subscriptionActiveUntil ?? "",
       account_id: account.accountId ?? readString(existing["account_id"]) ?? "",
@@ -252,7 +253,7 @@ function buildAideckIndexRecord(account: JsonRecord): JsonRecord {
     email: readString(account["email"]) ?? "",
     name: readString(account["name"]) ?? readString(account["account_name"]) ?? "",
     auth_mode: readString(account["auth_mode"]) ?? "",
-    plan_type: readString(account["plan_type"]) ?? "",
+    plan_type: normalizePlanType(readString(account["plan_type"])) ?? "",
     subscription_active_until: readString(account["subscription_active_until"]) ?? "",
     plan_name: readString(account["plan_name"]) ?? "",
     tier_id: readString(account["tier_id"]) ?? "",
@@ -293,7 +294,7 @@ function toSharedCodexAccount(account: JsonRecord): SharedCodexAccountJson | und
     email: readString(account["email"]),
     auth_mode: readString(account["auth_mode"]),
     user_id: readString(account["user_id"]),
-    plan_type: readString(account["plan_type"]),
+    plan_type: normalizePlanType(readString(account["plan_type"])),
     subscription_active_until: readString(account["subscription_active_until"]) ?? readNumber(account["subscription_active_until"]) ?? null,
     account_id: externalAccountId ?? null,
     organization_id: readString(account["organization_id"]) ?? null,
@@ -353,7 +354,12 @@ function toAideckQuota(summary: CodexQuotaSummary, updatedAt?: number): JsonReco
           overage_limit_reached: summary.credits.overageLimitReached,
           balance: summary.credits.balance,
           approx_local_messages: summary.credits.approxLocalMessages,
-          approx_cloud_messages: summary.credits.approxCloudMessages
+          approx_cloud_messages: summary.credits.approxCloudMessages,
+          total: summary.credits.total,
+          used: summary.credits.used,
+          remaining: summary.credits.remaining,
+          remaining_percent: summary.credits.remainingPercent,
+          reset_time: summary.credits.resetTime
         }
       : null,
     updated_at: updatedAt ?? Date.now()

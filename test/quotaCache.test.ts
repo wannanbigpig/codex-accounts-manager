@@ -184,7 +184,7 @@ describe("quota cache invalidation", () => {
     expect(result.quota?.hourlyPercentage).toBe(0);
   });
 
-  it("ignores deprecated code review quota fields", async () => {
+  it("uses a valid secondary Code Review window when the primary window has no usage", async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -218,8 +218,88 @@ describe("quota cache invalidation", () => {
 
     const result = await refreshQuota(account, tokens, true);
 
-    expect(result.quota?.codeReviewWindowPresent).toBe(false);
-    expect(result.quota?.codeReviewPercentage).toBe(0);
+    expect(result.quota?.codeReviewWindowPresent).toBe(true);
+    expect(result.quota?.codeReviewPercentage).toBe(70);
+    expect(result.quota?.codeReviewResetTime).toBeDefined();
+  });
+
+  it("parses camelCase and nested Code Review aliases", async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          rate_limit: {
+            primary_window: {
+              used_percent: 10,
+              limit_window_seconds: 18_000
+            },
+            codeReviewRateLimit: {
+              primaryWindow: {
+                remainingPercent: 55,
+                resetAt: 1_800_000_000,
+                limitWindowSeconds: 86_400,
+                requestsLeft: 11,
+                requestsLimit: 20
+              }
+            }
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const result = await refreshQuota(account, tokens, true);
+
+    expect(result.quota).toMatchObject({
+      codeReviewPercentage: 55,
+      codeReviewResetTime: 1_800_000_000,
+      codeReviewRequestsLeft: 11,
+      codeReviewRequestsLimit: 20,
+      codeReviewWindowMinutes: 1440,
+      codeReviewWindowPresent: true
+    });
+  });
+
+  it("detects percentage scales independently for main and Code Review windows", async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          rate_limit: {
+            primary_window: { used_percent: 10, limit_window_seconds: 18_000 }
+          },
+          code_review_rate_limit: {
+            primary_window: { used_percent: 0.25, limit_window_seconds: 86_400 }
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const result = await refreshQuota(account, tokens, true);
+
+    expect(result.quota?.hourlyPercentage).toBe(90);
+    expect(result.quota?.codeReviewPercentage).toBe(75);
+  });
+
+  it("rejects a malformed successful usage response", async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+
+    const result = await refreshQuota(account, tokens, true);
+
+    expect(result.quota).toBeUndefined();
+    expect(result.error?.message).toContain("Invalid quota response");
+  });
+
+  it("rejects an empty successful usage object", async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+
+    const result = await refreshQuota(account, tokens, true);
+
+    expect(result.quota).toBeUndefined();
+    expect(result.error?.message).toContain("Invalid quota response");
   });
 
   it("parses additional model quota from additional_rate_limits", async () => {
@@ -349,5 +429,38 @@ describe("quota cache invalidation", () => {
     });
     expect(result.quota?.credits?.balance).toBe("0");
     expect(result.updatedSubscriptionActiveUntil).toBe("1900000000");
+  });
+
+  it("parses Business monthly credits from spend_control", async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          rate_limit: {
+            primary_window: { used_percent: 10, limit_window_seconds: 18_000 }
+          },
+          spend_control: {
+            individual_limit: {
+              limit: "25000",
+              used: "8000",
+              remaining: "17000",
+              remaining_percent: 68,
+              reset_at: 1_900_000_000
+            }
+          }
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const result = await refreshQuota(account, tokens, true);
+
+    expect(result.quota?.credits).toMatchObject({
+      balance: "17000",
+      total: 25000,
+      used: 8000,
+      remaining: 17000,
+      remainingPercent: 68,
+      resetTime: 1_900_000_000
+    });
   });
 });

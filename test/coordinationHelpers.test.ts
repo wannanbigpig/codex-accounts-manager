@@ -185,7 +185,7 @@ describe("workbench refresh signature helpers", () => {
           accountName: "Account",
           tags: ["team"],
           metrics: [],
-          planTypeLabel: "Team",
+          planTypeLabel: "Business",
           authProviderLabel: "google",
           isActive: true,
           isCurrentWindowAccount: false,
@@ -248,7 +248,7 @@ describe("workbench refresh signature helpers", () => {
           accountName: "Account",
           tags: ["ops"],
           metrics: [],
-          planTypeLabel: "Team",
+          planTypeLabel: "Business",
           authProviderLabel: "google",
           isActive: true,
           isCurrentWindowAccount: false,
@@ -307,5 +307,37 @@ describe("workbench refresh signature helpers", () => {
     });
 
     expect(base).not.toBe(next);
+  });
+
+  it("changes workbench signatures when subscription or Code Review display data changes", () => {
+    const baseAccount = {
+      id: "a",
+      email: "a@example.com",
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 2,
+      quotaSummary: {
+        hourlyPercentage: 80,
+        weeklyPercentage: 70,
+        codeReviewPercentage: 60,
+        codeReviewWindowPresent: true
+      }
+    };
+    const base = buildWorkbenchRefreshSignature({
+      indexHealth: { status: "healthy", availableBackups: 0 },
+      accounts: [baseAccount]
+    });
+    const next = buildWorkbenchRefreshSignature({
+      indexHealth: { status: "healthy", availableBackups: 0 },
+      accounts: [
+        {
+          ...baseAccount,
+          subscriptionActiveUntil: "1900000000",
+          quotaSummary: { ...baseAccount.quotaSummary, codeReviewPercentage: 59 }
+        }
+      ]
+    });
+
+    expect(next).not.toBe(base);
   });
 });

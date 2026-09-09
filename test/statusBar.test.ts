@@ -41,10 +41,36 @@ describe("renderAccountPanel", () => {
     const teamPanel = renderAccountPanel({ ...account, planType: "chatgptteamplan" }, true, true, false);
     const plusPanel = renderAccountPanel({ ...account, planType: "chatgptplusplan" }, false, false, false);
 
-    expect(teamPanel).toContain("Team");
+    expect(teamPanel).toContain("Business");
     expect(teamPanel).not.toContain("CHATGPTTEAMPLAN");
     expect(plusPanel).toContain("Plus");
     expect(plusPanel).not.toContain("CHATGPTPLUSPLAN");
+  });
+
+  it("does not invent a Business plan when the plan is unknown", () => {
+    const panel = renderAccountPanel(account, true, true, false);
+
+    expect(panel).toContain("unknown");
+    expect(panel).not.toContain("Business");
+  });
+
+  it("shows Code Review when that window is present", () => {
+    const panel = renderAccountPanel(
+      {
+        ...account,
+        quotaSummary: {
+          ...account.quotaSummary!,
+          codeReviewPercentage: 66,
+          codeReviewWindowPresent: true
+        }
+      },
+      true,
+      true,
+      false
+    );
+
+    expect(panel).toContain("Review");
+    expect(panel).toContain("66%");
   });
 
   it("hides the 5-hour row while quota control is disabled", () => {

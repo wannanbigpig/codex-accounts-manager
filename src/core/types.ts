@@ -119,6 +119,16 @@ export interface CodexCreditsSummary {
   balance: string;
   approxLocalMessages: unknown[];
   approxCloudMessages: unknown[];
+  /** 月度额度总量（Business spend control） */
+  total?: number;
+  /** 本月已使用额度 */
+  used?: number;
+  /** 本月剩余额度 */
+  remaining?: number;
+  /** 本月剩余百分比 */
+  remainingPercent?: number;
+  /** 月度额度重置时间戳（秒） */
+  resetTime?: number;
 }
 
 /**
@@ -149,7 +159,7 @@ export interface CodexAccountRecord {
   userId?: string;
   /** 认证提供者 (如 google, microsoft 等) */
   authProvider?: string;
-  /** 计划类型 (如 free, plus, team 等) */
+  /** 计划类型 (如 free, plus, business 等；兼容读取历史 team 别名) */
   planType?: string;
   /** ChatGPT 订阅到期时间（原始字符串或时间戳字符串） */
   subscriptionActiveUntil?: string;
@@ -409,6 +419,17 @@ export interface CodexUsageResponse {
   additionalRateLimits?: UsageAdditionalRateLimitInfo[] | null;
   /** 账号 credits */
   credits?: UsageCreditsInfo | null;
+  /** Business 月度额度控制 */
+  spend_control?: {
+    individual_limit?: {
+      limit?: string | number;
+      used?: string | number;
+      remaining?: string | number;
+      remaining_percent?: string | number;
+      reset_at?: string | number;
+      reset_after_seconds?: string | number;
+    } | null;
+  } | null;
   /** 主动重置次数（rate-limit reset credits） */
   rate_limit_reset_credits?: {
     available_count?: number;
@@ -542,6 +563,11 @@ export interface SharedCodexAccountJson {
       balance?: string;
       approx_local_messages?: unknown[];
       approx_cloud_messages?: unknown[];
+      total?: number;
+      used?: number;
+      remaining?: number;
+      remaining_percent?: number;
+      reset_time?: number;
     } | null;
     raw_data?: unknown;
   } | null;

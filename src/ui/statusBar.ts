@@ -107,7 +107,7 @@ export function renderAccountPanel(
   const _t = t();
   const language = getLanguage();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
-  const plan = formatPlanType(account.planType ?? "team", language);
+  const plan = formatPlanType(account.planType, language);
   const markers = [
     current ? _t("account.current") : undefined,
     primary ? _t("account.primary") : undefined,
@@ -141,6 +141,16 @@ export function renderAccountPanel(
         ]
       : [])
   ];
+
+  if (account.quotaSummary?.codeReviewWindowPresent) {
+    lines.push(
+      renderMetricRow(
+        _t("quota.review"),
+        account.quotaSummary.codeReviewPercentage,
+        account.quotaSummary.codeReviewResetTime
+      )
+    );
+  }
 
   for (const limit of account.quotaSummary?.additionalRateLimits ?? []) {
     if (showHourlyQuota && limit.hourlyWindowPresent) {

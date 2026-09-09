@@ -1,7 +1,7 @@
 import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens } from "../core/types";
 import { extractClaims } from "../utils/jwt";
 import { normalizeQuotaSummary } from "../utils/quotaWindows";
-import { isFreePlanType } from "../utils/quotaLabels";
+import { isFreePlanType, normalizePlanType } from "../utils/quotaLabels";
 import {
   applyRemoteProfileToAccount,
   type RemoteAccountProfileLike,
@@ -16,7 +16,7 @@ export function applyQuotaUpdate(params: {
   updatedSubscriptionActiveUntil?: string;
   now: number;
 }): string | undefined {
-  params.account.lastQuotaAt = params.now;
+  params.account.planType = normalizePlanType(params.account.planType);
   params.account.updatedAt = params.now;
   const previousQuotaSummary = params.account.quotaSummary;
   const nextQuotaSummary = normalizeQuotaSummary(params.quotaSummary);
@@ -43,17 +43,21 @@ export function applyQuotaUpdate(params: {
       preservedResetCreditsExpiry
     });
   }
-  params.account.quotaSummary = nextQuotaSummary;
+  if (nextQuotaSummary) {
+    params.account.quotaSummary = nextQuotaSummary;
+    params.account.lastQuotaAt = params.now;
+  }
   params.account.quotaError = params.quotaError;
   params.account.dismissedHealthIssueKey = undefined;
 
-  if (params.updatedPlanType) {
-    params.account.planType = params.updatedPlanType;
-    if (isFreePlanType(params.updatedPlanType)) {
+  const updatedPlanType = normalizePlanType(params.updatedPlanType);
+  if (updatedPlanType) {
+    params.account.planType = updatedPlanType;
+    if (isFreePlanType(updatedPlanType)) {
       params.account.subscriptionActiveUntil = undefined;
     }
   }
-  if (params.updatedSubscriptionActiveUntil && !isFreePlanType(params.updatedPlanType)) {
+  if (params.updatedSubscriptionActiveUntil && !isFreePlanType(updatedPlanType ?? params.account.planType)) {
     params.account.subscriptionActiveUntil = params.updatedSubscriptionActiveUntil;
   }
 
@@ -79,6 +83,7 @@ export function applyRemoteProfileFromTokens(params: {
   remoteProfile?: RemoteAccountProfileLike;
   planType?: string;
   allowAccountIdRepair?: boolean;
+  preservePlanType?: boolean;
 }): boolean {
   const claims = extractClaims(params.tokens.idToken, params.tokens.accessToken);
   return applyRemoteProfileToAccount({
@@ -86,6 +91,7 @@ export function applyRemoteProfileFromTokens(params: {
     claims,
     remoteProfile: params.remoteProfile,
     planType: params.planType ?? params.account.planType,
-    allowAccountIdRepair: params.allowAccountIdRepair
+    allowAccountIdRepair: params.allowAccountIdRepair,
+    preservePlanType: params.preservePlanType
   });
 }

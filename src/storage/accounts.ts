@@ -85,6 +85,7 @@ import {
 import { buildAccountStorageId } from "../utils/accountIdentity";
 import { extractClaims, isTokenExpired } from "../utils/jwt";
 import { getQuotaIssueKind } from "../utils/quotaIssue";
+import { normalizePlanType } from "../utils/quotaLabels";
 import { AccountError, StorageError, createError, ErrorCode } from "../core/errors";
 import {
   AideckMirrorTokenSnapshot,
@@ -125,6 +126,8 @@ export class AccountsRepository {
   private readonly accountMutex = createKeyedMutex();
   /** getTokens 内存缓存，减少 SecretStore/Keychain 重复读取 */
   private readonly tokenCache = new Map<string, TokenCacheEntry>();
+  /** 同账号订阅刷新复用，避免较晚完成的旧请求覆盖新结果。 */
+  private readonly subscriptionRefreshes = new Map<string, Promise<void>>();
 
   /** 防止重复释放 */
   private disposed = false;
@@ -458,7 +461,8 @@ export class AccountsRepository {
         tokens,
         remoteProfile,
         planType: account.planType,
-        allowAccountIdRepair: true
+        allowAccountIdRepair: true,
+        preservePlanType: true
       })
     ) {
       account.updatedAt = Date.now();
@@ -900,7 +904,8 @@ export class AccountsRepository {
               account: freshAccount,
               tokens: storedTokens,
               remoteProfile,
-              planType: effectivePlanType
+              planType: freshAccount.planType ?? effectivePlanType,
+              preservePlanType: true
             });
             this.writeIndex(freshIndex);
           }
@@ -995,6 +1000,23 @@ export class AccountsRepository {
    * 先调 accounts/check，不够再降级到 subscriptions。失败后 30min 回退重试。
    */
   async refreshSubscriptionState(accountId: string, force = false): Promise<void> {
+    const inflight = this.subscriptionRefreshes.get(accountId);
+    if (inflight) {
+      return inflight;
+    }
+
+    const refreshTask = this.refreshSubscriptionStateInternal(accountId, force);
+    this.subscriptionRefreshes.set(accountId, refreshTask);
+    try {
+      await refreshTask;
+    } finally {
+      if (this.subscriptionRefreshes.get(accountId) === refreshTask) {
+        this.subscriptionRefreshes.delete(accountId);
+      }
+    }
+  }
+
+  private async refreshSubscriptionStateInternal(accountId: string, force = false): Promise<void> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
     if (!account) {
@@ -1049,8 +1071,9 @@ export class AccountsRepository {
         freshAccount.accountId = snapshotResult.accountId;
         changed = true;
       }
-      if (snapshotResult.planType && snapshotResult.planType !== freshAccount.planType) {
-        freshAccount.planType = snapshotResult.planType;
+      const snapshotPlanType = normalizePlanType(snapshotResult.planType);
+      if (snapshotPlanType && snapshotPlanType !== freshAccount.planType) {
+        freshAccount.planType = snapshotPlanType;
         changed = true;
       }
       if (
@@ -1058,6 +1081,13 @@ export class AccountsRepository {
         snapshotResult.subscriptionActiveUntil !== freshAccount.subscriptionActiveUntil
       ) {
         freshAccount.subscriptionActiveUntil = snapshotResult.subscriptionActiveUntil;
+        changed = true;
+      } else if (
+        !snapshotResult.subscriptionActiveUntil &&
+        freshAccount.subscriptionActiveUntil &&
+        subscriptionMissingOrExpired(freshAccount.subscriptionActiveUntil)
+      ) {
+        freshAccount.subscriptionActiveUntil = undefined;
         changed = true;
       }
 

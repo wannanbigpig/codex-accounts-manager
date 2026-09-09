@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchResetCredits } from "../src/services/quota";
+import { consumeResetCredit, fetchResetCredits } from "../src/services/quota";
 
 describe("fetchResetCredits", () => {
   afterEach(() => {
@@ -92,5 +92,15 @@ describe("fetchResetCredits", () => {
     expect(snapshot.availableCount).toBe(1);
     expect(snapshot.credits[0]?.expires_at).toBe(1_785_109_796);
     expect(snapshot.nextExpiresAt).toBe(1_785_109_796);
+  });
+
+  it("uses the caller-provided idempotency id when consuming a reset credit", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await consumeResetCredit("token", "acct-4", "fixed-request-id");
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ redeem_request_id: "fixed-request-id" });
   });
 });
