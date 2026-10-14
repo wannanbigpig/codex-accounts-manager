@@ -93,7 +93,7 @@
         "codexAccounts.hourlyQuotaControlEnabled": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "Show the 5-hour quota in the status bar and allow it to trigger automatic account switching and quota warning notifications. The quota remains visible in the dashboard."
+          "markdownDescription": "Allow valid 5-hour quota data to trigger automatic account switching and quota warning notifications. Quota display in the status bar, tooltip, and dashboard is independent of this setting."
         },
         "codexAccounts.autoSwitchReloadWindowEnabled": {
           "type": "boolean",
@@ -236,10 +236,12 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"webview-src/**/*.{ts,tsx}\""
   },
   "dependencies": {
+    "proper-lockfile": "4.1.2",
     "undici": "6.28.0"
   },
   "devDependencies": {
     "@types/node": "^20.16.11",
+    "@types/proper-lockfile": "4.1.4",
     "@types/vscode": "^1.96.0",
     "@typescript-eslint/eslint-plugin": "^8.61.0",
     "@typescript-eslint/parser": "^8.61.0",

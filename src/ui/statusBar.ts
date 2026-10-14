@@ -2,10 +2,16 @@ import * as vscode from "vscode";
 import { AccountsRepository } from "../storage";
 import { CodexAccountRecord } from "../core/types";
 import { formatPlanType } from "../application/dashboard/copy";
-import { isHourlyQuotaControlEnabled } from "../infrastructure/config/extensionSettings";
 import { getCurrentWindowRuntimeAccountId } from "../presentation/workbench/windowRuntimeAccount";
-import { formatRelativeReset } from "../utils/time";
-import { escapeMarkdown, getLanguage, quotaMarkerForPercentage, resolveLongQuotaLabel, t } from "../utils";
+import { formatRelativeReset, formatTimestamp } from "../utils/time";
+import {
+  escapeMarkdown,
+  getLanguage,
+  isMonthlyQuotaWindow,
+  quotaMarkerForPercentage,
+  resolveLongQuotaLabel,
+  t
+} from "../utils";
 
 const STATUS_BAR_ICON = "$(dashboard)";
 
@@ -26,8 +32,7 @@ export class AccountsStatusBarProvider {
           event.affectsConfiguration("codexAccounts.displayLanguage") ||
           event.affectsConfiguration("codexAccounts.dashboardTheme") ||
           event.affectsConfiguration("codexAccounts.quotaGreenThreshold") ||
-          event.affectsConfiguration("codexAccounts.quotaYellowThreshold") ||
-          event.affectsConfiguration("codexAccounts.hourlyQuotaControlEnabled")
+          event.affectsConfiguration("codexAccounts.quotaYellowThreshold")
         ) {
           void this.refresh();
         }
@@ -40,7 +45,6 @@ export class AccountsStatusBarProvider {
     const active = accounts.find((item) => item.isActive);
     const currentWindowAccountId = getCurrentWindowRuntimeAccountId();
     const primary = accounts.find((item) => item.id === currentWindowAccountId) ?? active ?? accounts[0];
-    const showHourlyQuota = isHourlyQuotaControlEnabled();
     const _t = t();
 
     if (!primary) {
@@ -54,29 +58,29 @@ export class AccountsStatusBarProvider {
       return;
     }
 
-    this.item.text = buildStatusText(primary, showHourlyQuota);
-    this.item.tooltip = buildTooltip(primary, active, accounts, showHourlyQuota);
+    this.item.text = buildStatusText(primary);
+    this.item.tooltip = buildTooltip(primary, active, accounts);
     this.item.show();
   }
 }
 
-export function buildStatusText(account: CodexAccountRecord, showHourlyQuota: boolean): string {
-  const hourly = account.quotaSummary?.hourlyPercentage;
-  const weekly = account.quotaSummary?.weeklyPercentage;
-  if (!showHourlyQuota && typeof weekly === "number") {
-    return `${STATUS_BAR_ICON} codex ${weekly}%`;
+export function buildStatusText(account: CodexAccountRecord): string {
+  const quota = account.quotaSummary;
+  const longLabel = isMonthlyQuotaWindow(account.planType, quota?.weeklyWindowMinutes) ? "Mo" : "Wk";
+  const metrics: string[] = [];
+  if (quota?.hourlyWindowPresent !== false) {
+    metrics.push(`5h ${formatPercentage(quota?.hourlyPercentage)}`);
   }
-  if (typeof hourly === "number" && typeof weekly === "number") {
-    return `${STATUS_BAR_ICON} codex ${hourly}%/${weekly}%`;
+  if (quota?.weeklyWindowPresent !== false) {
+    metrics.push(`${longLabel} ${formatPercentage(quota?.weeklyPercentage)}`);
   }
-  return `${STATUS_BAR_ICON} Codex Accounts Manager`;
+  return `${STATUS_BAR_ICON} Codex ${metrics.length ? metrics.join(" · ") : "--"}`;
 }
 
 function buildTooltip(
   primary: CodexAccountRecord,
   active: CodexAccountRecord | undefined,
-  accounts: CodexAccountRecord[],
-  showHourlyQuota: boolean
+  accounts: CodexAccountRecord[]
 ): vscode.MarkdownString {
   const _t = t();
   const md = new vscode.MarkdownString(undefined, true);
@@ -88,22 +92,17 @@ function buildTooltip(
     .slice(0, 2);
 
   md.appendMarkdown(`**${_t("panel.dashboard.title")}**\n\n`);
-  md.appendMarkdown(renderAccountPanel(primary, true, primary.id === active?.id, showHourlyQuota));
+  md.appendMarkdown(renderAccountPanel(primary, true, primary.id === active?.id));
   for (const account of [...fallbackActive, ...selectedExtras]) {
     md.appendMarkdown(`\n---\n\n`);
-    md.appendMarkdown(renderAccountPanel(account, false, account.id === active?.id, showHourlyQuota));
+    md.appendMarkdown(renderAccountPanel(account, false, account.id === active?.id));
   }
 
   md.appendMarkdown(`\n\n---\n${_t("status.tooltip")}`);
   return md;
 }
 
-export function renderAccountPanel(
-  account: CodexAccountRecord,
-  current: boolean,
-  primary: boolean,
-  showHourlyQuota: boolean
-): string {
+export function renderAccountPanel(account: CodexAccountRecord, current: boolean, primary: boolean): string {
   const _t = t();
   const language = getLanguage();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
@@ -117,7 +116,7 @@ export function renderAccountPanel(
 
   const lines = [
     header,
-    ...(showHourlyQuota && account.quotaSummary?.hourlyWindowPresent
+    ...(account.quotaSummary?.hourlyWindowPresent
       ? [
           renderMetricRow(
             _t("quota.hourly"),
@@ -153,7 +152,7 @@ export function renderAccountPanel(
   }
 
   for (const limit of account.quotaSummary?.additionalRateLimits ?? []) {
-    if (showHourlyQuota && limit.hourlyWindowPresent) {
+    if (limit.hourlyWindowPresent) {
       lines.push(
         renderMetricRow(`${limit.limitName} ${_t("quota.hourly")}`, limit.hourlyPercentage, limit.hourlyResetTime)
       );
@@ -169,13 +168,18 @@ export function renderAccountPanel(
     }
   }
 
+  lines.push(`${_t("account.lastRefresh")}: ${escapeMarkdown(formatTimestamp(account.lastQuotaAt))}`);
   return `${lines.join("  \n")}\n`;
 }
 
 export function renderMetricRow(label: string, percent?: number, resetAt?: number): string {
-  const value = typeof percent === "number" ? `${percent}%` : "--";
+  const value = formatPercentage(percent);
   const reset = resetAt ? `${formatRelativeReset(resetAt)} (${formatResetClock(resetAt)})` : t()("quota.resetUnknown");
   return `${quotaMarker(percent)} ${escapeMarkdown(padLabel(label, 5))} ${buildThinBar(percent, 10)} ${escapeMarkdown(value)}  ${escapeMarkdown(reset)}`;
+}
+
+function formatPercentage(percent?: number): string {
+  return typeof percent === "number" && Number.isFinite(percent) ? `${percent}%` : "--";
 }
 
 function padLabel(label: string, width: number): string {
@@ -183,7 +187,7 @@ function padLabel(label: string, width: number): string {
 }
 
 export function buildThinBar(percent?: number, width = 10): string {
-  if (typeof percent !== "number") {
+  if (typeof percent !== "number" || !Number.isFinite(percent)) {
     return "╌".repeat(width);
   }
 

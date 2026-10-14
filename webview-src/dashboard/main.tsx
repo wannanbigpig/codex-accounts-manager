@@ -1,7 +1,8 @@
 import { render } from "preact";
 import { useEffect, useReducer, useState } from "preact/hooks";
 import packageJson from "../../package.json";
-import type { DashboardAccountViewModel } from "../../src/domain/dashboard/types";
+import type { DashboardAccountViewModel, DashboardHostMessage } from "../../src/domain/dashboard/types";
+import { getWakeupCopy } from "../../src/domain/wakeup/copy";
 import { AnnouncementCenter } from "./announcementCenter";
 import { BatchSelectionBar, OverviewSection, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
@@ -12,6 +13,7 @@ import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, 
 import { SavedAccountCard } from "./savedAccountCard";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
+import { ClockIcon, WakeupModal } from "./wakeupModal";
 
 const GITHUB_PROJECT_URL = "https://github.com/wannanbigpig/codex-tools";
 
@@ -19,6 +21,8 @@ function App() {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
+  const [wakeupOpen, setWakeupOpen] = useState(false);
+  const [wakeupResult, setWakeupResult] = useState<Extract<DashboardHostMessage, { type: "dashboard:action-result" }>>();
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
     dispatch
@@ -30,8 +34,19 @@ function App() {
     importJsonFileReadError: snapshot?.copy.importJsonFileReadError ?? "Failed to read JSON file."
   });
   useDashboardHostSync({
-    handleHostMessage: modals.handleHostMessage,
-    handleEscape: () => modals.handleEscape(isActionPending("completeOAuthSession"))
+    handleHostMessage: (message) => {
+      modals.handleHostMessage(message);
+      if (message.type === "dashboard:action-result" && message.action.includes("Wakeup")) {
+        setWakeupResult(message);
+      }
+    },
+    handleEscape: () => {
+      if (wakeupOpen) {
+        setWakeupOpen(false);
+        return true;
+      }
+      return modals.handleEscape(isActionPending("completeOAuthSession"));
+    }
   });
   useEffect(() => {
     const preference = snapshot?.settings.dashboardTheme ?? "auto";
@@ -193,6 +208,25 @@ function App() {
               </div>
             </div>
             <div class="hero-settings">
+              <button
+                id="wakeupButton"
+                class={`settings-btn action-btn icon-only wakeup-button ${snapshot.wakeup?.enabled ? "is-enabled" : ""}`}
+                type="button"
+                title={getWakeupCopy(snapshot.lang).title}
+                aria-label={getWakeupCopy(snapshot.lang).title}
+                onClick={() => {
+                  setWakeupResult(undefined);
+                  setWakeupOpen(true);
+                }}
+              >
+                <span class="button-face">
+                  <span class="button-icon"><ClockIcon /></span>
+                </span>
+                {snapshot.wakeup?.enabled ? <span class="wakeup-button-dot" /> : null}
+                <span class="button-tip" aria-hidden="true">
+                  {getWakeupCopy(snapshot.lang).title}
+                </span>
+              </button>
               <button
                 id="announcementsButton"
                 class={`settings-btn action-btn icon-only announcement-btn ${announcementUnreadCount > 0 ? "has-unread" : ""}`}
@@ -384,6 +418,21 @@ function App() {
           </section>
         ) : null}
       </div>
+
+      {wakeupOpen ? (
+        <WakeupModal
+          lang={snapshot.lang}
+          wakeup={snapshot.wakeup}
+          accounts={snapshot.accounts}
+          privacyMode={state.privacyMode}
+          onClose={() => setWakeupOpen(false)}
+          sendAction={sendAction}
+          pending={state.pendingActions.some(
+            (request) => request.action.includes("Wakeup") && request.action !== "runWakeupTask"
+          )}
+          result={wakeupResult}
+        />
+      ) : null}
 
       <SettingsOverlay
         open={state.settingsOpen}

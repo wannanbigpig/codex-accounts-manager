@@ -6,6 +6,7 @@ import { registerDebugOutput, t } from "../../utils";
 import { initAutoSwitchRuntimeState } from "./autoSwitchState";
 import { WorkbenchRefreshCoordinator } from "./refreshCoordinator";
 import { registerAutoRefreshScheduler, registerTokenRefreshScheduler } from "./schedulerRegistration";
+import { getWakeupService, registerWakeupScheduler } from "./wakeupRegistration";
 
 const TOKEN_REFRESH_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const TOKEN_REFRESH_SKEW_SECONDS = 5 * 60;
@@ -74,6 +75,13 @@ export class AccountsWorkbench {
         })
       );
     });
+    await measureStep("registerWakeupScheduler", async () => {
+      try {
+        await registerWakeupScheduler(this.context, this.repo, refreshers.refresh);
+      } catch {
+        console.warn("[codexAccounts] wakeup scheduler initialization failed; check the wakeup panel");
+      }
+    });
     await measureStep("promptImportCurrentAccountIfNeeded", async () => {
       await this.refreshCoordinator.promptImportCurrentAccountIfNeeded(refreshers);
     });
@@ -87,6 +95,7 @@ export class AccountsWorkbench {
   }
 
   dispose(): void {
+    getWakeupService()?.dispose();
     this.refreshCoordinator.dispose();
     this.repo.dispose();
   }

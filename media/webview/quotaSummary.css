@@ -119,6 +119,7 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
 }
 .hero {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -130,10 +131,13 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
 }
 .hero-settings {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
   flex: none;
+  margin-left: auto;
 }
 .announcement-btn {
   position: relative;
@@ -733,13 +737,14 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
 }
 .accounts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-auto-rows: 1fr;
   gap: 14px;
   justify-content: start;
-  align-items: start;
+  align-items: stretch;
 }
 .saved-card-container {
-  --saved-card-min-height: 340px;
+  --saved-card-min-height: 0px;
   perspective: 1200px;
   position: relative;
   display: flex;
@@ -2234,6 +2239,496 @@ html[data-theme="auto"] body.vscode-light .overlay {
 }
 .overlay.open {
   display: flex;
+}
+.wakeup-button {
+  position: relative;
+}
+.wakeup-button.is-enabled {
+  color: var(--accent-blue);
+}
+.wakeup-button-dot {
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-green);
+}
+.settings-modal.wakeup-modal {
+  width: min(1440px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  --wakeup-positive: color-mix(in srgb, var(--accent-green) 60%, var(--text-primary));
+  --wakeup-negative: color-mix(in srgb, var(--accent-red) 65%, var(--text-primary));
+}
+.settings-modal.wakeup-modal-compact {
+  width: min(760px, calc(100vw - 32px));
+}
+.wakeup-modal .settings-modal-head {
+  flex-shrink: 0;
+}
+.wakeup-modal .dashboard-modal-body {
+  gap: 16px;
+  padding: 20px;
+  min-height: 0;
+  max-height: none;
+}
+.wakeup-intro p {
+  margin: 0 0 6px;
+  line-height: 1.6;
+}
+.wakeup-muted,
+.wakeup-timezone {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.wakeup-timezone {
+  display: inline-block;
+  margin-top: 4px;
+}
+.wakeup-toolbar,
+.wakeup-toolbar-actions,
+.wakeup-task-header,
+.wakeup-task-meta,
+.wakeup-account-heading,
+.wakeup-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.wakeup-toolbar-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+.wakeup-master-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.wakeup-toolbar-actions .settings-inline-toggle {
+  width: 38px;
+  height: 22px;
+}
+.wakeup-toolbar-actions .settings-inline-toggle-thumb {
+  width: 14px;
+  height: 14px;
+}
+.wakeup-toolbar-actions .settings-inline-toggle.active .settings-inline-toggle-thumb {
+  transform: translateX(16px);
+}
+.wakeup-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+}
+.wakeup-tabs button,
+.wakeup-days button {
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 6px 9px;
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.wakeup-tabs button.active,
+.wakeup-days button.active {
+  color: var(--accent-blue);
+  background: var(--bg-elevated);
+  border-color: var(--border-accent);
+}
+.wakeup-tabs button span {
+  margin-left: 4px;
+  opacity: 0.7;
+}
+.wakeup-task-list,
+.wakeup-history-list {
+  display: grid;
+  gap: 12px;
+}
+.wakeup-task-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-auto-rows: 1fr;
+  align-items: stretch;
+  gap: 14px;
+}
+.wakeup-task,
+.wakeup-history-row {
+  min-width: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  padding: 16px;
+}
+.wakeup-task.paused {
+  border-style: dashed;
+}
+.wakeup-task {
+  display: flex;
+  flex-direction: column;
+  background: var(--gradient-card);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+.wakeup-task.is-running {
+  border-color: var(--accent-blue);
+}
+.wakeup-task:hover {
+  border-color: var(--border-accent);
+}
+.wakeup-task-header {
+  align-items: flex-start;
+}
+.wakeup-task .wakeup-task-header {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.wakeup-task h3 {
+  font-size: 14px;
+  line-height: 1.4;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wakeup-schedule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+.wakeup-time {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+.wakeup-repeat {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--accent-blue);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: right;
+}
+.wakeup-repeat svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.wakeup-status {
+  display: inline-flex;
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+.wakeup-status[data-status="success"] {
+  color: var(--wakeup-positive);
+}
+.wakeup-status[data-status="running"] {
+  color: var(--accent-blue);
+}
+.wakeup-status[data-status="failed"] {
+  color: var(--wakeup-negative);
+}
+.wakeup-status[data-status="partial"] {
+  color: var(--accent-orange);
+}
+.wakeup-task-accounts {
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 14px 0 12px;
+}
+.wakeup-accounts-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+.wakeup-selected-accounts {
+  display: grid;
+  gap: 2px;
+}
+.wakeup-selected-accounts > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.wakeup-task .wakeup-task-meta {
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.wakeup-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wakeup-task .wakeup-task-meta > span:last-child {
+  color: var(--text-secondary);
+  border-left: 1px solid var(--border-default);
+  padding-left: 8px;
+  flex-shrink: 0;
+}
+.wakeup-task-meta {
+  color: var(--text-secondary);
+  font-size: 11px;
+  gap: 6px;
+}
+.wakeup-task-meta span {
+  overflow-wrap: anywhere;
+}
+.wakeup-run-summary {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin: 16px 0;
+}
+.wakeup-run-summary > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.wakeup-task-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 12px;
+  margin-top: auto;
+}
+.wakeup-task-actions .action-btn,
+.wakeup-form-actions .action-btn,
+.wakeup-toolbar .action-btn {
+  padding: 7px 12px;
+}
+.wakeup-task-actions .action-btn {
+  padding: 7px 8px;
+}
+.wakeup-task-actions .action-btn.icon-only {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.wakeup-task-actions .wakeup-run-btn {
+  margin-right: auto;
+  border-color: var(--border-accent);
+  color: var(--accent-blue);
+}
+.wakeup-empty {
+  text-align: center;
+  padding: 30px 12px;
+  color: var(--text-secondary);
+}
+.wakeup-empty > svg {
+  width: 32px;
+  height: 32px;
+  color: var(--accent-blue);
+}
+.wakeup-empty h3 {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.wakeup-empty p {
+  line-height: 1.6;
+  font-size: 12px;
+}
+.wakeup-form {
+  display: grid;
+  gap: 16px;
+}
+.wakeup-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.wakeup-interval-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px;
+  gap: 8px;
+}
+.wakeup-form .wakeup-model-warning {
+  margin: -8px 0 0;
+  color: var(--accent-yellow);
+  line-height: 1.5;
+}
+.wakeup-form input:not([type="checkbox"]),
+.wakeup-form select,
+.wakeup-form textarea {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 9px 10px;
+  resize: vertical;
+  color-scheme: dark;
+}
+html[data-theme="light"] .wakeup-form input,
+html[data-theme="light"] .wakeup-form select {
+  color-scheme: light;
+}
+.wakeup-form input:focus-visible,
+.wakeup-form select:focus-visible,
+.wakeup-form textarea:focus-visible,
+.wakeup-days button:focus-visible,
+.wakeup-tabs button:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+.wakeup-days {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.wakeup-days button {
+  border-color: var(--border-default);
+}
+.wakeup-account-heading {
+  font-size: 12px;
+}
+.wakeup-account-heading button {
+  cursor: pointer;
+  color: var(--accent-blue);
+  font: inherit;
+  font-size: 11px;
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+}
+.wakeup-account-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.wakeup-account-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-muted);
+  border-radius: 9px;
+  padding: 10px;
+  cursor: pointer;
+}
+.wakeup-account-option.selected {
+  background: var(--bg-elevated);
+  border-color: var(--border-accent);
+}
+.wakeup-account-option input {
+  accent-color: var(--accent-blue);
+  margin: 0;
+}
+.wakeup-account-email {
+  display: block;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wakeup-account-quota {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+}
+.wakeup-form .wakeup-muted {
+  margin: -8px 0 0;
+  line-height: 1.5;
+}
+.wakeup-form-actions {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 14px;
+}
+.wakeup-feedback {
+  padding: 8px 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  color: var(--accent-green);
+  font-size: 12px;
+}
+.wakeup-history-row .wakeup-task-meta {
+  margin-top: 8px;
+}
+.wakeup-history-row details {
+  margin-top: 12px;
+  font-size: 11px;
+}
+.wakeup-history-row summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.wakeup-results {
+  margin-top: 8px;
+}
+.wakeup-results > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  border-top: 1px solid var(--border-muted);
+  padding: 8px 0;
+}
+.wakeup-results > div > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.wakeup-results p {
+  width: 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 560px) {
+  .wakeup-modal .dashboard-modal-body {
+    padding: 14px;
+  }
+  .wakeup-form-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .wakeup-toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .wakeup-toolbar-actions .primary-btn {
+    margin-left: auto;
+  }
+  .wakeup-task,
+  .wakeup-history-row {
+    padding: 12px;
+  }
 }
 .settings-modal {
   width: min(680px, 100%);
@@ -3804,7 +4299,6 @@ html[data-theme="auto"] body.vscode-light .settings-inline-toggle-thumb {
   .toolbar-btn.primary-btn {
     grid-column: 1;
   }
-  .accounts-grid,
   .other-list {
     grid-template-columns: 1fr;
   }

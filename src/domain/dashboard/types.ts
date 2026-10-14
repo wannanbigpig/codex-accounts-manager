@@ -1,4 +1,5 @@
 import type { DashboardLanguage, DashboardLanguageOption } from "../../localization/languages";
+import type { WakeupSnapshot, WakeupTaskInput } from "../wakeup/types";
 import type {
   CodexAnnouncementState,
   CodexImportPreviewSummary,
@@ -386,9 +387,15 @@ export interface DashboardState {
   announcements: CodexAnnouncementState;
   indexHealth: CodexIndexHealthSummary;
   accounts: DashboardAccountViewModel[];
+  wakeup?: WakeupSnapshot;
 }
 
 export type DashboardActionName =
+  | "saveWakeupTask"
+  | "removeWakeupTask"
+  | "toggleWakeupTask"
+  | "setWakeupEnabled"
+  | "runWakeupTask"
   | "addAccount"
   | "importCurrent"
   | "refreshAll"
@@ -432,6 +439,9 @@ export interface DashboardOAuthSessionDescriptor {
 }
 
 export interface DashboardActionPayload {
+  wakeupTask?: WakeupTaskInput;
+  wakeupTaskId?: string;
+  enabled?: boolean;
   accountIds?: string[];
   jsonText?: string;
   text?: string;

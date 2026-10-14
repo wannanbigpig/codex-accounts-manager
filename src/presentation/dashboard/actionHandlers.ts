@@ -20,6 +20,7 @@ import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
+import { getWakeupService } from "../workbench/wakeupRegistration";
 
 export type DashboardActionContext = {
   context: vscode.ExtensionContext;
@@ -72,6 +73,31 @@ async function runDashboardAction(
   const translate = t(ctx.resolveLanguage());
 
   switch (action) {
+    case "saveWakeupTask":
+    case "removeWakeupTask":
+    case "toggleWakeupTask":
+    case "setWakeupEnabled":
+    case "runWakeupTask": {
+      const wakeup = getWakeupService();
+      if (!wakeup) { throw new Error("Wakeup scheduler is unavailable"); }
+      if (action === "saveWakeupTask") {
+        if (!payload?.wakeupTask) { throw new Error("Wakeup task is required"); }
+        await wakeup.saveTask(payload.wakeupTask);
+      } else if (action === "setWakeupEnabled") {
+        if (typeof payload?.enabled !== "boolean") { throw new Error("Enabled state is required"); }
+        await wakeup.setEnabled(payload.enabled);
+      } else {
+        if (typeof payload?.wakeupTaskId !== "string" || !payload.wakeupTaskId) { throw new Error("Wakeup task ID is required"); }
+        if (action === "removeWakeupTask") { await wakeup.removeTask(payload.wakeupTaskId); }
+        if (action === "toggleWakeupTask") {
+          if (typeof payload.enabled !== "boolean") { throw new Error("Enabled state is required"); }
+          await wakeup.setTaskEnabled(payload.wakeupTaskId, payload.enabled);
+        }
+        if (action === "runWakeupTask") { await wakeup.runNow(payload.wakeupTaskId); }
+      }
+      ctx.schedulePublishState();
+      return undefined;
+    }
     case "addAccount":
       await vscode.commands.executeCommand("codexAccounts.addAccount");
       return undefined;

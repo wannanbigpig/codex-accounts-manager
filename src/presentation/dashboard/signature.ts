@@ -79,6 +79,7 @@ export function buildDashboardStateSignature(state: DashboardState): string {
     state.indexHealth.lastRestoreSource ?? "",
     state.indexHealth.lastErrorMessage ?? "",
     state.indexHealth.lastRecoveredAt ?? "",
+    JSON.stringify(state.wakeup ?? null),
     announcementSignature,
     accountSignature
   ].join("||");

@@ -63,6 +63,13 @@ function createState(overrides?: {
 }
 
 describe("buildDashboardStateSignature", () => {
+  it("publishes wakeup changes even when accounts have not changed", () => {
+    const state = createState();
+    state.wakeup = { version: 1, enabled: false, timeZone: "Asia/Shanghai", tasks: [], history: [] };
+    const before = buildDashboardStateSignature(state);
+    state.wakeup.enabled = true;
+    expect(buildDashboardStateSignature(state)).not.toBe(before);
+  });
   it("changes when reset credits expiry changes", () => {
     const before = buildDashboardStateSignature(createState({ resetCreditsAvailable: 1 }));
     const after = buildDashboardStateSignature(

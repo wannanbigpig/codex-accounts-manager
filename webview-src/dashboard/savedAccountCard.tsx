@@ -156,7 +156,7 @@ export function SavedAccountCard(props: {
                     {selectionLabel}
                   </span>
                 </button>
-                <span class="saved-title-text">{emailDisplay}</span>
+                <span class="saved-title-text" title={emailDisplay}>{emailDisplay}</span>
               </h3>
               <div class="saved-meta">
                 <span class="pill plan">{account.planTypeLabel}</span>
@@ -224,7 +224,7 @@ export function SavedAccountCard(props: {
           <div class="saved-back-body">
             <div class="saved-back-header">
               <div class="saved-back-icon" aria-hidden="true"></div>
-              <span class="saved-back-email">{backEmailDisplay}</span>
+              <span class="saved-back-email" title={backEmailDisplay}>{backEmailDisplay}</span>
             </div>
             <div class="saved-detail-list">
               <CardDetailRow label={resolveBackLabel("workspace", props.lang)} value={account.workspaceLabel} />

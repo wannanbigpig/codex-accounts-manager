@@ -61,6 +61,7 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
     case "addAccount":
     case "importCurrent":
     case "startOAuthAutoFlow":
+    case "runWakeupTask":
       return 300_000;
     default:
       return 30_000;

@@ -17,6 +17,7 @@ import { clearDashboardCodexAppPath, dispatchDashboardClientMessage } from "./me
 import { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { backfillMissingResetCreditExpiries } from "./resetCreditsBackfill";
 import { handleDashboardSettingUpdate, pickDashboardCodexAppPath } from "./settings";
+import { getWakeupService } from "../workbench/wakeupRegistration";
 
 const DASHBOARD_VIEW_TYPE = "codexQuotaSummary";
 
@@ -42,6 +43,7 @@ export async function publishDashboardSnapshot(params: PublishDashboardSnapshotP
     params.logoUri,
     params.announcementsState
   );
+  state.wakeup = await getWakeupService()?.snapshot();
   if (params.isCurrent && !params.isCurrent()) {
     return undefined;
   }
