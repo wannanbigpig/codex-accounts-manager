@@ -2,13 +2,13 @@
   "version": "1.0",
   "announcements": [
     {
-      "id": "ann-2026-10-codex-tools-0-1-20-wakeup-security",
+      "id": "ann-2026-10-codex-tools-0-1-21-marketplace-icon",
       "type": "feature",
       "priority": 610,
-      "releaseVersion": "0.1.20",
-      "title": "Codex Accounts Manager 0.1.20 — wakeup schedules and account safety",
-      "summary": "Five independent wakeup schedules, detailed diagnostics, consistent dialogs, and safer credential and network handling.",
-      "content": "This release adds flexible wakeup scheduling and improves account safety.\n1. Five schedules: daily, weekly, interval, quota reset, and after startup. Enable or pause each task independently; configure a single account from its card.\n2. Dynamic reset scheduling: follows refreshed quota reset timestamps and wakes only accounts due at that occurrence. Startup supports a 0–1440 minute delay and one trigger across continuously running windows.\n3. Reliable dispatch: shared leases and durable claims prevent duplicate scheduled execution. Due tasks run independently; same-account requests are serialized within a window. Pausing, editing, or deleting a task cancels its unfinished requests.\n4. Diagnostics: execution history includes model, effort, duration, redacted replies, error stage, and HTTP status. Privacy mode also masks replies.\n5. Account safety: credential locks and snapshot checks protect newer logins and quota data. AiDeck mirror writes use private permissions and atomic replacement. Network timeouts include response body reads and preserve cancellation.\n6. Consistent UI: restores original account card sizing, unifies wakeup dialog controls and spacing, and uses a pencil edit icon.\n7. Dependency security: updates Undici to 6.28.1.\nUpgrade: reload every VS Code window. Storage migrates to format 4, preserving each task's enabled/paused state; the former master switch no longer affects execution. Reset times update after quota refresh. Startup changes apply to the next startup batch. Wakeups consume a small amount of quota.",
+      "releaseVersion": "0.1.21",
+      "title": "Codex Accounts Manager 0.1.21 — wakeup schedules and account safety",
+      "summary": "Fixes Marketplace icon upload rejection; includes five independent wakeup schedules, diagnostics, and account safety improvements.",
+      "content": "This release adds flexible wakeup scheduling and improves account safety.\n1. Five schedules: daily, weekly, interval, quota reset, and after startup. Enable or pause each task independently; configure a single account from its card.\n2. Dynamic reset scheduling: follows refreshed quota reset timestamps and wakes only accounts due at that occurrence. Startup supports a 0–1440 minute delay and one trigger across continuously running windows.\n3. Reliable dispatch: shared leases and durable claims prevent duplicate scheduled execution. Due tasks run independently; same-account requests are serialized within a window. Pausing, editing, or deleting a task cancels its unfinished requests.\n4. Diagnostics: execution history includes model, effort, duration, redacted replies, error stage, and HTTP status. Privacy mode also masks replies.\n5. Account safety: credential locks and snapshot checks protect newer logins and quota data. AiDeck mirror writes use private permissions and atomic replacement. Network timeouts include response body reads and preserve cancellation.\n6. Consistent UI: restores original account card sizing, unifies wakeup dialog controls and spacing, and uses a pencil edit icon.\n7. Dependency security: updates Undici to 6.28.1.\n8. Marketplace packaging: resizes the original icon to 1024×1024 and checks its dimensions before VSIX packaging.\nUpgrade: reload every VS Code window. Storage migrates to format 4, preserving each task's enabled/paused state; the former master switch no longer affects execution. Reset times update after quota refresh. Startup changes apply to the next startup batch. Wakeups consume a small amount of quota.",
       "targetVersions": "*",
       "targetLanguages": [
         "*"
@@ -20,9 +20,9 @@
       "expiresAt": null,
       "locales": {
         "zh": {
-          "title": "Codex Accounts Manager 0.1.20 — 唤醒调度与账号安全优化",
-          "summary": "新增五种独立唤醒调度、执行诊断与统一弹窗，修复凭据并发、镜像权限和网络超时问题。",
-          "content": "本次更新新增灵活的唤醒调度，并加强账号与网络请求安全。\n1. 五种调度：每日、每周、间隔、配额重置、启动后。每个任务独立启用或停用，账号卡片可直接配置该账号。\n2. 动态重置调度：随已刷新配额的实际重置时间调整，仅唤醒当次到点账号；启动后支持 0–1440 分钟延迟，多窗口共享一次启动触发。\n3. 稳定调度：共享租约及执行标记避免重复请求，到点任务独立执行，同一窗口内同账号请求串行；暂停、编辑或删除任务会取消其未完成请求。\n4. 执行诊断：历史记录模型、推理强度、耗时、脱敏回复、失败阶段及 HTTP 状态，隐私模式同时隐藏回复。\n5. 账号安全：凭据锁及快照校验保护新登录与配额数据，AiDeck 镜像采用私有权限和原子写入；网络超时覆盖响应体读取并保留取消信号。\n6. 界面统一：恢复账号卡片原有尺寸，统一唤醒弹窗按钮和间距，编辑按钮使用铅笔图标。\n7. 依赖安全：Undici 升级到 6.28.1。\n升级提示：请重载所有 VS Code 窗口。任务存储升级为格式 4，保留各任务自身启用/停用状态，旧总开关不再限制执行。重置时间随配额刷新更新；启动后配置于下一批启动生效。唤醒会消耗少量额度。"
+          "title": "Codex Accounts Manager 0.1.21 — 唤醒调度与账号安全优化",
+          "summary": "修复 Marketplace 图标超限导致的上传失败，包含五种独立唤醒调度、执行诊断与账号安全优化。",
+          "content": "本次更新新增灵活的唤醒调度，并加强账号与网络请求安全。\n1. 五种调度：每日、每周、间隔、配额重置、启动后。每个任务独立启用或停用，账号卡片可直接配置该账号。\n2. 动态重置调度：随已刷新配额的实际重置时间调整，仅唤醒当次到点账号；启动后支持 0–1440 分钟延迟，多窗口共享一次启动触发。\n3. 稳定调度：共享租约及执行标记避免重复请求，到点任务独立执行，同一窗口内同账号请求串行；暂停、编辑或删除任务会取消其未完成请求。\n4. 执行诊断：历史记录模型、推理强度、耗时、脱敏回复、失败阶段及 HTTP 状态，隐私模式同时隐藏回复。\n5. 账号安全：凭据锁及快照校验保护新登录与配额数据，AiDeck 镜像采用私有权限和原子写入；网络超时覆盖响应体读取并保留取消信号。\n6. 界面统一：恢复账号卡片原有尺寸，统一唤醒弹窗按钮和间距，编辑按钮使用铅笔图标。\n7. 依赖安全：Undici 升级到 6.28.1。\n8. 插件打包：原图等比缩小到 1024×1024，打包前自动检查图标尺寸，修复插件中心上传失败。\n升级提示：请重载所有 VS Code 窗口。任务存储升级为格式 4，保留各任务自身启用/停用状态，旧总开关不再限制执行。重置时间随配额刷新更新；启动后配置于下一批启动生效。唤醒会消耗少量额度。"
         }
       }
     },

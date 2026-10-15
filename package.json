@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -222,6 +222,8 @@
     "menus": {}
   },
   "scripts": {
+    "check:package-icon": "node scripts/check-package-icon.cjs",
+    "vscode:prepublish": "npm run check:package-icon",
     "build:webview": "vite build --config vite.webview.config.mts",
     "typecheck:webview": "tsc --noEmit -p tsconfig.webview.json",
     "watch:webview": "vite build --watch --config vite.webview.config.mts",
