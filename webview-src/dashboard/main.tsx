@@ -22,6 +22,7 @@ function App() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcementsOpen, setAnnouncementsOpen] = useState(false);
   const [wakeupOpen, setWakeupOpen] = useState(false);
+  const [wakeupAccountId, setWakeupAccountId] = useState<string>();
   const [wakeupResult, setWakeupResult] = useState<Extract<DashboardHostMessage, { type: "dashboard:action-result" }>>();
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
@@ -210,11 +211,12 @@ function App() {
             <div class="hero-settings">
               <button
                 id="wakeupButton"
-                class={`settings-btn action-btn icon-only wakeup-button ${snapshot.wakeup?.enabled ? "is-enabled" : ""}`}
+                class={`settings-btn action-btn icon-only wakeup-button ${snapshot.wakeup?.tasks.some((task) => task.enabled) ? "is-enabled" : ""}`}
                 type="button"
                 title={getWakeupCopy(snapshot.lang).title}
                 aria-label={getWakeupCopy(snapshot.lang).title}
                 onClick={() => {
+                  setWakeupAccountId(undefined);
                   setWakeupResult(undefined);
                   setWakeupOpen(true);
                 }}
@@ -222,7 +224,7 @@ function App() {
                 <span class="button-face">
                   <span class="button-icon"><ClockIcon /></span>
                 </span>
-                {snapshot.wakeup?.enabled ? <span class="wakeup-button-dot" /> : null}
+                {snapshot.wakeup?.tasks.some((task) => task.enabled) ? <span class="wakeup-button-dot" /> : null}
                 <span class="button-tip" aria-hidden="true">
                   {getWakeupCopy(snapshot.lang).title}
                 </span>
@@ -412,6 +414,11 @@ function App() {
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
                   onEditTags={() => handleEditAccountTags(account)}
                   onAction={sendAction}
+                  onConfigureWakeup={() => {
+                    setWakeupAccountId(account.id);
+                    setWakeupResult(undefined);
+                    setWakeupOpen(true);
+                  }}
                 />
               ))}
             </div>
@@ -421,6 +428,8 @@ function App() {
 
       {wakeupOpen ? (
         <WakeupModal
+          key={wakeupAccountId ?? "all"}
+          accountId={wakeupAccountId}
           lang={snapshot.lang}
           wakeup={snapshot.wakeup}
           accounts={snapshot.accounts}

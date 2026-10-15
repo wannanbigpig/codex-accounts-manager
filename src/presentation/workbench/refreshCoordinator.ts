@@ -12,6 +12,7 @@ import { needsWindowReloadForAccount, setCurrentWindowRuntimeAccountId } from ".
 import { buildWorkbenchRefreshSignature } from "./refreshSignature";
 import { getTokenAutomationSnapshot } from "./tokenAutomationState";
 import { promptWindowReloadForAccount } from "../../application/accounts/switchEffects";
+import { getWakeupService } from "./wakeupRegistration";
 
 type RefreshView = {
   refresh: () => void;
@@ -65,7 +66,8 @@ export class WorkbenchRefreshCoordinator {
       observedAuthIdentity: this.lastObservedAuthIdentity,
       indexHealth,
       accounts,
-      tokenAutomation: getTokenAutomationSnapshot()
+      tokenAutomation: getTokenAutomationSnapshot(),
+      wakeup: await getWakeupService()?.snapshot()
     });
     if (signature === this.lastRefreshSignature) {
       return;

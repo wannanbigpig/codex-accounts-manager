@@ -14,6 +14,7 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { SecretStore } from "./secrets";
+import { sameTokenSnapshot, withCredentialLock } from "./credentialLocks";
 import { createEmptyIndex, cloneIndex, markActive, syncActiveAccountState } from "./accountsIndex";
 import {
   addAccountTags as addAccountTagsToIndex,
@@ -121,6 +122,7 @@ type TokenCacheEntry = {
 export class AccountsRepository {
   private readonly secretStore: SecretStore;
   private readonly indexPath: string;
+  private readonly credentialLockDirectory: string;
   private readonly state = createAccountsRepositoryState();
   /** 按账号串行化切号/刷新，避免并发刷新同一账号 token */
   private readonly accountMutex = createKeyedMutex();
@@ -140,7 +142,8 @@ export class AccountsRepository {
   }
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.secretStore = new SecretStore(context.secrets);
+    this.credentialLockDirectory = path.join(context.globalStorageUri.fsPath, "credential-locks");
+    this.secretStore = new SecretStore(context.secrets, this.credentialLockDirectory);
     this.indexPath = path.join(context.globalStorageUri.fsPath, INDEX_FILE);
   }
 
@@ -340,12 +343,12 @@ export class AccountsRepository {
    */
   async getTokens(
     accountId: string,
-    options: { syncExternal?: boolean } = {}
+    options: { syncExternal?: boolean; bypassCache?: boolean } = {}
   ): Promise<CodexTokens | undefined> {
     try {
       // 内存缓存命中直接返回，避免 Dashboard 刷新时重复读 Keychain
       const cached = this.tokenCache.get(accountId);
-      if (cached && Date.now() - cached.cachedAt < TOKEN_CACHE_TTL_MS) {
+      if (!options.bypassCache && cached && Date.now() - cached.cachedAt < TOKEN_CACHE_TTL_MS) {
         return cached.tokens;
       }
 
@@ -370,9 +373,12 @@ export class AccountsRepository {
       }
 
       if (!storedTokens || shouldSyncTokensFromAuthFile(storedTokens, mergedTokens)) {
-        await this.secretStore.setTokens(accountId, mergedTokens);
+        const saved = await this.secretStore.setTokens(accountId, mergedTokens, { expectedTokens: storedTokens });
         this.invalidateTokenCache();
         clearQuotaCacheForAccount(accountId);
+        if (!saved) {
+          return this.secretStore.getTokens(accountId);
+        }
       }
 
       return mergedTokens;
@@ -384,7 +390,48 @@ export class AccountsRepository {
     }
   }
 
-  async updateTokens(accountId: string, tokens: CodexTokens): Promise<CodexAccountRecord> {
+  async getFreshTokens(
+    accountId: string,
+    options: { force?: boolean; expectedTokens?: CodexTokens; skewSeconds?: number } = {}
+  ): Promise<CodexTokens | undefined> {
+    return withCredentialLock(this.credentialLockDirectory, `refresh:${accountId}`, async (assertHeld) => {
+      const snapshot = await this.getTokens(accountId, { bypassCache: true });
+      if (!snapshot?.accessToken) {
+        return undefined;
+      }
+      const force = options.force && (!options.expectedTokens || sameTokenSnapshot(snapshot, options.expectedTokens));
+      if (!force && !needsRefresh(snapshot.accessToken, options.skewSeconds ?? TOKEN_REFRESH_SKEW_SECONDS)) {
+        return snapshot;
+      }
+      if (!snapshot.refreshToken) {
+        throw new AccountError("Refresh token missing", { code: ErrorCode.AUTH_TOKEN_MISSING });
+      }
+      let refreshed: CodexTokens;
+      try {
+        refreshed = await refreshTokens(snapshot.refreshToken, snapshot.idToken);
+      } catch (error) {
+        const latest = await this.secretStore.getTokens(accountId);
+        this.invalidateTokenCache();
+        if (latest && !sameTokenSnapshot(snapshot, latest) && !needsRefresh(latest.accessToken)) {
+          return latest;
+        }
+        throw error;
+      }
+      assertHeld();
+      await this.updateTokens(
+        accountId,
+        { ...snapshot, ...refreshed, accountId: refreshed.accountId ?? snapshot.accountId },
+        snapshot
+      );
+      return this.getTokens(accountId, { bypassCache: true, syncExternal: false });
+    });
+  }
+
+  async updateTokens(
+    accountId: string,
+    tokens: CodexTokens,
+    expectedTokens?: CodexTokens
+  ): Promise<CodexAccountRecord> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
 
@@ -397,34 +444,42 @@ export class AccountsRepository {
       accountId: tokens.accountId ?? account.accountId
     };
 
-    await this.secretStore.setTokens(accountId, effectiveTokens);
-    this.invalidateTokenCache();
-    await mirrorAideckCodexAccount(account, effectiveTokens);
+    const saved = await this.secretStore.setTokens(accountId, effectiveTokens, {
+      ...(expectedTokens ? { expectedTokens } : {}),
+      afterSave: async () => {
+        this.invalidateTokenCache();
+        clearQuotaCacheForAccount(accountId);
+        await mirrorAideckCodexAccount(account, effectiveTokens);
 
-    let shouldWriteIndex = false;
-    if (effectiveTokens.accountId && effectiveTokens.accountId !== account.accountId) {
-      account.accountId = effectiveTokens.accountId;
-      account.updatedAt = Date.now();
-      shouldWriteIndex = true;
-    }
+        let shouldWriteIndex = false;
+        if (effectiveTokens.accountId && effectiveTokens.accountId !== account.accountId) {
+          account.accountId = effectiveTokens.accountId;
+          account.updatedAt = Date.now();
+          shouldWriteIndex = true;
+        }
 
-    if (getQuotaIssueKind(account.quotaError) === "auth") {
-      account.quotaError = undefined;
-      account.dismissedHealthIssueKey = undefined;
-      account.updatedAt = Date.now();
-      shouldWriteIndex = true;
-    }
+        if (getQuotaIssueKind(account.quotaError) === "auth") {
+          account.quotaError = undefined;
+          account.dismissedHealthIssueKey = undefined;
+          account.updatedAt = Date.now();
+          shouldWriteIndex = true;
+        }
 
-    if (account.isActive) {
-      await writeAuthFile({
-        ...effectiveTokens,
-        accountId: account.accountId ?? effectiveTokens.accountId
-      });
-      await mirrorAideckCurrentAccount(accountId);
-    }
+        if (account.isActive) {
+          await writeAuthFile({
+            ...effectiveTokens,
+            accountId: account.accountId ?? effectiveTokens.accountId
+          });
+          await mirrorAideckCurrentAccount(accountId);
+        }
 
-    if (shouldWriteIndex) {
-      this.writeIndex(index);
+        if (shouldWriteIndex) {
+          this.writeIndex(index);
+        }
+      }
+    });
+    if (!saved) {
+      this.invalidateTokenCache();
     }
 
     return account;
@@ -605,20 +660,24 @@ export class AccountsRepository {
       ...tokens,
       accountId: account.accountId ?? tokens.accountId
     };
-    await this.secretStore.setTokens(id, storedTokens);
-    this.invalidateTokenCache();
-    await mirrorAideckCodexAccount(account, storedTokens);
-    if (account.isActive) {
-      await mirrorAideckCurrentAccount(id);
-    }
+    await this.secretStore.setTokens(id, storedTokens, {
+      afterSave: async () => {
+        this.invalidateTokenCache();
+        clearQuotaCacheForAccount(id);
+        await mirrorAideckCodexAccount(account, storedTokens);
+        if (account.isActive) {
+          await mirrorAideckCurrentAccount(id);
+        }
 
-    if (options.persistImmediately) {
-      await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
-    } else if (options.allowRecoveryWrite) {
-      markRecoveryPending(this.state, index);
-    } else {
-      this.writeIndex(index);
-    }
+        if (options.persistImmediately) {
+          await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
+        } else if (options.allowRecoveryWrite) {
+          markRecoveryPending(this.state, index);
+        } else {
+          this.writeIndex(index);
+        }
+      }
+    });
 
     return account;
   }
@@ -745,15 +804,18 @@ export class AccountsRepository {
         ...restoredTokens,
         accountId: account.accountId ?? restoredTokens.accountId
       };
-      await this.secretStore.setTokens(account.id, storedTokens);
-      this.invalidateTokenCache();
-      await mirrorAideckCodexAccount(account, storedTokens);
+      await this.secretStore.setTokens(account.id, storedTokens, {
+        afterSave: async () => {
+          this.invalidateTokenCache();
+          await mirrorAideckCodexAccount(account, storedTokens);
 
-      if (options.persistImmediately) {
-        await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
-      } else {
-        this.writeIndex(index);
-      }
+          if (options.persistImmediately) {
+            await this.persistRecoveredIndex(index, options.restoreSource ?? "shared_json");
+          } else {
+            this.writeIndex(index);
+          }
+        }
+      });
       imported.push({ ...account });
     }
 
@@ -779,27 +841,11 @@ export class AccountsRepository {
       throw createError.accountNotFound(accountId);
     }
 
-    const tokens = await this.getTokens(accountId);
+    const tokens = await this.getFreshTokens(accountId);
     if (!tokens) {
-      throw new AccountError(`Tokens missing for account ${account.email}`, {
-        code: ErrorCode.AUTH_TOKEN_MISSING
-      });
+      throw new AccountError(`Tokens missing for account ${account.email}`, { code: ErrorCode.AUTH_TOKEN_MISSING });
     }
-
-    // 切号前按需刷新 token，避免写入过期 token 导致 codex 登录失败（对齐 cockpit switch_account_managed）
-    let effectiveTokens = {
-      ...tokens,
-      accountId: account.accountId ?? tokens.accountId
-    };
-
-    if (tokens.refreshToken && needsRefresh(tokens.accessToken, TOKEN_REFRESH_SKEW_SECONDS)) {
-      const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-      effectiveTokens = {
-        ...refreshed,
-        accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
-      };
-      await this.updateTokens(accountId, effectiveTokens);
-    }
+    const effectiveTokens = { ...tokens, accountId: tokens.accountId ?? account.accountId };
 
     await writeAuthFile(effectiveTokens);
 
@@ -866,7 +912,8 @@ export class AccountsRepository {
     quotaError?: CodexAccountRecord["quotaError"],
     updatedTokens?: CodexTokens,
     updatedPlanType?: string,
-    updatedSubscriptionActiveUntil?: string
+    updatedSubscriptionActiveUntil?: string,
+    expectedTokens?: CodexTokens
   ): Promise<CodexAccountRecord> {
     const index = await this.readIndex();
     const account = index.accounts.find((item) => item.id === accountId);
@@ -875,6 +922,11 @@ export class AccountsRepository {
       throw createError.accountNotFound(accountId);
     }
 
+    const currentTokens = await this.secretStore.getTokens(accountId);
+    if (expectedTokens && !sameTokenSnapshot(currentTokens, expectedTokens)) {
+      this.invalidateTokenCache();
+      return account;
+    }
     const now = Date.now();
     const effectivePlanType = applyQuotaUpdate({
       account,
@@ -884,7 +936,7 @@ export class AccountsRepository {
       updatedSubscriptionActiveUntil,
       now
     });
-    const storedTokens = updatedTokens ?? (await this.secretStore.getTokens(accountId));
+    const storedTokens = updatedTokens ?? currentTokens;
     const previousStoredAccountId = storedTokens?.accountId;
     if (storedTokens) {
       syncLoginAtFromTokens(account, storedTokens);
@@ -897,44 +949,48 @@ export class AccountsRepository {
           if (!remoteProfile) {
             return;
           }
-          const freshIndex = await this.readIndex();
-          const freshAccount = freshIndex.accounts.find((item) => item.id === account.id);
-          if (freshAccount) {
-            applyRemoteProfileFromTokens({
-              account: freshAccount,
-              tokens: storedTokens,
-              remoteProfile,
-              planType: freshAccount.planType ?? effectivePlanType,
-              preservePlanType: true
-            });
-            this.writeIndex(freshIndex);
-          }
+          await withCredentialLock(this.credentialLockDirectory, `write:${accountId}`, async (assertHeld) => {
+            if (!sameTokenSnapshot(await this.secretStore.getTokens(accountId), storedTokens)) {
+              return;
+            }
+            const freshIndex = await this.readIndex();
+            const freshAccount = freshIndex.accounts.find((item) => item.id === account.id);
+            if (freshAccount) {
+              applyRemoteProfileFromTokens({
+                account: freshAccount,
+                tokens: storedTokens,
+                remoteProfile,
+                planType: freshAccount.planType ?? effectivePlanType,
+                preservePlanType: true
+              });
+              assertHeld();
+              this.writeIndex(freshIndex);
+            }
+          });
         })
         .catch(() => undefined);
     }
 
-    const nextStoredTokens = updatedTokens ?? (account.accountId !== previousStoredAccountId ? storedTokens : undefined);
-    if (storedTokens && nextStoredTokens) {
-      const effectiveNextTokens = {
-        ...nextStoredTokens,
-        accountId: account.accountId ?? storedTokens.accountId
-      };
-      await this.secretStore.setTokens(accountId, effectiveNextTokens);
-      this.invalidateTokenCache();
-      await mirrorAideckCodexAccount(account, effectiveNextTokens);
-      if (account.isActive) {
-        await writeAuthFile(effectiveNextTokens);
-        await mirrorAideckCurrentAccount(accountId);
-      }
-    }
-    if (storedTokens && !nextStoredTokens) {
-      await mirrorAideckCodexAccount(account, {
-        ...storedTokens,
-        accountId: account.accountId ?? storedTokens.accountId
+    if (storedTokens) {
+      const effectiveNextTokens = { ...storedTokens, accountId: account.accountId ?? storedTokens.accountId };
+      const saved = await this.secretStore.setTokens(accountId, effectiveNextTokens, {
+        expectedTokens: currentTokens,
+        afterSave: async () => {
+          this.invalidateTokenCache();
+          await mirrorAideckCodexAccount(account, effectiveNextTokens);
+          if (account.isActive && (updatedTokens || account.accountId !== previousStoredAccountId)) {
+            await writeAuthFile(effectiveNextTokens);
+            await mirrorAideckCurrentAccount(accountId);
+          }
+          this.writeIndex(index);
+        }
       });
+      if (!saved) {
+        this.invalidateTokenCache();
+      }
+    } else {
+      this.writeIndex(index);
     }
-
-    this.writeIndex(index);
 
     return account;
   }
@@ -969,23 +1025,27 @@ export class AccountsRepository {
         const storedTokens = await this.secretStore.getTokens(derivedId);
 
         if (shouldSyncTokensFromAuthFile(storedTokens, nextTokens)) {
-          await this.secretStore.setTokens(derivedId, nextTokens);
-          this.invalidateTokenCache();
-          await mirrorAideckCodexAccount(account, nextTokens);
-          await mirrorAideckCurrentAccount(derivedId);
-          clearQuotaCacheForAccount(derivedId);
+          await this.secretStore.setTokens(derivedId, nextTokens, {
+            expectedTokens: storedTokens,
+            afterSave: async () => {
+              this.invalidateTokenCache();
+              await mirrorAideckCodexAccount(account, nextTokens);
+              await mirrorAideckCurrentAccount(derivedId);
+              clearQuotaCacheForAccount(derivedId);
 
-          if (nextTokens.accountId && nextTokens.accountId !== account.accountId) {
-            account.accountId = nextTokens.accountId;
-          }
+              if (nextTokens.accountId && nextTokens.accountId !== account.accountId) {
+                account.accountId = nextTokens.accountId;
+              }
 
-          if (getQuotaIssueKind(account.quotaError) === "auth") {
-            account.quotaError = undefined;
-            account.dismissedHealthIssueKey = undefined;
-          }
+              if (getQuotaIssueKind(account.quotaError) === "auth") {
+                account.quotaError = undefined;
+                account.dismissedHealthIssueKey = undefined;
+              }
 
-          account.updatedAt = Date.now();
-          changed = true;
+              account.updatedAt = Date.now();
+              changed = true;
+            }
+          });
         }
       }
     }
@@ -1390,12 +1450,14 @@ function buildExpectedMirrorIdentity(
 
 function buildExternalMirrorIdentity(
   external: AideckMirrorTokenSnapshot,
-  claims: {
-    email?: string;
-    userId?: string;
-    accountId?: string;
-    organizationId?: string;
-  } | undefined = safeExtractTokenClaims(external)
+  claims:
+    | {
+        email?: string;
+        userId?: string;
+        accountId?: string;
+        organizationId?: string;
+      }
+    | undefined = safeExtractTokenClaims(external)
 ): {
   email?: string;
   userId?: string;

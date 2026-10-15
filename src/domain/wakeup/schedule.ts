@@ -1,9 +1,36 @@
-import type { WakeupTaskInput } from "./types";
+import type { WakeupTaskInput, WakeupScheduleMode, WakeupQuotaResetWindow } from "./types";
+import type { CodexQuotaSummary } from "../../core/types";
+
+export function resolveWakeupScheduleMode(task: Pick<WakeupTaskInput, "scheduleMode" | "days">): WakeupScheduleMode {
+  return !task.scheduleMode || task.scheduleMode === "calendar"
+    ? new Set(task.days).size === 7
+      ? "daily"
+      : "weekly"
+    : task.scheduleMode;
+}
+
+export function collectQuotaResetTimes(quota: CodexQuotaSummary | undefined, window: WakeupQuotaResetWindow): number[] {
+  const windows = quota ? [quota, ...(quota.additionalRateLimits ?? [])] : [];
+  return [
+    ...new Set(
+      windows
+        .flatMap((item) => [
+          ...(window !== "weekly" ? [item.hourlyResetTime] : []),
+          ...(window !== "hourly" ? [item.weeklyResetTime] : [])
+        ])
+        .filter((time): time is number => typeof time === "number" && Number.isFinite(time) && time > 0)
+        .map((time) => Math.floor(time < 100_000_000_000 ? time * 1000 : time))
+    )
+  ].sort((a, b) => a - b);
+}
 
 export function nextWakeupAt(
   task: Pick<WakeupTaskInput, "time" | "days" | "scheduleMode" | "intervalMinutes"> & { nextRunAt?: number },
   after: number
 ): number {
+  if (task.scheduleMode === "startup" || task.scheduleMode === "quota_reset") {
+    return 0;
+  }
   if (task.scheduleMode === "interval") {
     const interval = task.intervalMinutes;
     if (typeof interval !== "number" || !Number.isInteger(interval) || interval < 1 || interval > 10_080) {
@@ -19,7 +46,7 @@ export function nextWakeupAt(
     const candidate = new Date(after);
     candidate.setDate(candidate.getDate() + offset);
     candidate.setHours(hours, minutes, 0, 0);
-    if (task.days.includes(candidate.getDay()) && candidate.getTime() > after) {
+    if ((task.scheduleMode === "daily" || task.days.includes(candidate.getDay())) && candidate.getTime() > after) {
       return candidate.getTime();
     }
   }
@@ -34,8 +61,20 @@ export function validateWakeupTask(input: WakeupTaskInput): WakeupTaskInput {
   const model = typeof input.model === "string" ? input.model.trim() : "";
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
   const { scheduleMode = "calendar" } = input;
-  if (scheduleMode !== "calendar" && scheduleMode !== "interval") {
+  if (!["calendar", "daily", "weekly", "interval", "quota_reset", "startup"].includes(scheduleMode)) {
     throw new Error("Invalid wakeup schedule mode");
+  }
+  if (
+    scheduleMode === "startup" &&
+    (typeof input.startupDelayMinutes !== "number" ||
+      !Number.isInteger(input.startupDelayMinutes) ||
+      input.startupDelayMinutes < 0 ||
+      input.startupDelayMinutes > 1440)
+  ) {
+    throw new Error("Startup delay must contain 0–1440 whole minutes");
+  }
+  if (scheduleMode === "quota_reset" && !["hourly", "weekly", "either"].includes(input.quotaResetWindow ?? "")) {
+    throw new Error("Invalid quota reset window");
   }
   if (
     scheduleMode === "interval" &&
@@ -50,13 +89,13 @@ export function validateWakeupTask(input: WakeupTaskInput): WakeupTaskInput {
     throw new Error("Task name must contain 1–80 characters");
   }
   if (
-    scheduleMode === "calendar" &&
+    ["calendar", "daily", "weekly"].includes(scheduleMode) &&
     (typeof input.time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(input.time))
   ) {
     throw new Error("Time must use HH:MM");
   }
   if (
-    scheduleMode === "calendar" &&
+    ["calendar", "weekly"].includes(scheduleMode) &&
     (!Array.isArray(input.days) ||
       !input.days.length ||
       input.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))
@@ -91,10 +130,14 @@ export function validateWakeupTask(input: WakeupTaskInput): WakeupTaskInput {
     name,
     enabled: input.enabled,
     accountIds: [...new Set(input.accountIds)],
-    time: scheduleMode === "calendar" ? input.time : "06:15",
-    days: scheduleMode === "calendar" ? [...new Set(input.days)].sort((a, b) => a - b) : [0, 1, 2, 3, 4, 5, 6],
+    time: ["calendar", "daily", "weekly"].includes(scheduleMode) ? input.time : "06:15",
+    days: ["calendar", "weekly"].includes(scheduleMode)
+      ? [...new Set(input.days)].sort((a, b) => a - b)
+      : [0, 1, 2, 3, 4, 5, 6],
     scheduleMode,
     ...(scheduleMode === "interval" ? { intervalMinutes: input.intervalMinutes } : {}),
+    ...(scheduleMode === "startup" ? { startupDelayMinutes: input.startupDelayMinutes } : {}),
+    ...(scheduleMode === "quota_reset" ? { quotaResetWindow: input.quotaResetWindow } : {}),
     model,
     effort: input.effort,
     prompt

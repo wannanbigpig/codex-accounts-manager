@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { needsRefresh, refreshTokens } from "../../auth/oauth";
+import { needsRefresh } from "../../auth/oauth";
 import { getAutoRefreshMinutes, isBackgroundTokenRefreshEnabled } from "../../infrastructure/config/extensionSettings";
 import type { AccountsRepository } from "../../storage";
 import { shouldRunAccountScheduler } from "./refreshSignature";
@@ -111,11 +111,7 @@ export function registerTokenRefreshScheduler(params: {
             throw new Error("Token expired and no refresh token is available");
           }
 
-          const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-          await params.repo.updateTokens(account.id, {
-            ...refreshed,
-            accountId: refreshed.accountId ?? account.accountId ?? tokens.accountId
-          });
+          await params.repo.getFreshTokens(account.id, { skewSeconds: params.skewSeconds });
           markTokenAutomationRefreshSuccess(account.id);
           refreshedCount += 1;
         } catch (error) {

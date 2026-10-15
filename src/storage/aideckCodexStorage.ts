@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { randomUUID } from "crypto";
 import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens, SharedCodexAccountJson } from "../core/types";
 import { extractClaims } from "../utils/jwt";
 import { normalizePlanType } from "../utils/quotaLabels";
@@ -98,8 +99,10 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
   try {
     const now = Date.now();
     const filePath = getAideckCodexAccountFilePath(account.id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const existing = (await readJsonFile(filePath)) ?? {};
+    await ensurePrivateDirectory(getAideckCodexRoot());
+    await ensurePrivateDirectory(path.dirname(filePath));
+    const existing = (await readWritableMirrorJson(filePath)) ?? {};
+    await readWritableMirrorJson(path.join(getAideckCodexRoot(), "accounts-index.json"));
     const existingTokens = getRecord(existing["tokens"]) ?? {};
     const existingQuota = getRecord(existing["quota"]);
     const existingQuotaError = getSharedQuotaError(existing["quota_error"]);
@@ -150,7 +153,7 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
     await writeJsonFile(filePath, next);
     await writeAideckCodexIndex(account.id, next);
   } catch {
-    // Aideck storage is a compatibility mirror. Failing to mirror must not break the VS Code extension store.
+    console.warn("[codexAccounts] AiDeck mirror sync could not be completed");
   }
 }
 
@@ -200,8 +203,8 @@ function getAideckDataRoot(): string {
 
 async function writeAideckCodexIndex(accountId: string, account: JsonRecord): Promise<void> {
   const indexPath = path.join(getAideckCodexRoot(), "accounts-index.json");
-  await fs.mkdir(path.dirname(indexPath), { recursive: true });
-  const existing = (await readJsonFile(indexPath)) ?? {};
+  await ensurePrivateDirectory(path.dirname(indexPath));
+  const existing = (await readWritableMirrorJson(indexPath)) ?? {};
   const accounts: unknown[] = Array.isArray(existing["accounts"]) ? existing["accounts"].slice() : [];
   const summary = buildAideckIndexRecord(account);
   const nextAccounts = accounts.filter((item) => getRecord(item)?.["id"] !== accountId);
@@ -476,7 +479,44 @@ async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {
 }
 
 async function writeJsonFile(filePath: string, value: JsonRecord): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await ensurePrivateDirectory(path.dirname(filePath));
+  const temporary = `${filePath}.${randomUUID()}.tmp`;
+  try {
+    const file = await fs.open(temporary, "wx", 0o600);
+    try {
+      await file.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await fs.rename(temporary, filePath);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}
+
+async function ensurePrivateDirectory(directory: string): Promise<void> {
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") {
+    await fs.chmod(directory, 0o700);
+  }
+}
+
+async function readWritableMirrorJson(filePath: string): Promise<JsonRecord | undefined> {
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  const record = getRecord(JSON.parse(content));
+  if (!record || record["ciphertext"] !== undefined || record["algorithm"] !== undefined) {
+    throw new Error("Unsupported account mirror format");
+  }
+  return record;
 }
 
 function sanitizeFileStem(value: string): string {

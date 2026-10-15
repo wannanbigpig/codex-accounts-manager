@@ -37,7 +37,7 @@ describe("resetCreditsBackfill", () => {
 
   it("returns false when there is nothing to backfill", async () => {
     const repo = {
-      getTokens: vi.fn(async () => ({ accessToken: "token" })),
+      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
     };
 
@@ -59,7 +59,7 @@ describe("resetCreditsBackfill", () => {
       nextExpiresAt: 1_800_000_000
     });
     const repo = {
-      getTokens: vi.fn(async () => ({ accessToken: "token" })),
+      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
     };
     const onUpdated = vi.fn();
@@ -89,7 +89,7 @@ describe("resetCreditsBackfill", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     fetchResetCreditsMock.mockRejectedValue(new Error("network down"));
     const repo = {
-      getTokens: vi.fn(async () => ({ accessToken: "token" })),
+      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
     };
 
@@ -124,7 +124,7 @@ describe("resetCreditsBackfill", () => {
       nextExpiresAt: undefined
     });
     const repo = {
-      getTokens: vi.fn(async () => ({ accessToken: "token" })),
+      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
     };
 

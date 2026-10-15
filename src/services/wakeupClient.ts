@@ -1,7 +1,8 @@
 import { fetch as undiciFetch } from "undici";
 import type { CodexTokens } from "../core/types";
 import { APIError } from "../core/errors";
-import type { WakeupTaskInput } from "../domain/wakeup/types";
+import type { WakeupTaskInput, WakeupExecutionResult } from "../domain/wakeup/types";
+import { sanitizeWakeupText, WakeupRequestError } from "../domain/wakeup/diagnostics";
 import { CODEX_API_BASE } from "../infrastructure/config/apiEndpoints";
 import { getCodexProxyDispatcher } from "../infrastructure/config/proxyEnvironment";
 
@@ -11,12 +12,13 @@ export async function sendWakeupRequest(
   task: Pick<WakeupTaskInput, "model" | "effort" | "prompt">,
   signal: AbortSignal,
   options: { endpoint?: string; timeoutMs?: number } = {}
-): Promise<void> {
+): Promise<WakeupExecutionResult> {
   signal.throwIfAborted();
   const controller = new AbortController();
   const cancel = (): void => controller.abort();
   signal.addEventListener("abort", cancel, { once: true });
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 45_000);
+  let stage: "request" | "stream" = "request";
   try {
     const endpoint = options.endpoint ?? `${CODEX_API_BASE}/backend-api/codex/responses`;
     const headers: Record<string, string> = {
@@ -46,17 +48,20 @@ export async function sendWakeupRequest(
     const response = dispatcher ? await undiciFetch(endpoint, { ...init, dispatcher }) : await fetch(endpoint, init);
     if (!response.ok) {
       await response.body?.cancel();
-      throw new APIError(`Codex wakeup request failed (HTTP ${response.status})`, { statusCode: response.status });
+      throw new WakeupRequestError(`Codex wakeup request failed (HTTP ${response.status})`, "request", response.status);
     }
     if (!response.body) {
       throw new Error("Codex wakeup returned an empty response");
     }
     const reader = response.body.getReader();
+    stage = "stream";
     const decoder = new TextDecoder();
     let pending = "";
     let bytes = 0;
     let hasText = false;
     let completed = false;
+    let reply = "";
+    let model: string | undefined;
     const processFrame = (frame: string): void => {
       const data = frame
         .split(/\r?\n/)
@@ -69,19 +74,33 @@ export async function sendWakeupRequest(
       const event = JSON.parse(data) as {
         type?: string;
         delta?: string;
-        response?: { status?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+        response?: {
+          model?: string;
+          status?: string;
+          output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+        };
       };
       if (["error", "response.failed", "response.incomplete"].includes(event.type ?? "")) {
         throw new Error("Codex wakeup response failed or was incomplete");
       }
-      if (event.type === "response.output_text.delta" && event.delta?.trim()) {
-        hasText = true;
+      if (event.type === "response.output_text.delta" && event.delta) {
+        hasText ||= Boolean(event.delta.trim());
+        reply = (reply + event.delta).slice(0, 4096);
       }
       if (event.type === "response.completed") {
         if (event.response?.status && event.response.status !== "completed") {
           throw new Error("Codex wakeup response failed or was incomplete");
         }
         completed = true;
+        model = event.response?.model;
+        const finalText = event.response?.output
+          ?.flatMap((item) => item.content ?? [])
+          .filter((part) => part.type === "output_text")
+          .map((part) => part.text ?? "")
+          .join("\n");
+        if (finalText?.trim()) {
+          reply = finalText.slice(0, 4096);
+        }
         hasText ||= Boolean(
           event.response?.output?.some((item) =>
             item.content?.some((part) => part.type === "output_text" && part.text?.trim())
@@ -119,11 +138,18 @@ export async function sendWakeupRequest(
     } finally {
       await reader.cancel().catch(() => undefined);
     }
+    return { reply: sanitizeWakeupText(reply.trim()), model };
   } catch (error) {
-    if (controller.signal.aborted && !signal.aborted) {
-      throw new Error("Codex wakeup timed out; it will not be retried automatically");
+    if (signal.aborted) {
+      throw new WakeupRequestError("Codex wakeup was cancelled", "cancelled");
     }
-    throw error;
+    if (controller.signal.aborted && !signal.aborted) {
+      throw new WakeupRequestError("Codex wakeup timed out; it will not be retried automatically", "timeout");
+    }
+    if (error instanceof APIError) {
+      throw error;
+    }
+    throw new WakeupRequestError(error instanceof Error ? error.message : "Codex wakeup failed", stage);
   } finally {
     clearTimeout(timeout);
     signal.removeEventListener("abort", cancel);

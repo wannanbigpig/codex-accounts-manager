@@ -96,6 +96,21 @@ export function renderReauthorizeIcon() {
   );
 }
 
+export function EditIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M15 5l4 4M4 20l5-1L20 8a2.83 2.83 0 0 0-4-4L5 15Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function EditTagsIcon() {
   return (
     <svg viewBox="0 0 1024 1024" aria-hidden="true">

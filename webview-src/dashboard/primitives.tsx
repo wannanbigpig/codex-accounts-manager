@@ -37,6 +37,7 @@ export function ModalShell(props: {
   className?: string;
   onClose: () => void;
   children: ComponentChildren;
+  footer?: ComponentChildren;
 }) {
   return (
     <div class={`overlay ${props.open ? "open" : ""}`} onClick={props.onClose}>
@@ -48,6 +49,7 @@ export function ModalShell(props: {
           </button>
         </div>
         <div class="settings-modal-body dashboard-modal-body">{props.children}</div>
+        {props.footer ? <div class="dashboard-modal-footer">{props.footer}</div> : null}
       </div>
     </div>
   );

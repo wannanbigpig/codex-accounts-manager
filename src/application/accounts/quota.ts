@@ -59,7 +59,7 @@ export async function refreshSingleQuota(
     return;
   }
 
-  const tokens = await repo.getTokens(accountId);
+  const tokens = await repo.getFreshTokens(accountId);
   if (!tokens) {
     throw createError.accountNotFound(account.email);
   }
@@ -71,7 +71,8 @@ export async function refreshSingleQuota(
     result.error,
     result.updatedTokens,
     result.updatedPlanType,
-    result.updatedSubscriptionActiveUntil
+    result.updatedSubscriptionActiveUntil,
+    tokens
   );
   const subscriptionRefresh = repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
   if (awaitSubscriptionRefresh) {
@@ -121,7 +122,7 @@ export async function refreshImportedAccountQuota(
     throw createError.accountNotFound(accountId);
   }
 
-  const tokens = await repo.getTokens(accountId);
+  const tokens = await repo.getFreshTokens(accountId);
   if (!tokens) {
     throw createError.accountNotFound(account.email);
   }
@@ -133,7 +134,8 @@ export async function refreshImportedAccountQuota(
     result.error,
     result.updatedTokens,
     result.updatedPlanType,
-    result.updatedSubscriptionActiveUntil
+    result.updatedSubscriptionActiveUntil,
+    tokens
   );
   // 后台异步刷新订阅到期时间
   void repo.refreshSubscriptionState(accountId, true).catch(() => undefined);

@@ -65,9 +65,29 @@ function createState(overrides?: {
 describe("buildDashboardStateSignature", () => {
   it("publishes wakeup changes even when accounts have not changed", () => {
     const state = createState();
-    state.wakeup = { version: 1, enabled: false, timeZone: "Asia/Shanghai", tasks: [], history: [] };
+    state.wakeup = {
+      version: 4,
+      timeZone: "Asia/Shanghai",
+      tasks: [
+        {
+          id: "task-1",
+          name: "Morning",
+          enabled: false,
+          accountIds: ["account-1"],
+          time: "06:15",
+          days: [0, 1, 2, 3, 4, 5, 6],
+          model: "gpt-5.6-luna",
+          effort: "low",
+          prompt: "Reply with OK.",
+          createdAt: 1,
+          updatedAt: 1,
+          nextRunAt: 2
+        }
+      ],
+      history: []
+    };
     const before = buildDashboardStateSignature(state);
-    state.wakeup.enabled = true;
+    state.wakeup.tasks[0]!.enabled = true;
     expect(buildDashboardStateSignature(state)).not.toBe(before);
   });
   it("changes when reset credits expiry changes", () => {

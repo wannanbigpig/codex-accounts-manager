@@ -76,16 +76,12 @@ async function runDashboardAction(
     case "saveWakeupTask":
     case "removeWakeupTask":
     case "toggleWakeupTask":
-    case "setWakeupEnabled":
     case "runWakeupTask": {
       const wakeup = getWakeupService();
       if (!wakeup) { throw new Error("Wakeup scheduler is unavailable"); }
       if (action === "saveWakeupTask") {
         if (!payload?.wakeupTask) { throw new Error("Wakeup task is required"); }
         await wakeup.saveTask(payload.wakeupTask);
-      } else if (action === "setWakeupEnabled") {
-        if (typeof payload?.enabled !== "boolean") { throw new Error("Enabled state is required"); }
-        await wakeup.setEnabled(payload.enabled);
       } else {
         if (typeof payload?.wakeupTaskId !== "string" || !payload.wakeupTaskId) { throw new Error("Wakeup task ID is required"); }
         if (action === "removeWakeupTask") { await wakeup.removeTask(payload.wakeupTaskId); }

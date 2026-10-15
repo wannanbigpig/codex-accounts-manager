@@ -737,14 +737,13 @@ html[data-theme="auto"] body.vscode-light .settings-theme-option.active {
 }
 .accounts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
-  grid-auto-rows: 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
   justify-content: start;
-  align-items: stretch;
+  align-items: start;
 }
 .saved-card-container {
-  --saved-card-min-height: 0px;
+  --saved-card-min-height: 340px;
   perspective: 1200px;
   position: relative;
   display: flex;
@@ -2256,27 +2255,36 @@ html[data-theme="auto"] body.vscode-light .overlay {
   background: var(--accent-green);
 }
 .settings-modal.wakeup-modal {
-  width: min(1440px, calc(100vw - 32px));
+  width: min(1120px, calc(100vw - 48px));
   display: flex;
   flex-direction: column;
   --wakeup-positive: color-mix(in srgb, var(--accent-green) 60%, var(--text-primary));
   --wakeup-negative: color-mix(in srgb, var(--accent-red) 65%, var(--text-primary));
 }
 .settings-modal.wakeup-modal-compact {
-  width: min(760px, calc(100vw - 32px));
+  width: min(680px, calc(100vw - 48px));
+}
+.settings-modal.wakeup-modal-editor {
+  width: min(720px, calc(100vw - 48px));
 }
 .wakeup-modal .settings-modal-head {
   flex-shrink: 0;
 }
 .wakeup-modal .dashboard-modal-body {
-  gap: 16px;
-  padding: 20px;
+  flex: 1 1 auto;
   min-height: 0;
   max-height: none;
 }
 .wakeup-intro p {
   margin: 0 0 6px;
   line-height: 1.6;
+}
+.wakeup-intro {
+  padding: 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  font-size: 12px;
 }
 .wakeup-muted,
 .wakeup-timezone {
@@ -2301,50 +2309,9 @@ html[data-theme="auto"] body.vscode-light .overlay {
 }
 .wakeup-toolbar-actions {
   justify-content: flex-end;
-  gap: 8px;
-}
-.wakeup-master-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.wakeup-toolbar-actions .settings-inline-toggle {
-  width: 38px;
-  height: 22px;
-}
-.wakeup-toolbar-actions .settings-inline-toggle-thumb {
-  width: 14px;
-  height: 14px;
-}
-.wakeup-toolbar-actions .settings-inline-toggle.active .settings-inline-toggle-thumb {
-  transform: translateX(16px);
-}
-.wakeup-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--border-muted);
-  border-radius: 10px;
-}
-.wakeup-tabs button,
-.wakeup-days button {
-  border: 1px solid transparent;
-  border-radius: 7px;
-  padding: 6px 9px;
-  color: var(--text-secondary);
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.wakeup-tabs button.active,
-.wakeup-days button.active {
-  color: var(--accent-blue);
-  background: var(--bg-elevated);
-  border-color: var(--border-accent);
+  gap: 12px;
 }
 .wakeup-tabs button span {
-  margin-left: 4px;
   opacity: 0.7;
 }
 .wakeup-task-list,
@@ -2353,7 +2320,7 @@ html[data-theme="auto"] body.vscode-light .overlay {
   gap: 12px;
 }
 .wakeup-task-list {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   grid-auto-rows: 1fr;
   align-items: stretch;
   gap: 14px;
@@ -2364,7 +2331,7 @@ html[data-theme="auto"] body.vscode-light .overlay {
   border: 1px solid var(--border-default);
   border-radius: 14px;
   background: var(--bg-elevated);
-  padding: 16px;
+  padding: 14px;
 }
 .wakeup-task.paused {
   border-style: dashed;
@@ -2373,7 +2340,6 @@ html[data-theme="auto"] body.vscode-light .overlay {
   display: flex;
   flex-direction: column;
   background: var(--gradient-card);
-  border-radius: 10px;
   box-shadow: var(--shadow-sm);
 }
 .wakeup-task.is-running {
@@ -2407,7 +2373,7 @@ html[data-theme="auto"] body.vscode-light .overlay {
   border-bottom: 1px solid var(--border-muted);
 }
 .wakeup-time {
-  font-size: 32px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums;
@@ -2432,7 +2398,7 @@ html[data-theme="auto"] body.vscode-light .overlay {
 }
 .wakeup-status {
   display: inline-flex;
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
   color: var(--text-secondary);
   background: var(--bg-surface);
@@ -2462,19 +2428,19 @@ html[data-theme="auto"] body.vscode-light .overlay {
   justify-content: space-between;
   gap: 8px;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
   margin-bottom: 6px;
 }
 .wakeup-selected-accounts {
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 .wakeup-selected-accounts > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
 }
 .wakeup-task .wakeup-task-meta {
   justify-content: flex-start;
@@ -2518,28 +2484,13 @@ html[data-theme="auto"] body.vscode-light .overlay {
   display: flex;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   border-top: 1px solid var(--border-muted);
-  padding-top: 12px;
+  padding-top: 14px;
   margin-top: auto;
-}
-.wakeup-task-actions .action-btn,
-.wakeup-form-actions .action-btn,
-.wakeup-toolbar .action-btn {
-  padding: 7px 12px;
-}
-.wakeup-task-actions .action-btn {
-  padding: 7px 8px;
-}
-.wakeup-task-actions .action-btn.icon-only {
-  width: 30px;
-  height: 30px;
-  padding: 0;
 }
 .wakeup-task-actions .wakeup-run-btn {
   margin-right: auto;
-  border-color: var(--border-accent);
-  color: var(--accent-blue);
 }
 .wakeup-empty {
   text-align: center;
@@ -2561,12 +2512,94 @@ html[data-theme="auto"] body.vscode-light .overlay {
 }
 .wakeup-form {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 .wakeup-form-row {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 14px;
+}
+.wakeup-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+}
+.wakeup-target-info {
+  flex: 1;
+  min-width: 160px;
+}
+.wakeup-target-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.wakeup-target-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.wakeup-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wakeup-form .wakeup-segmented button.active,
+.wakeup-form .wakeup-days button.active {
+  border-color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  color: var(--accent-blue);
+}
+.wakeup-form .wakeup-segmented button:hover:not(:disabled):not(.active),
+.wakeup-form .wakeup-days button:hover:not(:disabled):not(.active) {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+}
+.wakeup-segmented button:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+.wakeup-calendar-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+.wakeup-daily-time {
+  grid-template-columns: minmax(0, 180px);
+}
+.wakeup-form textarea {
+  min-height: 84px;
+}
+.wakeup-form-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--bg-base);
+  padding: 12px 14px;
+  font-size: 11px;
+}
+.wakeup-form-overview span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+}
+.wakeup-form-overview strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.wakeup-modal .dashboard-modal-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-muted);
+  padding: 14px;
+  background: var(--bg-surface);
 }
 .wakeup-interval-input {
   display: grid;
@@ -2581,20 +2614,18 @@ html[data-theme="auto"] body.vscode-light .overlay {
 .wakeup-form input:not([type="checkbox"]),
 .wakeup-form select,
 .wakeup-form textarea {
-  box-sizing: border-box;
   min-width: 0;
-  width: 100%;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  font: inherit;
-  padding: 9px 10px;
-  resize: vertical;
   color-scheme: dark;
 }
+.wakeup-form .modal-input {
+  min-height: 36px;
+}
 html[data-theme="light"] .wakeup-form input,
-html[data-theme="light"] .wakeup-form select {
+html[data-theme="light"] .wakeup-form select,
+html[data-theme="light"] .wakeup-form textarea,
+html[data-theme="auto"] body.vscode-light .wakeup-form input,
+html[data-theme="auto"] body.vscode-light .wakeup-form select,
+html[data-theme="auto"] body.vscode-light .wakeup-form textarea {
   color-scheme: light;
 }
 .wakeup-form input:focus-visible,
@@ -2607,27 +2638,21 @@ html[data-theme="light"] .wakeup-form select {
 }
 .wakeup-days {
   display: flex;
-  gap: 4px;
+  gap: 8px;
   flex-wrap: wrap;
 }
-.wakeup-days button {
-  border-color: var(--border-default);
-}
 .wakeup-account-heading {
-  font-size: 12px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
 }
-.wakeup-account-heading button {
-  cursor: pointer;
-  color: var(--accent-blue);
-  font: inherit;
-  font-size: 11px;
-  background: transparent;
-  border: none;
-  padding: 4px 6px;
+.wakeup-account-heading > div {
+  display: flex;
+  gap: 8px;
 }
 .wakeup-account-list {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   max-height: 220px;
   overflow-y: auto;
   padding: 2px;
@@ -2638,7 +2663,7 @@ html[data-theme="light"] .wakeup-form select {
   align-items: center;
   gap: 10px;
   border: 1px solid var(--border-muted);
-  border-radius: 9px;
+  border-radius: 10px;
   padding: 10px;
   cursor: pointer;
 }
@@ -2668,8 +2693,6 @@ html[data-theme="light"] .wakeup-form select {
 }
 .wakeup-form-actions {
   justify-content: flex-end;
-  border-top: 1px solid var(--border-muted);
-  padding-top: 14px;
 }
 .wakeup-feedback {
   padding: 8px 12px;
@@ -2710,24 +2733,33 @@ html[data-theme="light"] .wakeup-form select {
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }
+.wakeup-results .wakeup-result-meta {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+.wakeup-results .wakeup-result-meta:empty {
+  display: none;
+}
+.wakeup-results .wakeup-reply {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  white-space: pre-wrap;
+  color: var(--text-primary);
+}
+.wakeup-reply > span {
+  color: var(--text-secondary);
+  margin-right: 6px;
+}
+.wakeup-results .wakeup-quota-warning {
+  color: var(--accent-orange);
+}
 @media (max-width: 560px) {
-  .wakeup-modal .dashboard-modal-body {
-    padding: 14px;
-  }
   .wakeup-form-row {
     grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-  .wakeup-toolbar-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-  .wakeup-toolbar-actions .primary-btn {
-    margin-left: auto;
-  }
-  .wakeup-task,
-  .wakeup-history-row {
-    padding: 12px;
   }
 }
 .settings-modal {

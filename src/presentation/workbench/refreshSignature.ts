@@ -1,11 +1,13 @@
 import type { CodexAccountRecord, CodexIndexHealthSummary } from "../../core/types";
 import type { TokenAutomationSnapshot } from "./tokenAutomationState";
+import type { WakeupSnapshot } from "../../domain/wakeup/types";
 
 export function buildWorkbenchRefreshSignature(params: {
   observedAuthIdentity?: string;
   indexHealth: CodexIndexHealthSummary;
   accounts: CodexAccountRecord[];
   tokenAutomation?: TokenAutomationSnapshot;
+  wakeup?: WakeupSnapshot;
 }): string {
   const accountSignature = params.accounts
     .map((account) =>
@@ -85,6 +87,7 @@ export function buildWorkbenchRefreshSignature(params: {
     params.indexHealth.lastErrorMessage ?? "",
     params.indexHealth.lastRecoveredAt ?? "",
     tokenAutomationSignature,
+    JSON.stringify(params.wakeup ?? null),
     accountSignature
   ].join("||");
 }

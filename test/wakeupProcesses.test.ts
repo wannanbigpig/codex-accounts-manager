@@ -45,7 +45,6 @@ async function setup(
     { ...input, scheduleMode, intervalMinutes: 300 },
     new Date(2026, 9, 8, 6, 0).getTime()
   );
-  await store.setEnabled(true);
   const requests: string[] = [];
   server = createServer((req, res) => {
     let body = "";

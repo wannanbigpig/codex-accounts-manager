@@ -33,7 +33,7 @@ import { setCurrentWindowRuntimeAccountId } from "../src/presentation/workbench/
 
 type QuotaRefreshRepo = Pick<
   AccountsRepository,
-  "getAccount" | "getTokens" | "updateQuota" | "refreshSubscriptionState" | "updateResetCreditsSnapshot"
+  "getAccount" | "getFreshTokens" | "updateQuota" | "refreshSubscriptionState" | "updateResetCreditsSnapshot"
 >;
 
 describe("refreshSingleQuota token automation state", () => {
@@ -67,7 +67,7 @@ describe("refreshSingleQuota token automation state", () => {
   it("clears automation auth error after a successful manual refresh", async () => {
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
-      getTokens: vi.fn(async () => tokens),
+      getFreshTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => account),
       refreshSubscriptionState: vi.fn(async () => undefined),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
@@ -92,7 +92,7 @@ describe("refreshSingleQuota token automation state", () => {
   it("persists refreshed subscription metadata from quota refresh results", async () => {
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
-      getTokens: vi.fn(async () => tokens),
+      getFreshTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => account),
       refreshSubscriptionState: vi.fn(async () => undefined),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
@@ -119,7 +119,8 @@ describe("refreshSingleQuota token automation state", () => {
       undefined,
       tokens,
       "pro",
-      "1800000000"
+      "1800000000",
+      tokens
     );
   });
 
@@ -130,7 +131,7 @@ describe("refreshSingleQuota token automation state", () => {
     });
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
-      getTokens: vi.fn(async () => tokens),
+      getFreshTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => account),
       refreshSubscriptionState: vi.fn(() => subscriptionRefresh),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
@@ -158,7 +159,7 @@ describe("refreshSingleQuota token automation state", () => {
   it("keeps automation error when refresh still fails", async () => {
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
-      getTokens: vi.fn(async () => tokens),
+      getFreshTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => account),
       refreshSubscriptionState: vi.fn(async () => undefined),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
@@ -195,7 +196,7 @@ describe("refreshSingleQuota token automation state", () => {
     };
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
-      getTokens: vi.fn(async () => tokens),
+      getFreshTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => updatedAccount),
       refreshSubscriptionState: vi.fn(async () => undefined),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)
@@ -244,7 +245,7 @@ describe("refreshSingleQuota token automation state", () => {
     };
     const repo: QuotaRefreshRepo = {
       getAccount: vi.fn(async () => account),
-      getTokens: vi.fn(async () => tokens),
+      getFreshTokens: vi.fn(async () => tokens),
       updateQuota: vi.fn(async () => updatedAccount),
       refreshSubscriptionState: vi.fn(async () => undefined),
       updateResetCreditsSnapshot: vi.fn(async () => undefined)

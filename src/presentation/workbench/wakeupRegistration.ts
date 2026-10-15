@@ -24,27 +24,32 @@ export async function registerWakeupScheduler(
     repo,
     async (id, task, signal) => {
       const selectedAccount = await repo.getAccount(id);
-      await runAuthenticatedAccountRequest(repo, id, (tokens) =>
+      const diagnostic = await runAuthenticatedAccountRequest(repo, id, (tokens) =>
         sendWakeupRequest({ ...tokens, accountId: tokens.accountId ?? selectedAccount?.accountId }, task, signal)
       );
+      let quotaWarning: string | undefined;
       // Refresh quota directly; waking an account must not switch the user's current account.
       try {
         const account = await repo.getAccount(id);
-        const tokens = await repo.getTokens(id);
+        const tokens = await repo.getFreshTokens(id);
         if (account && tokens && !signal.aborted) {
           const result = await refreshQuota(account, tokens, true);
+          quotaWarning = result.error?.message;
           await repo.updateQuota(
             id,
             result.quota,
             result.error,
             result.updatedTokens,
             result.updatedPlanType,
-            result.updatedSubscriptionActiveUntil
+            result.updatedSubscriptionActiveUntil,
+            tokens
           );
         }
       } catch {
+        quotaWarning = "Post-wakeup quota refresh failed";
         console.warn("[codexAccounts] post-wakeup quota refresh failed");
       }
+      return { ...diagnostic, quotaWarning };
     },
     onChange
   );

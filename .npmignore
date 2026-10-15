@@ -1,0 +1,14 @@
+*
+!out/
+!out/**
+!media/
+!media/webview/
+!media/webview/**
+!media/CT_logo_transparent_square_hd.png
+!announcements.json
+!docs/
+!docs/CHANGELOG.md
+!README.en.md
+**/*.map
+**/*.d.ts
+**/*.d.ts.map

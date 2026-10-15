@@ -2,7 +2,8 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import { lock, check } from "proper-lockfile";
-import { nextWakeupAt, validateWakeupTask } from "../domain/wakeup/schedule";
+import { nextWakeupAt, validateWakeupTask, collectQuotaResetTimes } from "../domain/wakeup/schedule";
+import type { CodexAccountRecord } from "../core/types";
 import type {
   WakeupAccountResult,
   WakeupRun,
@@ -32,8 +33,7 @@ export class WakeupStore {
     } catch (error) {
       if (hasCode(error, "ENOENT")) {
         return {
-          version: 1,
-          enabled: false,
+          version: 4,
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           tasks: [],
           history: []
@@ -41,15 +41,21 @@ export class WakeupStore {
       }
       throw error;
     }
-    const state = JSON.parse(raw) as WakeupState;
+    const state = JSON.parse(raw) as Omit<WakeupState, "version"> & { version: number; enabled?: unknown };
     if (
-      (state?.version !== 1 && state?.version !== 2) ||
-      typeof state.enabled !== "boolean" ||
+      ![1, 2, 3, 4].includes(state?.version) ||
+      (state.version < 4 && typeof state.enabled !== "boolean") ||
       typeof state.timeZone !== "string" ||
       !Array.isArray(state.tasks) ||
       !Array.isArray(state.history)
     ) {
       throw new Error("Wakeup task storage is invalid; existing data was preserved");
+    }
+    if (
+      state.startupSession &&
+      (typeof state.startupSession.id !== "string" || !Number.isFinite(state.startupSession.startedAt))
+    ) {
+      throw new Error("Wakeup startup storage is invalid; existing data was preserved");
     }
     for (const task of state.tasks) {
       validateWakeupTask(task);
@@ -57,7 +63,23 @@ export class WakeupStore {
         !task.id ||
         !Number.isFinite(task.nextRunAt) ||
         !Number.isFinite(task.createdAt) ||
-        !Number.isFinite(task.updatedAt)
+        !Number.isFinite(task.updatedAt) ||
+        (task.startupSessionId !== undefined && typeof task.startupSessionId !== "string") ||
+        (task.lastStartupSessionId !== undefined && typeof task.lastStartupSessionId !== "string") ||
+        (task.nextRunAccountIds !== undefined &&
+          (!Array.isArray(task.nextRunAccountIds) ||
+            task.nextRunAccountIds.some((id) => !task.accountIds.includes(id)))) ||
+        (task.quotaResetSnapshots !== undefined &&
+          (typeof task.quotaResetSnapshots !== "object" ||
+            task.quotaResetSnapshots === null ||
+            Object.entries(task.quotaResetSnapshots).some(
+              ([id, snapshot]) =>
+                !task.accountIds.includes(id) ||
+                !snapshot ||
+                !Number.isFinite(snapshot.observedAt) ||
+                !Array.isArray(snapshot.times) ||
+                snapshot.times.some((time) => !Number.isFinite(time) || time <= 0)
+            )))
       ) {
         throw new Error("Wakeup schedule storage is invalid; existing data was preserved");
       }
@@ -68,6 +90,8 @@ export class WakeupStore {
           !run.id ||
           !run.taskId ||
           typeof run.taskName !== "string" ||
+          (run.model !== undefined && typeof run.model !== "string") ||
+          (run.effort !== undefined && !["low", "medium", "high"].includes(run.effort)) ||
           !["scheduled", "manual"].includes(run.trigger) ||
           !["running", "success", "partial", "failed", "cancelled", "interrupted", "missed"].includes(run.status) ||
           !Number.isFinite(run.startedAt) ||
@@ -78,13 +102,24 @@ export class WakeupStore {
               !result ||
               typeof result.accountId !== "string" ||
               !["success", "failed", "cancelled"].includes(result.status) ||
-              (result.message !== undefined && typeof result.message !== "string")
+              (result.message !== undefined && typeof result.message !== "string") ||
+              (result.reply !== undefined && typeof result.reply !== "string") ||
+              (result.model !== undefined && typeof result.model !== "string") ||
+              (result.quotaWarning !== undefined && typeof result.quotaWarning !== "string") ||
+              (result.durationMs !== undefined && (!Number.isFinite(result.durationMs) || result.durationMs < 0)) ||
+              (result.errorStage !== undefined &&
+                !["auth", "request", "stream", "timeout", "cancelled"].includes(result.errorStage)) ||
+              (result.httpStatus !== undefined &&
+                (!Number.isInteger(result.httpStatus) || result.httpStatus < 100 || result.httpStatus > 599))
           )
       )
     ) {
       throw new Error("Wakeup history storage is invalid; existing data was preserved");
     }
-    return state;
+    // Keep each task's explicit state; the retired master switch no longer gates execution.
+    // The next mutation persists version 4 under the shared lease, preventing older hosts from overwriting it.
+    delete state.enabled;
+    return { ...state, version: 4 };
   }
 
   async saveTask(input: WakeupTaskInput, now = Date.now()): Promise<WakeupTask> {
@@ -103,22 +138,11 @@ export class WakeupStore {
         createdAt: previous?.createdAt ?? now,
         updatedAt: Math.max(now, (previous?.updatedAt ?? 0) + 1),
         nextRunAt: nextWakeupAt(valid, now),
-        lastScheduledAt: previous?.lastScheduledAt
+        lastScheduledAt: previous?.lastScheduledAt,
+        lastStartupSessionId: previous?.lastStartupSessionId
       };
       state.tasks = previous ? state.tasks.map((item) => (item.id === task.id ? task : item)) : [...state.tasks, task];
-      if (task.scheduleMode === "interval") {
-        state.version = 2;
-      }
       return task;
-    });
-  }
-
-  async setEnabled(enabled: boolean): Promise<void> {
-    if (typeof enabled !== "boolean") {
-      throw new Error("Invalid wakeup enabled state");
-    }
-    await this.mutate((state) => {
-      state.enabled = enabled;
     });
   }
 
@@ -133,6 +157,11 @@ export class WakeupStore {
       }
       task.enabled = enabled;
       task.updatedAt = Math.max(now, task.updatedAt + 1);
+      if (task.scheduleMode === "startup" || task.scheduleMode === "quota_reset") {
+        task.nextRunAt = 0;
+        task.nextRunAccountIds = undefined;
+        task.startupSessionId = undefined;
+      }
       if (enabled) {
         task.nextRunAt = nextWakeupAt(validateWakeupTask(task), now);
       }
@@ -142,6 +171,114 @@ export class WakeupStore {
   async removeTask(id: string): Promise<void> {
     await this.mutate((state) => {
       state.tasks = state.tasks.filter((task) => task.id !== id);
+    });
+  }
+
+  /** All live extension hosts share one startup batch; a new batch begins after the last host exits. */
+  async joinSchedulerSession(
+    now: number,
+    onCompromised: (error: Error) => void
+  ): Promise<{
+    session: { id: string; startedAt: number };
+    release: () => Promise<void>;
+  }> {
+    const hostsDirectory = path.join(this.directory, "hosts");
+    await fs.mkdir(hostsDirectory, { recursive: true, mode: 0o700 });
+    const hostPath = path.join(hostsDirectory, `${randomUUID()}.json`);
+    const releaseLease = await lock(hostPath, { ...LOCK_OPTIONS, retries: 0, onCompromised });
+    try {
+      const session = await this.mutate(async (state) => {
+        let liveHost = false;
+        for (const name of await fs.readdir(hostsDirectory)) {
+          if (!/^[0-9a-f-]{36}\.json$/.test(name)) {
+            continue;
+          }
+          const memberPath = path.join(hostsDirectory, name);
+          try {
+            const member = JSON.parse(await fs.readFile(memberPath, "utf8")) as { pid: number };
+            if (
+              Number.isInteger(member.pid) &&
+              member.pid > 0 &&
+              isProcessAlive(member.pid) &&
+              // Heartbeats pause during machine sleep; a live process with its own lease is still the same startup.
+              (await fs.stat(`${memberPath}.lock`).then(
+                (stat) => stat.isDirectory(),
+                () => false
+              ))
+            ) {
+              liveHost = true;
+              break;
+            }
+            await fs.rm(memberPath, { force: true });
+            await fs.rm(`${memberPath}.lock`, { recursive: true, force: true });
+          } catch {
+            /* Dead or incomplete member records cannot keep a startup batch alive. */
+          }
+        }
+        if (!liveHost || !state.startupSession) {
+          state.startupSession = { id: randomUUID(), startedAt: now };
+          for (const task of state.tasks.filter((task) => task.scheduleMode === "startup")) {
+            task.startupSessionId = state.startupSession.id;
+            task.nextRunAt = task.enabled ? now + task.startupDelayMinutes! * 60_000 : 0;
+          }
+        }
+        await fs.writeFile(hostPath, JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 0o600 });
+        return { ...state.startupSession };
+      });
+      let released = false;
+      return {
+        session,
+        release: async () => {
+          if (released) {
+            return;
+          }
+          released = true;
+          try {
+            await releaseLease();
+          } finally {
+            await fs.rm(hostPath, { force: true });
+          }
+        }
+      };
+    } catch (error) {
+      await releaseLease().catch(() => undefined);
+      await fs.rm(hostPath, { force: true });
+      throw error;
+    }
+  }
+
+  async syncQuotaSchedules(getAccount: (id: string) => Promise<CodexAccountRecord | undefined>): Promise<void> {
+    const current = await this.read();
+    if (!current.tasks.some((task) => task.enabled && task.scheduleMode === "quota_reset")) {
+      return;
+    }
+    await this.mutate(async (state) => {
+      const accounts = new Map<string, CodexAccountRecord | undefined>();
+      for (const task of state.tasks.filter((task) => task.enabled && task.scheduleMode === "quota_reset")) {
+        const snapshots = task.quotaResetSnapshots ?? {};
+        for (const id of task.accountIds) {
+          if (!accounts.has(id)) {
+            try {
+              accounts.set(id, await getAccount(id));
+            } catch {
+              accounts.set(id, undefined);
+            }
+          }
+          const account = accounts.get(id);
+          if (!account) {
+            continue;
+          }
+          const observedAt = account.lastQuotaAt ?? 0;
+          if (!snapshots[id] || snapshots[id]!.observedAt <= observedAt) {
+            snapshots[id] = { observedAt, times: collectQuotaResetTimes(account.quotaSummary, task.quotaResetWindow!) };
+          }
+        }
+        task.quotaResetSnapshots = snapshots;
+        const floor = Math.max(task.updatedAt, task.lastScheduledAt ?? 0);
+        const times = task.accountIds.flatMap((id) => snapshots[id]?.times ?? []).filter((time) => time > floor);
+        task.nextRunAt = times.length ? Math.min(...times) : 0;
+        task.nextRunAccountIds = task.accountIds.filter((id) => snapshots[id]?.times.includes(task.nextRunAt));
+      }
     });
   }
 
@@ -163,7 +300,8 @@ export class WakeupStore {
     taskId: string,
     trigger: "scheduled" | "manual",
     expectedDue: number | undefined,
-    now = Date.now()
+    now = Date.now(),
+    canExecute?: (task: WakeupTask) => Promise<boolean>
   ): Promise<{ task: WakeupTask; run: WakeupRun } | undefined> {
     return this.mutate(async (state) => {
       const task = state.tasks.find((item) => item.id === taskId);
@@ -172,24 +310,51 @@ export class WakeupStore {
       }
       if (trigger === "scheduled") {
         if (
-          !state.enabled ||
           !task.enabled ||
           task.nextRunAt !== expectedDue ||
           expectedDue === undefined ||
+          expectedDue <= 0 ||
           expectedDue > now
         ) {
           return undefined;
         }
+      }
+      const startup = trigger === "scheduled" && task.scheduleMode === "startup";
+      if (
+        startup &&
+        (!task.startupSessionId ||
+          task.startupSessionId !== state.startupSession?.id ||
+          task.lastStartupSessionId === task.startupSessionId)
+      ) {
+        return undefined;
+      }
+      const executionTask =
+        trigger === "scheduled" && task.scheduleMode === "quota_reset"
+          ? { ...task, accountIds: [...(task.nextRunAccountIds ?? [])] }
+          : task;
+      if (!executionTask.accountIds.length) {
+        return undefined;
+      }
+      // Check the latest task under the state lock before consuming its occurrence.
+      if (canExecute && !(await canExecute(executionTask))) {
+        return undefined;
+      }
+      if (trigger === "scheduled") {
         task.nextRunAt = nextWakeupAt(task, now);
-        if ((task.lastScheduledAt ?? 0) >= expectedDue) {
+        if (!startup && (task.lastScheduledAt ?? 0) >= expectedDue!) {
           return undefined;
         }
         task.lastScheduledAt = expectedDue;
+        if (startup) {
+          task.lastStartupSessionId = task.startupSessionId;
+        }
       }
       const run: WakeupRun = {
         id: randomUUID(),
         taskId,
         taskName: task.name,
+        model: task.model,
+        effort: task.effort,
         trigger,
         scheduledAt: expectedDue,
         startedAt: now,
@@ -206,7 +371,9 @@ export class WakeupStore {
       if (trigger === "scheduled") {
         const claimsDirectory = path.join(this.directory, "claims");
         await fs.mkdir(claimsDirectory, { recursive: true, mode: 0o700 });
-        const key = createHash("sha256").update(`${taskId}:${expectedDue}`).digest("hex");
+        const key = createHash("sha256")
+          .update(startup ? `${taskId}:startup:${task.startupSessionId}:${expectedDue}` : `${taskId}:${expectedDue}`)
+          .digest("hex");
         try {
           const claim = await fs.open(path.join(claimsDirectory, key), "wx", 0o600);
           try {
@@ -223,7 +390,7 @@ export class WakeupStore {
         }
       }
       state.history = [run, ...state.history].slice(0, 100);
-      return { task: { ...task }, run };
+      return { task: { ...task, accountIds: [...executionTask.accountIds] }, run };
     });
   }
 
@@ -300,6 +467,15 @@ export class WakeupStore {
         await release();
       }
     });
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return hasCode(error, "EPERM");
   }
 }
 

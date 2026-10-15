@@ -42,7 +42,8 @@ describe("direct Codex wakeup request", () => {
         setTimeout(() => res.end('ta":"OK"}\r\n\r\n' + completed.replace(/\n/g, "\r\n")), 5);
       });
     });
-    await sendWakeupRequest(tokens, task, new AbortController().signal, { endpoint: url });
+    const result = await sendWakeupRequest(tokens, task, new AbortController().signal, { endpoint: url });
+    expect(result.reply).toBe("OK");
     expect(headers?.authorization).toBe("Bearer fixture-access-token");
     expect(headers?.["chatgpt-account-id"]).toBe("fixture-workspace");
     expect(received).toMatchObject({ model: task.model, reasoning: { effort: "low" }, store: false, stream: true });
@@ -50,6 +51,20 @@ describe("direct Codex wakeup request", () => {
       { type: "message", role: "user", content: [{ type: "input_text", text: "Reply with OK." }] }
     ]);
     expect(received?.["tools"]).toBeUndefined();
+  });
+  it("prefers the completed reply over deltas and bounds/redacts persisted diagnostics", async () => {
+    const finalText = "Bearer fixture-secret sk-fixturekey " + "x".repeat(700);
+    const url = await endpoint((_req, res) =>
+      res.end(
+        'data: {"type":"response.output_text.delta","delta":"draft"}\n\n' +
+          `data: ${JSON.stringify({ type: "response.completed", response: { model: "fixture-model", status: "completed", output: [{ content: [{ type: "output_text", text: finalText }] }] } })}\n\n`
+      )
+    );
+    const result = await sendWakeupRequest(tokens, task, new AbortController().signal, { endpoint: url });
+    expect(result.model).toBe("fixture-model");
+    expect(result.reply).toHaveLength(500);
+    expect(result.reply).toContain("[redacted]");
+    expect(result.reply).not.toMatch(/fixture-secret|sk-fixturekey|draft/);
   });
   it.each(["response.failed", "response.incomplete", "error"])("rejects an error event %s", async (type) => {
     const url = await endpoint((_req, res) => res.end(`data: ${JSON.stringify({ type })}\n\n`));
@@ -82,7 +97,7 @@ describe("direct Codex wakeup request", () => {
     });
     await expect(
       sendWakeupRequest(tokens, task, new AbortController().signal, { endpoint: url, timeoutMs: 100 })
-    ).rejects.toThrow("timed out");
+    ).rejects.toMatchObject({ stage: "timeout" });
     expect(requests).toBe(1);
   });
   it("supports cancellation while reading the stream", async () => {

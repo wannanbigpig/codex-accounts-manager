@@ -57,7 +57,7 @@ describe("executeDashboardActionMessage", () => {
           resetCreditsAvailable: 1
         }
       })),
-      getTokens: vi.fn(async () => ({
+      getFreshTokens: vi.fn(async () => ({
         accessToken: "access-token"
       }))
     } as unknown as DashboardActionContext["repo"];

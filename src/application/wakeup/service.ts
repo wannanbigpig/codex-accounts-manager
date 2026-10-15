@@ -1,9 +1,11 @@
 import { watch, type FSWatcher } from "fs";
 import * as fs from "fs/promises";
 import type { AccountsRepository } from "../../storage";
-import type { WakeupSnapshot, WakeupTask, WakeupTaskInput } from "../../domain/wakeup/types";
+import type { WakeupSnapshot, WakeupTask, WakeupTaskInput, WakeupExecutionResult } from "../../domain/wakeup/types";
+import { sanitizeWakeupText, wakeupFailure } from "../../domain/wakeup/diagnostics";
 import { WakeupStore } from "../../storage/wakeupStore";
 import { validateWakeupTask } from "../../domain/wakeup/schedule";
+import { createKeyedMutex } from "../../utils/concurrency";
 
 type ActiveRun = { task: WakeupTask; trigger: "manual" | "scheduled"; controller: AbortController };
 
@@ -13,18 +15,33 @@ export class WakeupService {
   private disposed = false;
   private polling = false;
   private readonly active = new Map<string, ActiveRun>();
+  private readonly accountRequests = createKeyedMutex();
   private lastSnapshot = "";
+  private releaseScheduler?: () => Promise<void>;
 
   constructor(
     readonly store: WakeupStore,
     private readonly repo: Pick<AccountsRepository, "getAccount">,
-    private readonly execute: (accountId: string, task: WakeupTask, signal: AbortSignal) => Promise<void>,
+    private readonly execute: (
+      accountId: string,
+      task: WakeupTask,
+      signal: AbortSignal
+    ) => Promise<void | WakeupExecutionResult>,
     private readonly onChange: () => void,
     private readonly now: () => number = Date.now
   ) {}
 
   async start(): Promise<void> {
+    if (this.disposed || this.releaseScheduler) {
+      return;
+    }
     await fs.mkdir(this.store.directory, { recursive: true, mode: 0o700 });
+    const membership = await this.store.joinSchedulerSession(this.now(), () => this.dispose());
+    if (this.disposed) {
+      await membership.release();
+      return;
+    }
+    this.releaseScheduler = membership.release;
     this.watcher = watch(this.store.directory, { persistent: false }, (_event, filename) => {
       if (filename?.toString() === "tasks.json") {
         void this.checkCancellation()
@@ -46,6 +63,8 @@ export class WakeupService {
       clearInterval(this.timer);
     }
     this.watcher?.close();
+    void this.releaseScheduler?.().catch(() => undefined);
+    this.releaseScheduler = undefined;
     for (const run of this.active.values()) {
       run.controller.abort();
     }
@@ -56,8 +75,7 @@ export class WakeupService {
       return await this.store.read();
     } catch (error) {
       return {
-        version: 1,
-        enabled: false,
+        version: 4,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         tasks: [],
         history: [],
@@ -74,12 +92,9 @@ export class WakeupService {
       }
     }
     await this.store.saveTask(valid, this.now());
-    await this.checkCancellation();
-    this.notify();
-  }
-
-  async setEnabled(enabled: boolean): Promise<void> {
-    await this.store.setEnabled(enabled);
+    if (valid.scheduleMode === "quota_reset") {
+      await this.store.syncQuotaSchedules((id) => this.repo.getAccount(id));
+    }
     await this.checkCancellation();
     this.notify();
   }
@@ -101,7 +116,7 @@ export class WakeupService {
       throw new Error("Wakeup scheduler has stopped");
     }
     if (!(await this.run(id, "manual"))) {
-      throw new Error("This wakeup task is already running in another window or no longer exists");
+      throw new Error("This wakeup task is already running in another window or unavailable in this window");
     }
   }
 
@@ -110,28 +125,34 @@ export class WakeupService {
       return;
     }
     this.polling = true;
+    const runs: Promise<boolean>[] = [];
     try {
       await this.checkCancellation();
       await this.store.recoverInterrupted(this.now());
+      await this.store.syncQuotaSchedules((id) => this.repo.getAccount(id));
       const state = await this.store.read();
       const serialized = JSON.stringify(state);
       if (serialized !== this.lastSnapshot) {
         this.lastSnapshot = serialized;
         this.notify();
       }
-      if (!state.enabled) {
-        return;
-      }
       for (const task of state.tasks) {
         if (this.disposed) {
           break;
         }
-        if (task.enabled && task.nextRunAt <= this.now()) {
-          await this.run(task.id, "scheduled", task.nextRunAt);
+        if (task.enabled && !this.active.has(task.id) && task.nextRunAt > 0 && task.nextRunAt <= this.now()) {
+          runs.push(this.run(task.id, "scheduled", task.nextRunAt));
         }
       }
     } finally {
       this.polling = false;
+    }
+    // Only the polling pass is exclusive; long requests must not block later polls or other tasks.
+    const results = await Promise.allSettled(runs);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
     }
   }
 
@@ -145,7 +166,14 @@ export class WakeupService {
       if (this.disposed) {
         return false;
       }
-      const claim = await this.store.claim(id, trigger, due, this.now());
+      const claim = await this.store.claim(id, trigger, due, this.now(), async (task) => {
+        for (const accountId of task.accountIds) {
+          if (!(await this.repo.getAccount(accountId))) {
+            return false;
+          }
+        }
+        return true;
+      });
       if (!claim) {
         this.notify();
         return false;
@@ -163,19 +191,35 @@ export class WakeupService {
           if (controller.signal.aborted) {
             break;
           }
+          let startedAt = this.now();
           try {
-            if (!(await this.repo.getAccount(accountId))) {
-              throw new Error("Account no longer exists");
-            }
-            await this.execute(accountId, claim.task, controller.signal);
+            const diagnostic = await this.accountRequests.runExclusive(accountId, async () => {
+              startedAt = this.now();
+              await this.checkCancellation();
+              controller.signal.throwIfAborted();
+              if (!(await this.repo.getAccount(accountId))) {
+                throw new Error("Account no longer exists");
+              }
+              return this.execute(accountId, claim.task, controller.signal);
+            });
             successes += 1;
-            await this.store.addResult(claim.run.id, { accountId, status: "success" });
+            await this.store.addResult(claim.run.id, {
+              accountId,
+              status: "success",
+              durationMs: Math.max(0, this.now() - startedAt),
+              reply: diagnostic ? sanitizeWakeupText(diagnostic.reply) : undefined,
+              model: diagnostic?.model ? sanitizeWakeupText(diagnostic.model, 120) : undefined,
+              quotaWarning: diagnostic?.quotaWarning ? sanitizeWakeupText(diagnostic.quotaWarning, 240) : undefined
+            });
           } catch (error) {
             failures += 1;
             await this.store.addResult(claim.run.id, {
               accountId,
               status: controller.signal.aborted ? "cancelled" : "failed",
-              message: safeMessage(error)
+              message: safeMessage(error),
+              durationMs: Math.max(0, this.now() - startedAt),
+              ...wakeupFailure(error),
+              ...(controller.signal.aborted ? { errorStage: "cancelled" as const } : {})
             });
           }
           this.notify();
@@ -205,10 +249,7 @@ export class WakeupService {
     const state = await this.store.read();
     for (const [id, run] of this.active) {
       const task = state.tasks.find((item) => item.id === id);
-      if (
-        task?.updatedAt !== run.task.updatedAt ||
-        (run.trigger === "scheduled" && (!state.enabled || !task.enabled))
-      ) {
+      if (task?.updatedAt !== run.task.updatedAt || (run.trigger === "scheduled" && !task.enabled)) {
         run.controller.abort();
       }
     }
@@ -223,5 +264,5 @@ export class WakeupService {
 
 function safeMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "Wakeup request failed";
-  return message.replace(/Bearer\s+\S+|\beyJ[A-Za-z0-9._-]+|\bsk-[A-Za-z0-9_-]+/gi, "[redacted]").slice(0, 240);
+  return sanitizeWakeupText(message, 240);
 }

@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { needsRefresh, refreshTokens } from "../auth/oauth";
 import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
 import { resolveAccountHealth, isHealthDismissed } from "../application/accounts/health";
 import { resolveSubscriptionDisplay } from "../application/dashboard/buildDashboardState";
@@ -177,26 +176,7 @@ async function getFreshUsageTokens(
   repo: AccountsRepository,
   accountId: string
 ): Promise<Awaited<ReturnType<AccountsRepository["getTokens"]>>> {
-  const tokens = await repo.getTokens(accountId);
-  if (!tokens?.accessToken || !needsRefresh(tokens.accessToken)) {
-    return tokens;
-  }
-
-  if (!tokens.refreshToken) {
-    return tokens;
-  }
-
-  const refreshed = await refreshTokens(tokens.refreshToken, tokens.idToken);
-  await repo.updateTokens(accountId, {
-    ...refreshed,
-    accountId: refreshed.accountId ?? tokens.accountId
-  });
-
-  return {
-    ...tokens,
-    ...refreshed,
-    accountId: refreshed.accountId ?? tokens.accountId
-  };
+  return repo.getFreshTokens(accountId);
 }
 
 export async function refreshDetailsPanel(): Promise<void> {

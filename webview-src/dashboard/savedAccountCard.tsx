@@ -20,6 +20,8 @@ import {
 } from "./icons";
 import { ActionButton } from "./primitives";
 import { MetricRow, renderHealthPill } from "./accountMetricPrimitives";
+import { ClockIcon } from "./wakeupModal";
+import { getWakeupCopy } from "../../src/domain/wakeup/copy";
 
 export function SavedAccountCard(props: {
   account: DashboardAccountViewModel;
@@ -42,6 +44,7 @@ export function SavedAccountCard(props: {
   selected: boolean;
   onToggleSelected: () => void;
   onEditTags: () => void;
+  onConfigureWakeup: () => void;
   onAction: (
     action:
       | "details"
@@ -210,6 +213,7 @@ export function SavedAccountCard(props: {
             ) : null}
             <ActionButton icon={renderDetailsIcon()} iconOnly label={copy.detailsBtn} pending={props.detailsPending} disabled={props.busy} onClick={() => onAction("details", account.id, { privacyMode })} />
             <ActionButton icon={renderRemoveIcon()} iconOnly label={copy.removeBtn} pending={props.removePending} disabled={props.busy} onClick={() => onAction("remove", account.id)} />
+            <ActionButton icon={<ClockIcon />} iconOnly label={getWakeupCopy(props.lang).configureAccount} disabled={props.busy} onClick={props.onConfigureWakeup} />
           </div>
         </section>
 

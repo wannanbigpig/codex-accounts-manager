@@ -394,7 +394,6 @@ export type DashboardActionName =
   | "saveWakeupTask"
   | "removeWakeupTask"
   | "toggleWakeupTask"
-  | "setWakeupEnabled"
   | "runWakeupTask"
   | "addAccount"
   | "importCurrent"

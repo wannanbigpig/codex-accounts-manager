@@ -32,8 +32,24 @@ afterEach(async () => {
 const now = new Date(2026, 9, 8, 6, 0).getTime();
 
 describe("shared wakeup storage", () => {
-  it("defaults to disabled and serializes independent writers without losing tasks", async () => {
-    expect((await store.read()).enabled).toBe(false);
+  it("reads legacy history without diagnostics and rejects invalid diagnostic fields without resetting data", async () => {
+    const task = await store.saveTask(input, now);
+    const claim = await store.claim(task.id, "manual", undefined, now);
+    await store.addResult(claim!.run.id, { accountId: "a", status: "success" });
+    const state = await store.read();
+    delete state.history[0]!.model;
+    delete state.history[0]!.effort;
+    const file = path.join(directory, "tasks.json");
+    await fs.writeFile(file, JSON.stringify(state));
+    expect((await store.read()).history[0]!.results).toEqual([{ accountId: "a", status: "success" }]);
+    state.history[0]!.results[0]!.durationMs = -1;
+    const invalid = JSON.stringify(state);
+    await fs.writeFile(file, invalid);
+    await expect(store.read()).rejects.toThrow("history storage is invalid");
+    expect(await fs.readFile(file, "utf8")).toBe(invalid);
+  });
+  it("has no global switch and serializes independent writers without losing tasks", async () => {
+    expect(await store.read()).not.toHaveProperty("enabled");
     await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
         new WakeupStore(directory).saveTask({ ...input, name: `Task ${index}` }, now)
@@ -51,7 +67,7 @@ describe("shared wakeup storage", () => {
     expect((await store.read()).tasks[0]?.nextRunAt).toBe(calendar.nextRunAt);
     const interval = await store.saveTask({ ...input, scheduleMode: "interval", intervalMinutes: 300 }, now);
     const state = await new WakeupStore(directory).read();
-    expect(state.version).toBe(2);
+    expect(state.version).toBe(4);
     expect(state.tasks).toHaveLength(2);
     expect(state.tasks[1]?.nextRunAt).toBe(interval.nextRunAt);
     expect(state.tasks[0]?.nextRunAt).toBe(calendar.nextRunAt);
@@ -60,7 +76,6 @@ describe("shared wakeup storage", () => {
     const step = 300 * 60_000;
     const task = await store.saveTask({ ...input, scheduleMode: "interval", intervalMinutes: 300 }, now);
     expect(task.nextRunAt).toBe(now + step);
-    await store.setEnabled(true);
     const run = await store.claim(task.id, "scheduled", task.nextRunAt, task.nextRunAt + 45_000);
     expect(run).toBeDefined();
     expect((await store.read()).tasks[0]?.nextRunAt).toBe(now + step * 2);
@@ -77,7 +92,6 @@ describe("shared wakeup storage", () => {
   });
   it("only allows one claim across windows, persists it before execution, and never replays failures", async () => {
     const task = await store.saveTask(input, now);
-    await store.setEnabled(true);
     const claims = await Promise.all(
       Array.from({ length: 6 }, () =>
         new WakeupStore(directory).claim(task.id, "scheduled", task.nextRunAt, task.nextRunAt)
@@ -93,7 +107,6 @@ describe("shared wakeup storage", () => {
   });
   it("retains a durable claim if the process crashed before updating the state file", async () => {
     const task = await store.saveTask(input, now);
-    await store.setEnabled(true);
     const key = createHash("sha256").update(`${task.id}:${task.nextRunAt}`).digest("hex");
     await fs.mkdir(path.join(directory, "claims"));
     await fs.writeFile(path.join(directory, "claims", key), "crash after claim");
@@ -103,16 +116,15 @@ describe("shared wakeup storage", () => {
   });
   it("skips a missed occurrence once and advances the schedule", async () => {
     const task = await store.saveTask(input, now);
-    await store.setEnabled(true);
     expect(await store.claim(task.id, "scheduled", task.nextRunAt, task.nextRunAt + 300_001)).toBeUndefined();
     expect((await store.read()).history[0]?.status).toBe("missed");
     expect(await store.claim(task.id, "scheduled", task.nextRunAt, task.nextRunAt + 300_002)).toBeUndefined();
     expect((await store.read()).history).toHaveLength(1);
   });
   it("rejects disabled, future, or obsolete occurrences while allowing an explicit manual test", async () => {
-    const task = await store.saveTask(input, now);
+    const task = await store.saveTask({ ...input, enabled: false }, now);
     expect(await store.claim(task.id, "scheduled", task.nextRunAt, task.nextRunAt)).toBeUndefined();
-    await store.setEnabled(true);
+    await store.setTaskEnabled(task.id, true, now);
     expect(await store.claim(task.id, "scheduled", task.nextRunAt, now)).toBeUndefined();
     expect(await store.claim(task.id, "scheduled", task.nextRunAt - 1, task.nextRunAt)).toBeUndefined();
     await store.setTaskEnabled(task.id, false, now + 1);

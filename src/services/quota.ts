@@ -23,7 +23,6 @@ import {
   UsageWindowInfo
 } from "../core/types";
 import { APIError } from "../core/errors";
-import { needsRefresh, refreshTokens } from "../auth/oauth";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { QUOTA_USAGE_URL, RESET_CREDITS_CONSUME_URL, RESET_CREDITS_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
@@ -89,15 +88,7 @@ export async function refreshQuota(
   }
 
   const refreshTask = (async (): Promise<QuotaRefreshResult> => {
-    let effectiveTokens = tokens;
-
-    if (needsRefresh(tokens.accessToken)) {
-      if (!tokens.refreshToken) {
-        return { error: buildError("Token expired and no refresh token is available") };
-      }
-      effectiveTokens = await refreshTokens(tokens.refreshToken, tokens.idToken);
-      effectiveTokens.accountId = effectiveTokens.accountId ?? account.accountId;
-    }
+    const effectiveTokens = tokens;
 
     const accountId = account.accountId ?? extractClaims(effectiveTokens.idToken, effectiveTokens.accessToken).accountId;
     const primary = await requestQuotaUsage(effectiveTokens.accessToken, accountId);

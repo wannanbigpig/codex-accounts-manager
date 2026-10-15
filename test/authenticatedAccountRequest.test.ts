@@ -1,48 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
 import { APIError } from "../src/core/errors";
-
-const { needsRefreshMock, refreshTokensMock } = vi.hoisted(() => ({
-  needsRefreshMock: vi.fn(() => false),
-  refreshTokensMock: vi.fn()
-}));
-
-vi.mock("../src/auth/oauth", () => ({
-  needsRefresh: needsRefreshMock,
-  refreshTokens: refreshTokensMock
-}));
-
 import { runAuthenticatedAccountRequest } from "../src/application/accounts/authenticatedAccountRequest";
-
+const original = { idToken: "old-id", accessToken: "old-access", refreshToken: "refresh", accountId: "acct-1" };
+const renewed = { ...original, accessToken: "new-access" };
 describe("runAuthenticatedAccountRequest", () => {
-  it("refreshes once and retries a request after a 401", async () => {
-    refreshTokensMock.mockResolvedValue({
-      idToken: "new-id-token",
-      accessToken: "new-access-token",
-      refreshToken: "new-refresh-token"
-    });
-    const repo = {
-      getTokens: vi.fn(async () => ({
-        idToken: "old-id-token",
-        accessToken: "old-access-token",
-        refreshToken: "refresh-token",
-        accountId: "acct-1"
-      })),
-      updateTokens: vi.fn(async () => undefined)
-    };
+  it("refreshes once through the repository and retries after a 401", async () => {
+    const repo = { getFreshTokens: vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(renewed) };
     const request = vi
       .fn()
       .mockRejectedValueOnce(new APIError("unauthorized", { statusCode: 401 }))
       .mockResolvedValueOnce("ok");
-
-    const result = await runAuthenticatedAccountRequest(repo as never, "account-1", request);
-
-    expect(result).toBe("ok");
-    expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({ accessToken: "old-access-token" }));
-    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({ accessToken: "new-access-token" }));
-    expect(refreshTokensMock).toHaveBeenCalledTimes(1);
-    expect(repo.updateTokens).toHaveBeenCalledWith(
-      "account-1",
-      expect.objectContaining({ accessToken: "new-access-token", accountId: "acct-1" })
-    );
+    expect(await runAuthenticatedAccountRequest(repo, "account-1", request)).toBe("ok");
+    expect(request).toHaveBeenNthCalledWith(1, original);
+    expect(request).toHaveBeenNthCalledWith(2, renewed);
+    expect(repo.getFreshTokens).toHaveBeenLastCalledWith("account-1", { force: true, expectedTokens: original });
+  });
+  it("does not replay non-authorization errors", async () => {
+    const repo = { getFreshTokens: vi.fn().mockResolvedValue(original) };
+    const request = vi.fn().mockRejectedValue(new APIError("limited", { statusCode: 429 }));
+    await expect(runAuthenticatedAccountRequest(repo, "account-1", request)).rejects.toMatchObject({ statusCode: 429 });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(repo.getFreshTokens).toHaveBeenCalledTimes(1);
+  });
+  it("does not retry a second authorization failure", async () => {
+    const repo = { getFreshTokens: vi.fn().mockResolvedValue(original) };
+    const request = vi.fn().mockRejectedValue(new APIError("unauthorized", { statusCode: 401 }));
+    await expect(runAuthenticatedAccountRequest(repo, "account-1", request)).rejects.toMatchObject({ statusCode: 401 });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

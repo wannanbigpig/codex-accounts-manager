@@ -29,3 +29,4 @@ media/accounts.svg
 media/codex-tools-logo-square.svg
 out/**/*.d.ts
 out/**/*.d.ts.map
+.npmignore

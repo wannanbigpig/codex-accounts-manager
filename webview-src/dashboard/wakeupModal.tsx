@@ -1,15 +1,16 @@
 import { useEffect, useState } from "preact/hooks";
 import type { DashboardAccountViewModel, DashboardHostMessage, DashboardState } from "../../src/domain/dashboard/types";
 import type { WakeupRun, WakeupSnapshot, WakeupTask, WakeupTaskInput } from "../../src/domain/wakeup/types";
+import { resolveWakeupScheduleMode } from "../../src/domain/wakeup/schedule";
 import { DEFAULT_WAKEUP_MODEL, DEFAULT_WAKEUP_PROMPT } from "../../src/domain/wakeup/types";
+import { getSingleAccountWakeupTasks } from "../../src/domain/wakeup/accountScope";
 import { getWakeupCopy } from "../../src/domain/wakeup/copy";
 import { getSensitiveDisplayValue } from "./helpers";
 import { ModalShell, ActionButton } from "./primitives";
 import type { SendAction } from "./hookTypes";
-import { EditTagsIcon, renderRemoveIcon } from "./icons";
+import { EditIcon, renderRemoveIcon } from "./icons";
 
 type ActionResult = Extract<DashboardHostMessage, { type: "dashboard:action-result" }>;
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MODEL_PRESETS = [
   "gpt-6-luna",
   "gpt-6-sol",
@@ -28,7 +29,9 @@ function newDraft(): WakeupTaskInput {
     accountIds: [],
     time: "06:15",
     days: [0, 1, 2, 3, 4, 5, 6],
-    scheduleMode: "calendar",
+    scheduleMode: "daily",
+    quotaResetWindow: "either",
+    startupDelayMinutes: 0,
     intervalMinutes: 300,
     model: DEFAULT_WAKEUP_MODEL,
     effort: "low",
@@ -38,6 +41,7 @@ function newDraft(): WakeupTaskInput {
 
 export function WakeupModal(props: {
   lang: DashboardState["lang"];
+  accountId?: string;
   wakeup?: WakeupSnapshot;
   accounts: DashboardAccountViewModel[];
   privacyMode: boolean;
@@ -47,18 +51,49 @@ export function WakeupModal(props: {
   result?: ActionResult;
 }) {
   const copy = getWakeupCopy(props.lang);
-  const [view, setView] = useState<"tasks" | "edit" | "history">("tasks");
-  const [draft, setDraft] = useState<WakeupTaskInput>(newDraft);
-  const [customModelMode, setCustomModelMode] = useState(false);
-  const [customModelId, setCustomModelId] = useState("");
-  const [intervalUnit, setIntervalUnit] = useState<"hours" | "minutes">("hours");
+  const tasks = props.accountId
+    ? getSingleAccountWakeupTasks(props.wakeup?.tasks ?? [], props.accountId)
+    : (props.wakeup?.tasks ?? []);
+  const initialTask = props.accountId && tasks.length === 1 ? tasks[0] : undefined;
+  const createDraft = (): WakeupTaskInput => ({
+    ...newDraft(),
+    ...(props.accountId ? { accountIds: [props.accountId], name: copy.accountWakeup } : {})
+  });
+  const [view, setView] = useState<"tasks" | "edit" | "history">(
+    props.accountId && tasks.length < 2 ? "edit" : "tasks"
+  );
+  const [draft, setDraft] = useState<WakeupTaskInput>(() =>
+    initialTask
+      ? {
+          ...initialTask,
+          scheduleMode: resolveWakeupScheduleMode(initialTask),
+          accountIds: [...initialTask.accountIds],
+          days: [...initialTask.days]
+        }
+      : createDraft()
+  );
+  const [customModelMode, setCustomModelMode] = useState(
+    Boolean(initialTask && !MODEL_PRESETS.includes(initialTask.model))
+  );
+  const [customModelId, setCustomModelId] = useState(
+    initialTask && !MODEL_PRESETS.includes(initialTask.model) ? initialTask.model : ""
+  );
+  const [intervalUnit, setIntervalUnit] = useState<"hours" | "minutes">(
+    (initialTask?.intervalMinutes ?? 300) % 30 === 0 ? "hours" : "minutes"
+  );
   const [search, setSearch] = useState("");
   const [formError, setFormError] = useState("");
   const [removeConfirm, setRemoveConfirm] = useState<string>();
   const [feedback, setFeedback] = useState<{ message: string; error: boolean }>();
   const state = props.wakeup;
-  const tasks = state?.tasks ?? [];
-  const history = state?.history ?? [];
+  const history = (state?.history ?? []).filter(
+    (run) =>
+      !props.accountId ||
+      tasks.some((task) => task.id === run.taskId) ||
+      (run.results.length === 1 && run.results[0]?.accountId === props.accountId)
+  );
+  const currentTask = tasks.find((task) => task.id === draft.id);
+  const lastRun = history.find((run) => run.taskId === draft.id);
   const busy = props.pending || Boolean(state?.storageError) || !state;
   const dateLabel = (at?: number): string =>
     at
@@ -105,7 +140,14 @@ export function WakeupModal(props: {
   }, [props.result]);
 
   const edit = (task?: WakeupTask): void => {
-    const value = task ? { ...task, accountIds: [...task.accountIds], days: [...task.days] } : newDraft();
+    const value = task
+      ? {
+          ...task,
+          scheduleMode: resolveWakeupScheduleMode(task),
+          accountIds: [...task.accountIds],
+          days: [...task.days]
+        }
+      : createDraft();
     setDraft(value);
     setCustomModelMode(!MODEL_PRESETS.includes(value.model));
     setCustomModelId(MODEL_PRESETS.includes(value.model) ? "" : value.model);
@@ -125,40 +167,77 @@ export function WakeupModal(props: {
       account.tags.some((tag) => tag.toLowerCase().includes(query))
     );
   });
-  const repeatLabel = (task: WakeupTask): string =>
-    task.scheduleMode === "interval"
-      ? copy.intervalSummary
-          .replace(
-            "{value}",
-            String(task.intervalMinutes! % 60 === 0 ? task.intervalMinutes! / 60 : task.intervalMinutes)
-          )
-          .replace("{unit}", task.intervalMinutes! % 60 === 0 ? copy.hours : copy.minutes)
-      : `${
-          task.days.length === 7
-            ? copy.daily
-            : task.days.length === 5 && [1, 2, 3, 4, 5].every((day) => task.days.includes(day))
-              ? copy.weekdays
-              : [1, 2, 3, 4, 5, 6, 0]
-                  .filter((day) => task.days.includes(day))
-                  .map((day) => DAY_LABELS[day])
-                  .join(" · ")
-        }`;
+  const repeatLabel = (task: WakeupTask): string => {
+    const mode = resolveWakeupScheduleMode(task);
+    if (mode === "quota_reset") {
+      return copy.quotaWindows[task.quotaResetWindow ?? "either"];
+    }
+    if (mode === "startup") {
+      return copy.startup;
+    }
+    if (mode === "interval") {
+      return copy.intervalSummary
+        .replace(
+          "{value}",
+          String(task.intervalMinutes! % 60 === 0 ? task.intervalMinutes! / 60 : task.intervalMinutes)
+        )
+        .replace("{unit}", task.intervalMinutes! % 60 === 0 ? copy.hours : copy.minutes);
+    }
+    if (mode === "daily") {
+      return copy.daily;
+    }
+    return task.days.length === 5 && [1, 2, 3, 4, 5].every((day) => task.days.includes(day))
+      ? copy.weekdays
+      : [1, 2, 3, 4, 5, 6, 0]
+          .filter((day) => task.days.includes(day))
+          .map((day) => copy.dayLabels[day])
+          .join(" · ");
+  };
+  const nextLabel = (task: WakeupTask): string =>
+    !task.enabled
+      ? copy.taskPaused
+      : task.nextRunAt > 0
+        ? dateLabel(task.nextRunAt)
+        : task.scheduleMode === "quota_reset"
+          ? copy.waitingForQuota
+          : task.scheduleMode === "startup"
+            ? copy.waitingForStartup
+            : copy.never;
 
   return (
     <ModalShell
       open
       title={view === "edit" ? (draft.id ? copy.edit : copy.create) : copy.title}
       closeLabel={copy.close}
-      className={`wakeup-modal ${view === "tasks" ? "" : "wakeup-modal-compact"}`}
+      className={`wakeup-modal ${view === "tasks" ? "" : "wakeup-modal-compact"} ${view === "edit" ? "wakeup-modal-editor" : ""}`}
       onClose={props.onClose}
+      footer={
+        view === "edit" ? (
+          <div class="wakeup-form-actions">
+            <ActionButton
+              class="modal-secondary-btn"
+              onClick={() => (props.accountId ? props.onClose() : setView("tasks"))}
+            >
+              {copy.cancel}
+            </ActionButton>
+            <button type="submit" form="wakeup-task-form" class="modal-primary-btn" disabled={busy}>
+              <span class="button-face">
+                <span class="button-label">{copy.save}</span>
+              </span>
+            </button>
+          </div>
+        ) : undefined
+      }
     >
-      <div class="wakeup-intro">
-        <p>{copy.description}</p>
-        <p class="wakeup-muted">{copy.note}</p>
-        <span class="wakeup-timezone">
-          {copy.localTime} · {state?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}
-        </span>
-      </div>
+      {view !== "edit" ? (
+        <div class="wakeup-intro">
+          <p>{copy.description}</p>
+          <p class="wakeup-muted">{copy.note}</p>
+          <span class="wakeup-timezone">
+            {copy.localTime} · {state?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}
+          </span>
+        </div>
+      ) : null}
       {state?.storageError ? (
         <div class="modal-error" role="alert">
           {state.storageError}
@@ -172,12 +251,12 @@ export function WakeupModal(props: {
       {view !== "edit" ? (
         <>
           <div class="wakeup-toolbar">
-            <div class="wakeup-tabs" role="tablist" aria-label={copy.title}>
+            <div class="modal-tabs wakeup-tabs" role="tablist" aria-label={copy.title}>
               <button
                 type="button"
                 role="tab"
                 aria-selected={view === "tasks"}
-                class={view === "tasks" ? "active" : ""}
+                class={`modal-tab ${view === "tasks" ? "active" : ""}`}
                 onClick={() => setView("tasks")}
               >
                 {copy.tasks} <span>{tasks.length}</span>
@@ -186,35 +265,18 @@ export function WakeupModal(props: {
                 type="button"
                 role="tab"
                 aria-selected={view === "history"}
-                class={view === "history" ? "active" : ""}
+                class={`modal-tab ${view === "history" ? "active" : ""}`}
                 onClick={() => setView("history")}
               >
                 {copy.history} <span>{history.length}</span>
               </button>
             </div>
             <div class="wakeup-toolbar-actions">
-              <span class="wakeup-master-label">{copy.automation}</span>
-              <button
-                class={`settings-inline-toggle ${state?.enabled ? "active" : ""}`}
-                type="button"
-                role="switch"
-                aria-checked={Boolean(state?.enabled)}
-                aria-label={copy.automation}
-                title={state?.enabled ? copy.pauseAll : copy.enableAll}
-                disabled={busy}
-                onClick={() => props.sendAction("setWakeupEnabled", undefined, { enabled: !state?.enabled })}
-              >
-                <span class="settings-inline-toggle-track">
-                  <span class="settings-inline-toggle-thumb"></span>
-                </span>
-              </button>
-              <span class="wakeup-muted">{state?.enabled ? copy.enabled : copy.disabled}</span>
-              <ActionButton class="primary-btn" disabled={busy} onClick={() => edit()}>
+              <ActionButton class="modal-primary-btn" disabled={busy} onClick={() => edit()}>
                 {copy.add}
               </ActionButton>
             </div>
           </div>
-          {!state?.enabled && tasks.length ? <div class="settings-note">{copy.pausedHint}</div> : null}
           {view === "tasks" ? (
             tasks.length ? (
               <div class="wakeup-task-list">
@@ -230,15 +292,15 @@ export function WakeupModal(props: {
                         <h3 title={task.name}>{task.name}</h3>
                         <span
                           class="wakeup-status"
-                          data-status={running ? "running" : task.enabled && state?.enabled ? "success" : "cancelled"}
+                          data-status={running ? "running" : task.enabled ? "success" : "cancelled"}
                         >
                           {running
                             ? copy.running
                             : !task.enabled
                               ? copy.taskPaused
-                              : state?.enabled
+                              : task.nextRunAt > 0
                                 ? copy.waitingForRun
-                                : copy.waitingForEnable}
+                                : nextLabel(task)}
                         </span>
                       </div>
                       <div class="wakeup-schedule">
@@ -247,7 +309,11 @@ export function WakeupModal(props: {
                             ? task.intervalMinutes! % 60 === 0
                               ? `${task.intervalMinutes! / 60}h`
                               : `${task.intervalMinutes}m`
-                            : task.time}
+                            : task.scheduleMode === "quota_reset"
+                              ? copy.quotaReset
+                              : task.scheduleMode === "startup"
+                                ? `${task.startupDelayMinutes ?? 0}m`
+                                : task.time}
                         </span>
                         <div class="wakeup-repeat">
                           <ClockIcon />
@@ -288,30 +354,27 @@ export function WakeupModal(props: {
                           ) : null}
                         </div>
                         <div>
-                          {copy.next}:{" "}
-                          {!task.enabled
-                            ? copy.taskPaused
-                            : state?.enabled
-                              ? dateLabel(task.nextRunAt)
-                              : copy.automationOff}
+                          {copy.next}: {nextLabel(task)}
                         </div>
                       </div>
                       <div class="wakeup-task-actions">
                         {removeConfirm === task.id ? (
                           <>
                             <ActionButton
-                              class="danger-btn"
+                              class="modal-secondary-btn danger-btn"
                               disabled={busy}
                               onClick={() => props.sendAction("removeWakeupTask", undefined, { wakeupTaskId: task.id })}
                             >
                               {copy.confirmRemove}
                             </ActionButton>
-                            <ActionButton onClick={() => setRemoveConfirm(undefined)}>{copy.cancel}</ActionButton>
+                            <ActionButton class="modal-secondary-btn" onClick={() => setRemoveConfirm(undefined)}>
+                              {copy.cancel}
+                            </ActionButton>
                           </>
                         ) : (
                           <>
                             <ActionButton
-                              class="wakeup-run-btn"
+                              class="modal-secondary-btn wakeup-run-btn"
                               disabled={busy || running}
                               pending={running}
                               onClick={() => props.sendAction("runWakeupTask", undefined, { wakeupTaskId: task.id })}
@@ -319,13 +382,15 @@ export function WakeupModal(props: {
                               {running ? copy.running : copy.run}
                             </ActionButton>
                             <ActionButton
+                              class="modal-mini-btn modal-icon-btn"
                               iconOnly
-                              icon={<EditTagsIcon />}
+                              icon={<EditIcon />}
                               label={copy.edit}
                               disabled={busy}
                               onClick={() => edit(task)}
                             />
                             <ActionButton
+                              class="modal-secondary-btn"
                               disabled={busy}
                               onClick={() =>
                                 props.sendAction("toggleWakeupTask", undefined, {
@@ -337,6 +402,7 @@ export function WakeupModal(props: {
                               {task.enabled ? copy.pause : copy.resume}
                             </ActionButton>
                             <ActionButton
+                              class="modal-mini-btn modal-icon-btn"
                               iconOnly
                               icon={renderRemoveIcon()}
                               label={copy.remove}
@@ -355,7 +421,7 @@ export function WakeupModal(props: {
                 <ClockIcon />
                 <h3>{copy.empty}</h3>
                 <p>{copy.emptyHint}</p>
-                <ActionButton class="primary-btn" disabled={busy} onClick={() => edit()}>
+                <ActionButton class="modal-primary-btn" disabled={busy} onClick={() => edit()}>
                   {copy.add}
                 </ActionButton>
               </div>
@@ -363,7 +429,14 @@ export function WakeupModal(props: {
           ) : history.length ? (
             <div class="wakeup-history-list">
               {history.map((run) => (
-                <HistoryRow key={run.id} run={run} lang={props.lang} emailLabel={emailLabel} dateLabel={dateLabel} />
+                <HistoryRow
+                  key={run.id}
+                  run={run}
+                  lang={props.lang}
+                  privacyMode={props.privacyMode}
+                  emailLabel={emailLabel}
+                  dateLabel={dateLabel}
+                />
               ))}
             </div>
           ) : (
@@ -374,6 +447,7 @@ export function WakeupModal(props: {
         </>
       ) : (
         <form
+          id="wakeup-task-form"
           class="wakeup-form"
           onSubmit={(event) => {
             event.preventDefault();
@@ -381,43 +455,136 @@ export function WakeupModal(props: {
               setFormError(copy.accountSelectError);
               return;
             }
-            if (draft.scheduleMode !== "interval" && !draft.days.length) {
+            if ((draft.scheduleMode === "weekly" || draft.scheduleMode === "calendar") && !draft.days.length) {
               setFormError(copy.selectError);
               return;
             }
             setFormError("");
-            props.sendAction("saveWakeupTask", undefined, { wakeupTask: draft });
+            props.sendAction("saveWakeupTask", undefined, {
+              wakeupTask: { ...draft, accountIds: props.accountId ? [props.accountId] : draft.accountIds }
+            });
           }}
         >
-          <div class="wakeup-form-row">
-            <label class="modal-field">
-              <span>{copy.name}</span>
-              <input
-                required
-                maxLength={80}
-                placeholder={copy.namePlaceholder}
-                value={draft.name}
-                onInput={(event) => patch({ name: event.currentTarget.value })}
-              />
-            </label>
-            <label class="modal-field">
-              <span>{copy.schedule}</span>
-              <select
-                aria-label={copy.schedule}
-                value={draft.scheduleMode ?? "calendar"}
-                onChange={(event) => patch({ scheduleMode: event.currentTarget.value as "calendar" | "interval" })}
+          <div class="wakeup-target">
+            <div class="wakeup-target-info">
+              <div class="wakeup-target-label">{copy.target}</div>
+              <div class="wakeup-target-title">
+                {props.accountId
+                  ? emailLabel(props.accountId)
+                  : draft.accountIds.length
+                    ? draft.accountIds.map(emailLabel).join(" · ")
+                    : copy.accountSelectError}
+              </div>
+            </div>
+            <div class="wakeup-segmented" role="group" aria-label={copy.automation}>
+              <button
+                type="button"
+                class={`modal-secondary-btn ${draft.enabled ? "active" : ""}`}
+                aria-pressed={draft.enabled}
+                disabled={busy}
+                onClick={() => patch({ enabled: true })}
               >
-                <option value="calendar">{copy.calendar}</option>
-                <option value="interval">{copy.interval}</option>
-              </select>
-            </label>
+                {copy.enableTask}
+              </button>
+              <button
+                type="button"
+                class={`modal-secondary-btn ${!draft.enabled ? "active" : ""}`}
+                aria-pressed={!draft.enabled}
+                disabled={busy}
+                onClick={() => patch({ enabled: false })}
+              >
+                {copy.disableTask}
+              </button>
+            </div>
           </div>
+          <label class="modal-field">
+            <span class="modal-label">{copy.name}</span>
+            <input
+              class="modal-input"
+              required
+              maxLength={80}
+              placeholder={copy.namePlaceholder}
+              value={draft.name}
+              onInput={(event) => patch({ name: event.currentTarget.value })}
+            />
+          </label>
+          <div class="modal-field">
+            <span class="modal-label">{copy.schedule}</span>
+            <div class="wakeup-segmented" role="group" aria-label={copy.schedule}>
+              {(
+                [
+                  ["daily", copy.dailyMode],
+                  ["weekly", copy.weeklyMode],
+                  ["interval", copy.intervalMode],
+                  ["quota_reset", copy.quotaReset],
+                  ["startup", copy.startup]
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={draft.scheduleMode === mode}
+                  class={`modal-secondary-btn ${draft.scheduleMode === mode ? "active" : ""}`}
+                  onClick={() =>
+                    patch({
+                      scheduleMode: mode,
+                      ...(mode === "weekly" && draft.days.length === 7 ? { days: [1, 2, 3, 4, 5] } : {}),
+                      ...(mode === "quota_reset" ? { quotaResetWindow: draft.quotaResetWindow ?? "either" } : {}),
+                      ...(mode === "startup" ? { startupDelayMinutes: draft.startupDelayMinutes ?? 0 } : {})
+                    })
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {draft.scheduleMode === "quota_reset" ? (
+            <>
+              <label class="modal-field">
+                <span class="modal-label">{copy.quotaResetWindow}</span>
+                <select
+                  class="modal-input"
+                  aria-label={copy.quotaResetWindow}
+                  value={draft.quotaResetWindow ?? "either"}
+                  onChange={(event) =>
+                    patch({ quotaResetWindow: event.currentTarget.value as WakeupTaskInput["quotaResetWindow"] })
+                  }
+                >
+                  {(["either", "hourly", "weekly"] as const).map((window) => (
+                    <option key={window} value={window}>
+                      {copy.quotaWindows[window]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p class="wakeup-muted">{copy.quotaResetHint}</p>
+            </>
+          ) : draft.scheduleMode === "startup" ? (
+            <>
+              <label class="modal-field">
+                <span class="modal-label">{copy.startupDelay}</span>
+                <input
+                  class="modal-input"
+                  type="number"
+                  required
+                  min={0}
+                  max={1440}
+                  step={1}
+                  value={draft.startupDelayMinutes ?? 0}
+                  onInput={(event) => patch({ startupDelayMinutes: Number(event.currentTarget.value) })}
+                />
+              </label>
+              <p class="wakeup-muted">{copy.startupHint}</p>
+            </>
+          ) : null}
           {draft.scheduleMode === "interval" ? (
             <>
               <label class="modal-field">
-                <span>{copy.intervalValue}</span>
+                <span class="modal-label">{copy.intervalValue}</span>
                 <div class="wakeup-interval-input">
                   <input
+                    class="modal-input"
                     type="number"
                     required
                     aria-label={copy.intervalValue}
@@ -432,6 +599,7 @@ export function WakeupModal(props: {
                     }
                   />
                   <select
+                    class="modal-input"
                     aria-label={copy.intervalUnit}
                     value={intervalUnit}
                     onChange={(event) => setIntervalUnit(event.currentTarget.value as "hours" | "minutes")}
@@ -443,128 +611,138 @@ export function WakeupModal(props: {
               </label>
               <p class="wakeup-muted">{copy.intervalHint}</p>
             </>
-          ) : (
-            <>
+          ) : draft.scheduleMode === "daily" || draft.scheduleMode === "weekly" || draft.scheduleMode === "calendar" ? (
+            <div class={`wakeup-calendar-grid ${draft.scheduleMode === "daily" ? "wakeup-daily-time" : ""}`}>
               <label class="modal-field">
-                <span>{copy.time}</span>
+                <span class="modal-label">{copy.time}</span>
                 <input
+                  class="modal-input"
                   type="time"
                   required
                   value={draft.time}
                   onInput={(event) => patch({ time: event.currentTarget.value })}
                 />
               </label>
-              <div class="modal-field">
-                <span>{copy.days}</span>
-                <div class="wakeup-days">
-                  <button
-                    type="button"
-                    class={draft.days.length === 7 ? "active" : ""}
-                    onClick={() => patch({ days: [0, 1, 2, 3, 4, 5, 6] })}
-                  >
-                    {copy.daily}
-                  </button>
-                  <button
-                    type="button"
-                    class={
-                      draft.days.length === 5 && [1, 2, 3, 4, 5].every((day) => draft.days.includes(day))
-                        ? "active"
-                        : ""
-                    }
-                    onClick={() => patch({ days: [1, 2, 3, 4, 5] })}
-                  >
-                    {copy.weekdays}
-                  </button>
-                  {[1, 2, 3, 4, 5, 6, 0].map((day) => (
+              {draft.scheduleMode !== "daily" ? (
+                <div class="modal-field">
+                  <span class="modal-label">{copy.days}</span>
+                  <div class="wakeup-days">
                     <button
-                      key={day}
                       type="button"
-                      aria-pressed={draft.days.includes(day)}
-                      class={draft.days.includes(day) ? "active" : ""}
-                      onClick={() =>
-                        patch({
-                          days: draft.days.includes(day)
-                            ? draft.days.filter((item) => item !== day)
-                            : [...draft.days, day]
-                        })
-                      }
+                      class={`modal-secondary-btn ${draft.days.length === 7 ? "active" : ""}`}
+                      onClick={() => patch({ days: [0, 1, 2, 3, 4, 5, 6] })}
                     >
-                      {DAY_LABELS[day]}
+                      {copy.daily}
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      class={`modal-secondary-btn ${
+                        draft.days.length === 5 && [1, 2, 3, 4, 5].every((day) => draft.days.includes(day))
+                          ? "active"
+                          : ""
+                      }`}
+                      onClick={() => patch({ days: [1, 2, 3, 4, 5] })}
+                    >
+                      {copy.weekdays}
+                    </button>
+                    {[1, 2, 3, 4, 5, 6, 0].map((day) => (
+                      <button
+                        key={day}
+                        type="button"
+                        aria-pressed={draft.days.includes(day)}
+                        class={`modal-secondary-btn ${draft.days.includes(day) ? "active" : ""}`}
+                        onClick={() =>
+                          patch({
+                            days: draft.days.includes(day)
+                              ? draft.days.filter((item) => item !== day)
+                              : [...draft.days, day]
+                          })
+                        }
+                      >
+                        {copy.dayLabels[day]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {!props.accountId ? (
+            <div class="modal-field">
+              <div class="wakeup-account-heading">
+                <span>
+                  {copy.accounts} · {draft.accountIds.length}
+                </span>
+                <div>
+                  <button
+                    class="modal-secondary-btn"
+                    type="button"
+                    onClick={() =>
+                      patch({
+                        accountIds: [
+                          ...new Set([...draft.accountIds, ...filteredAccounts.map((account) => account.id)])
+                        ]
+                      })
+                    }
+                  >
+                    {copy.selectAll}
+                  </button>
+                  <button class="modal-secondary-btn" type="button" onClick={() => patch({ accountIds: [] })}>
+                    {copy.clear}
+                  </button>
                 </div>
               </div>
-            </>
-          )}
-          <div class="modal-field">
-            <div class="wakeup-account-heading">
-              <span>
-                {copy.accounts} · {draft.accountIds.length}
-              </span>
-              <div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    patch({
-                      accountIds: [...new Set([...draft.accountIds, ...filteredAccounts.map((account) => account.id)])]
-                    })
-                  }
-                >
-                  {copy.selectAll}
-                </button>
-                <button type="button" onClick={() => patch({ accountIds: [] })}>
-                  {copy.clear}
-                </button>
+              <input
+                class="modal-input"
+                type="search"
+                aria-label={copy.search}
+                placeholder={copy.search}
+                value={search}
+                onInput={(event) => setSearch(event.currentTarget.value)}
+              />
+              <div class="wakeup-account-list">
+                {filteredAccounts.length ? (
+                  filteredAccounts.map((account) => (
+                    <label
+                      key={account.id}
+                      class={`wakeup-account-option ${draft.accountIds.includes(account.id) ? "selected" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={draft.accountIds.includes(account.id)}
+                        onChange={(event) =>
+                          patch({
+                            accountIds: event.currentTarget.checked
+                              ? [...draft.accountIds, account.id]
+                              : draft.accountIds.filter((id) => id !== account.id)
+                          })
+                        }
+                      />
+                      <div>
+                        <span class="wakeup-account-email" title={emailLabel(account.id)}>
+                          {emailLabel(account.id)}
+                        </span>
+                        <div class="wakeup-account-quota">
+                          {account.metrics
+                            .filter((metric) => metric.visible && (metric.key === "hourly" || metric.key === "weekly"))
+                            .map((metric) => `${metric.label} ${metric.percentage ?? "--"}%`)
+                            .join(" · ")}
+                        </div>
+                      </div>
+                      <span class="pill plan">{account.planTypeLabel}</span>
+                    </label>
+                  ))
+                ) : (
+                  <p class="wakeup-muted">{copy.noAccounts}</p>
+                )}
               </div>
             </div>
-            <input
-              type="search"
-              aria-label={copy.search}
-              placeholder={copy.search}
-              value={search}
-              onInput={(event) => setSearch(event.currentTarget.value)}
-            />
-            <div class="wakeup-account-list">
-              {filteredAccounts.length ? (
-                filteredAccounts.map((account) => (
-                  <label
-                    key={account.id}
-                    class={`wakeup-account-option ${draft.accountIds.includes(account.id) ? "selected" : ""}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={draft.accountIds.includes(account.id)}
-                      onChange={(event) =>
-                        patch({
-                          accountIds: event.currentTarget.checked
-                            ? [...draft.accountIds, account.id]
-                            : draft.accountIds.filter((id) => id !== account.id)
-                        })
-                      }
-                    />
-                    <div>
-                      <span class="wakeup-account-email" title={emailLabel(account.id)}>
-                        {emailLabel(account.id)}
-                      </span>
-                      <div class="wakeup-account-quota">
-                        {account.metrics
-                          .filter((metric) => metric.visible && (metric.key === "hourly" || metric.key === "weekly"))
-                          .map((metric) => `${metric.label} ${metric.percentage ?? "--"}%`)
-                          .join(" · ")}
-                      </div>
-                    </div>
-                    <span class="pill plan">{account.planTypeLabel}</span>
-                  </label>
-                ))
-              ) : (
-                <p class="wakeup-muted">{copy.noAccounts}</p>
-              )}
-            </div>
-          </div>
+          ) : null}
           <div class="wakeup-form-row">
             <label class="modal-field">
-              <span>{copy.model}</span>
+              <span class="modal-label">{copy.model}</span>
               <select
+                class="modal-input"
                 aria-label={copy.model}
                 value={customModelMode ? CUSTOM_MODEL : draft.model}
                 onChange={(event) => {
@@ -582,8 +760,9 @@ export function WakeupModal(props: {
               </select>
             </label>
             <label class="modal-field">
-              <span>{copy.effort}</span>
+              <span class="modal-label">{copy.effort}</span>
               <select
+                class="modal-input"
                 aria-label={copy.effort}
                 value={draft.effort}
                 onChange={(event) => patch({ effort: event.currentTarget.value as WakeupTaskInput["effort"] })}
@@ -598,8 +777,9 @@ export function WakeupModal(props: {
           </div>
           {customModelMode ? (
             <label class="modal-field">
-              <span>{copy.modelId}</span>
+              <span class="modal-label">{copy.modelId}</span>
               <input
+                class="modal-input"
                 required
                 maxLength={100}
                 pattern="[a-zA-Z0-9][a-zA-Z0-9._\-]*"
@@ -619,8 +799,9 @@ export function WakeupModal(props: {
             </p>
           ) : null}
           <label class="modal-field">
-            <span>{copy.prompt}</span>
+            <span class="modal-label">{copy.prompt}</span>
             <textarea
+              class="modal-textarea"
               required
               maxLength={500}
               rows={2}
@@ -628,19 +809,32 @@ export function WakeupModal(props: {
               onInput={(event) => patch({ prompt: event.currentTarget.value })}
             />
           </label>
+          {currentTask ? (
+            <div class="wakeup-form-overview">
+              <div>
+                <span>{copy.last}</span>
+                <strong>{dateLabel(lastRun?.startedAt)}</strong>
+              </div>
+              <div>
+                <span>{copy.next}</span>
+                <strong>{nextLabel(currentTask)}</strong>
+              </div>
+              {lastRun ? (
+                <div>
+                  <span>{copy.history}</span>
+                  <strong>{copy.statuses[lastRun.status]}</strong>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <p class="wakeup-muted">
+            {copy.note} {copy.localTime} · {state?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}
+          </p>
           {formError ? (
             <div class="modal-error" role="alert">
               {formError}
             </div>
           ) : null}
-          <div class="wakeup-form-actions">
-            <ActionButton onClick={() => setView("tasks")}>{copy.cancel}</ActionButton>
-            <button type="submit" class="action-btn primary-btn" disabled={busy}>
-              <span class="button-face">
-                <span class="button-label">{copy.save}</span>
-              </span>
-            </button>
-          </div>
         </form>
       )}
     </ModalShell>
@@ -649,6 +843,7 @@ export function WakeupModal(props: {
 
 function HistoryRow(props: {
   run: WakeupRun;
+  privacyMode: boolean;
   lang: DashboardState["lang"];
   emailLabel: (id: string) => string;
   dateLabel: (at?: number) => string;
@@ -670,6 +865,11 @@ function HistoryRow(props: {
           {props.dateLabel(run.startedAt)} · {run.trigger === "manual" ? copy.manual : copy.scheduled}
         </span>
         <span>{run.finishedAt ? `${((run.finishedAt - run.startedAt) / 1000).toFixed(1)}s` : "—"}</span>
+        {run.model ? (
+          <span>
+            {run.model} · {run.effort ?? "—"}
+          </span>
+        ) : null}
       </div>
       {run.results.length ? (
         <details>
@@ -683,7 +883,31 @@ function HistoryRow(props: {
                 <span class="wakeup-status" data-status={result.status}>
                   {copy.statuses[result.status]}
                 </span>
+                <div class="wakeup-result-meta">
+                  {result.durationMs !== undefined ? (
+                    <span>
+                      {copy.duration} · {(result.durationMs / 1000).toFixed(1)}s
+                    </span>
+                  ) : null}
+                  {result.model && result.model !== run.model ? <span>{result.model}</span> : null}
+                  {result.errorStage ? (
+                    <span>
+                      {copy.stages[result.errorStage]}
+                      {result.httpStatus ? ` · HTTP ${result.httpStatus}` : ""}
+                    </span>
+                  ) : null}
+                </div>
+                {result.reply ? (
+                  <p class="wakeup-reply">
+                    <span>{copy.reply}</span> {props.privacyMode ? "•••" : result.reply}
+                  </p>
+                ) : null}
                 {result.message ? <p>{result.message}</p> : null}
+                {result.quotaWarning ? (
+                  <p class="wakeup-quota-warning">
+                    {copy.quotaWarning}: {result.quotaWarning}
+                  </p>
+                ) : null}
               </div>
             ))}
           </div>
