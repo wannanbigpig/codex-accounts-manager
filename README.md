@@ -1,4 +1,4 @@
-# Codex Accounts Manager 
+# Codex Accounts Manager
 
 [English](README.en.md) · 简体中文
 
@@ -6,15 +6,15 @@ VS Code 扩展，用于管理多个 Codex 账号、查看配额总览，并快�
 
 ![Version](https://img.shields.io/badge/version-0.1.21-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
-![License](https://img.shields.io/github/license/wannanbigpig/codex-tools)
-![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-tools?style=flat)
-![Last Commit](https://img.shields.io/github/last-commit/wannanbigpig/codex-tools)
+![License](https://img.shields.io/github/license/wannanbigpig/codex-accounts-manager)
+![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-accounts-manager?style=flat)
+![Last Commit](https://img.shields.io/github/last-commit/wannanbigpig/codex-accounts-manager)
 
 ---
 
 用于在 VS Code 中统一管理 Codex 多账号、查看配额、切换当前账号，并通过状态栏快速监控使用情况。
 
-**功能：** 配额总览面板、多账号管理、OAuth 添加账号、首次本地账号自动检测与绑定、导入当前 `auth.json` 后立即刷新、跨窗口账号同步、共享 JSON 恢复/导出、ChatGPT/Codex 桌面应用联动与可选重启、自动切号、后台 token 自动刷新、详情面板、多语言界面及本扩展语言覆盖设置。
+**功能：** 多账号与配额总览、OAuth 登录、账号导入导出与恢复、跨窗口同步、五种独立唤醒调度、执行诊断、自动切号与低配额提醒、后台 token 续期、状态栏监控、详情面板、隐私模式和多语言界面。
 
 **语言：** 默认跟随 VS Code 语言设置，当前主要支持简体中文、English，并提供其他语言的本地化支持。
 
@@ -24,11 +24,15 @@ VS Code 扩展，用于管理多个 Codex 账号、查看配额总览，并快�
 
 ## 界面预览
 
-| 配额总览 | 详情面板 |
-| --- | --- |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/dashboard.png" alt="Codex Tools 配额总览" width="420" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/detail.png" alt="Codex Tools 详情面板" width="420" /> |
-| 设置面板 | 状态栏 |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/setting.png" alt="Codex Tools 设置面板" width="260" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/status_bar.png" alt="Codex Tools 状态栏" width="220" /> |
+以下截图来自当前 `0.1.21` 界面，使用虚构账号、配额与执行记录。
+
+![配额总览：当前账号、配额仪表和账号卡片](https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/dashboard.jpg)
+
+| 唤醒任务：每个任务独立启停                                                                                                                                                                       | 单账号配置：五种调度方式                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/wakeup-tasks.jpg" alt="唤醒任务列表，包含工作日、配额重置与已暂停的启动后任务" width="440" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/wakeup-config.jpg" alt="从账号卡片进入的独立唤醒配置" width="440" />                       |
+| 执行历史：回复摘要与失败诊断                                                                                                                                                                     | 设置：主题、语言和自动化                                                                                                                                                                      |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/wakeup-history.jpg" alt="唤醒历史中的成功回复、耗时、失败阶段及 HTTP 状态" width="440" />     | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/settings.jpg" alt="当前设置面板，支持主题、语言及任意 1 至 60 分钟刷新间隔" width="440" /> |
 
 ---
 
@@ -41,27 +45,30 @@ VS Code 扩展，用于管理多个 Codex 账号、查看配额总览，并快�
 - 当前账号摘要：显示当前账号、当前团队与快捷操作
 - 配额仪表：展示 5 小时、每周、代码审查配额
 - 已保存账号列表：集中查看所有已保存账号
-- 账号卡片沿用 `280px` 起的自适应列宽和 `340px` 基础高度，保留原有列布局与正反面尺寸，长邮箱可悬停查看
+- 账号卡片展示套餐、账号状态、标签与各配额窗口；支持翻面查看工作空间、订阅和登录信息
+- 隐私模式可隐藏账号标识与唤醒回复，便于演示或截图
 - 快捷操作：添加账号、导入当前账号、刷新全部配额
 - 支持从卡片进入账号详情、切换账号、刷新、重新授权、重连会话、编辑标签、分享/导入恢复
 
 ### 定时唤醒
 
-点击配额总览右上角的时钟按钮，添加唤醒任务。可选择多个已保存账号，支持每日、每周、间隔、配额重置、启动后五种调度模式；模型使用下拉选择，也支持自定义模型 ID，默认提示词为 `Reply with OK.`。任务支持编辑、暂停、删除、立即测试和查看最近执行记录。无需总开关，每个任务可在配置中或任务卡片上独立启用/停用，保存为启用后即按所选调度方式执行。
+通过总览右上角的时钟管理全部任务，或点击账号卡片右下角的时钟配置单个账号。每个任务独立启用或停用，无需总开关；支持多个账号、模型选择、自定义模型 ID、推理强度和提示词（默认 `Reply with OK.`）。模型是否可用以所选账号权限为准。
 
-- 按本机时区执行，需保持至少一个 VS Code 窗口运行；关闭或休眠超过 5 分钟后，错过的任务会跳过。
-- 固定间隔支持 1 分钟至 7 天，保存或恢复任务后等待一个间隔再执行首次唤醒；后续沿计划周期推进，立即测试不改变周期，错过的周期不集中补发。升级后请重载所有 VS Code 窗口；任务存储升级为格式 4，旧版调度器会保留数据并拒绝处理。旧配置保留各任务的启用/停用状态，原总开关不再影响执行；已有 calendar/interval 任务继续兼容。
-- 配额重置可选择短周期、长周期或任一窗口，包括缓存中的额外模型窗口；只唤醒该次重置到点的账号。缺少重置时间时等待，不猜测固定周期，也不修改手动测试的周期。
-- 启动后支持 `0–1440` 分钟延迟，`0` 表示立即触发。保存、编辑或恢复后于下一次启动生效，启动时任务需已启用。同一批连续运行的 VS Code 窗口共享一次触发；全部窗口退出后，下一批启动才重新计时，休眠恢复不会创建新批次。
-- 模型列表包括 GPT-6 和 GPT-5.6 系列，具体权限以所选账号为准。已有任务的模型不会被自动替换；GPT-5.5 将于 2026-10-14 从使用 ChatGPT 登录的 Codex 退役，编辑时会显示提醒。参见[官方模型说明](https://learn.chatgpt.com/docs/models#gpt-55-retirement)。
-- 使用所选账号的 OAuth 令牌发送简短模型请求，会消耗少量额度；唤醒后刷新额度，不修改当前 `auth.json`，也不切换当前账号。实际额度窗口以服务端返回为准。
-- 同一主机、同一系统用户下的多个 VS Code 窗口及配置文件共享任务，并通过文件锁和持久化执行标记去重。同一次定时任务不会因重启或请求失败自动重发；明确返回 HTTP 401 时允许刷新令牌后重试一次。
-- 到点任务独立启动，不会等待其他任务完成；同一窗口内对同一账号的请求串行执行。窗口只有具备当次执行所需账号时才会领取共享任务；缺少账号的窗口会让出执行机会，删除账号后请更新关联任务。
-- 暂停、编辑或删除任务会取消该任务尚未完成的请求；各任务独立控制，停用的任务仍可手动测试。
-- 每张账号卡片右下角的唤醒按钮可直接配置该账号的独立任务；已有一条任务时直接编辑，多条时先选择任务。顶部时钟入口仍可管理全部任务和多账号任务。
-- 执行历史记录当次模型与推理强度、每个账号的耗时、脱敏后的简短回复、失败阶段 / HTTP 状态，以及唤醒后的配额刷新异常。隐私模式同时隐藏回复摘要，已有历史记录仍可读取。
-- 任务和记录存放在 `~/.codex-accounts-manager/wakeup/`，其中不存储账号令牌。远程主机与本机分别调度。保留最近 100 条记录，执行标记独立保留以防重复。
-- 唤醒请求方式参考 [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools/blob/main/src-tauri/src/modules/codex_local_access_foundation.rs)。模型 ID 可自行修改为所选账号实际可用的模型。
+| 调度方式 | 配置与执行规则                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------ |
+| 每日     | 每天按本机时区，在指定时间执行                                                                   |
+| 每周     | 选择星期与时间，例如每个工作日 09:30                                                             |
+| 间隔     | 支持 1 分钟至 7 天；保存或恢复后等待一个间隔再首次执行                                           |
+| 配额重置 | 选择短周期、长周期或任一窗口；根据已刷新的实际重置时间调整，只唤醒该次到点的账号，缺少时间时等待 |
+| 启动后   | 延迟 `0–1440` 分钟，`0` 表示立即执行；保存、编辑或恢复后在下一批启动时生效                       |
+
+- 任务支持编辑、暂停、删除和立即测试。已有一条独立任务时，账号卡片入口直接打开编辑；多条时先选择任务。
+- 执行历史展示模型与推理强度、各账号耗时、脱敏后的简短回复、失败阶段 / HTTP 状态，以及执行后的配额刷新异常；隐私模式同时隐藏回复。
+- 唤醒使用所选账号的 OAuth 令牌，会消耗少量额度，结束后刷新配额；不修改当前 `auth.json`，也不切换当前账号。配额重置时间会随手动或自动刷新得到的新数据更新。
+- 至少保持一个 VS Code 窗口运行。超过 5 分钟的错过任务会跳过；失败或已中断的执行不自动补发，明确返回 HTTP 401 时可刷新令牌后重试一次。立即测试不改变定时周期，暂停的任务也可手动测试。
+- 同一主机、同一系统用户的窗口与配置文件共享任务，并通过文件锁和持久化执行标记去重；不同远程主机分别调度。连续运行的窗口共享一次启动触发，全部窗口退出后才开始新的启动批次，休眠恢复不重新计时。
+- 到点任务独立调度，同一窗口内同账号请求串行。缺少当次所需账号的窗口让出执行机会；删除账号后请更新关联任务。暂停、编辑或删除任务会取消该任务未完成的请求。
+- 任务和最近 100 条历史存于 `~/.codex-accounts-manager/wakeup/`，其中不存储账号令牌。升级后请重载所有 VS Code 窗口；旧任务保留各自的启用/停用状态，原总开关不再限制执行。完整升级说明见 [CHANGELOG](docs/CHANGELOG.md)。
 
 ### 多账号管理
 
@@ -86,7 +93,7 @@ VS Code 扩展，用于管理多个 Codex 账号、查看配额总览，并快�
 ### ChatGPT / Codex 桌面应用联动
 
 - 切换账号后可检测新版 `ChatGPT.app` 或旧版 `Codex.app`
-- 默认在 App 运行时尝试重启并应用新账号状态；未运行则跳过，不会强行拉起
+- 联动默认关闭；开启后默认手动确认重启，也可改为自动重启。仅处理已运行的桌面应用，未运行则跳过
 - 支持“自动重启”与“手动确认重启”两种策略
 - 允许配置自定义桌面应用路径
 - 当前已兼容 macOS、Windows、Linux 的常见安装路径与进程检测
@@ -143,12 +150,9 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 
 ### 详情面板
 
-支持打开单个账号详情页，查看更多原始信息，包括：
+支持打开单个账号详情页，查看账号邮箱、工作空间、登录方式、订阅到期、标签和用户 / 账号 ID，同时展示各配额窗口、重置倒计时和近 30 天使用详情。使用详情为近似值，可能延迟更新。
 
-- 账号邮箱
-- 团队 / 组织信息
-- 用户 ID / 账号 ID
-- 配额原始返回数据
+![账号详情：账号资料、订阅与配额](https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/details.jpg)
 
 ### 更新公告
 
@@ -166,15 +170,16 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
   - `自动（跟随 VS Code）`，或手动指定简体中文、English 及其他受支持语言
   - 仅影响本扩展的总览面板和提示文案
 - `ChatGPT / Codex 桌面应用重启策略`
-  - 可开启或关闭该联动
+  - 默认关闭，可按需开启
   - 开启后可选择：
   - `自动重启`：切换账号时如果对应桌面应用正在运行则直接重启
   - `手动确认重启`：切换后每次手动确认是否立即重启
 - `配额自动刷新`
-- 可关闭，或设置为 `1 ~ 60` 整数分钟
-  - 默认关闭
+  - 默认关闭；开启后可设为 `1–60` 分钟的任意整数
   - 关闭后不再定时刷新
-- 当前已支持 `1~60` 分钟的任意整数取值
+- `5 小时配额控制`
+  - 默认关闭，仅控制有效的 5 小时配额是否参与自动切号和预警
+  - 不影响状态栏、悬停提示和总览中的额度显示
 - `自动切号`
   - 默认关闭
   - 开启后可分别设置 `5 小时` / `每周` 配额阈值
@@ -187,8 +192,6 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
   - `auto`（跟随 VS Code）
   - `light`
   - `dark`
-- `仪表盘显示`
-  - 可选择是否显示 `Code Review` 配额
 - `超额预警`
   - 可开启或关闭低配额提醒
   - 默认关闭
@@ -212,7 +215,8 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 4. 或运行 `Codex Accounts: Import Current auth.json` 导入当前账号
 5. 运行 `Codex Accounts: Show Quota Summary` 打开总览面板
 6. 在面板中可进行：刷新配额、切换账号、导入导出、批量重刷、状态栏管理等操作
-7. 打开详情页查看账号原始信息并执行会话/凭证修复
+7. 点击账号卡片右下角的时钟配置唤醒任务，或通过顶部时钟管理全部任务与执行历史
+8. 打开详情页查看配额、订阅和使用情况；通过卡片上的重新授权或重连入口处理账号状态问题
 
 ### 如何迁移账号到另一台电脑
 
@@ -230,7 +234,6 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 
 - `Codex Accounts: Add Account via OAuth`
 - `Codex Accounts: Import Current auth.json`
-- `Codex Accounts: Reauthorize Account`
 - `Codex Accounts: Switch Account`
 - `Codex Accounts: Refresh Quota`
 - `Codex Accounts: Refresh All Quotas`
@@ -238,7 +241,6 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 - `Codex Accounts: Restore Accounts from auth.json`
 - `Codex Accounts: Restore Accounts from Shared JSON`
 - `Codex Accounts: Remove Account`
-- `Codex Accounts: Toggle StatusBar Account`
 - `Codex Accounts: Open Details`
 - `Codex Accounts: Open Codex Home`
 - `Codex Accounts: Show Quota Summary`
@@ -261,7 +263,7 @@ AiDeck 提供面向 Antigravity、Codex 等环境的统一调度层，适合需�
 
 ### 方式二：从 VSIX 安装
 
-1. 下载发布产物 `.vsix`
+1. 从 [GitHub Releases](https://github.com/wannanbigpig/codex-accounts-manager/releases/latest) 下载最新 `.vsix`
 2. 在 VS Code 中打开命令面板
 3. 执行 `Extensions: Install from VSIX...`
 4. 选择下载好的 `.vsix` 文件完成安装
@@ -275,9 +277,9 @@ code --install-extension codex-accounts-manager-x.y.z.vsix
 ### 方式三：从源码运行
 
 ```bash
-git clone https://github.com/wannanbigpig/codex-tools.git
-cd codex-tools
-npm install
+git clone https://github.com/wannanbigpig/codex-accounts-manager.git
+cd codex-accounts-manager
+npm ci
 npm run compile
 ```
 
@@ -288,8 +290,10 @@ npm run compile
 ## 打包 VSIX
 
 ```bash
-npx @vscode/vsce package
+npm run package
 ```
+
+该命令先编译，再生成 `.vsix`；打包前自动检查扩展图标为 PNG 且尺寸不超过 `1024×1024`。
 
 ---
 
@@ -299,7 +303,7 @@ npx @vscode/vsce package
 - 切换账号会更新当前机器全局生效的 Codex `auth.json`
 - 导入当前账号或首次绑定本地账号后，会立即刷新最新配额
 - 如果其他窗口切换了账号，当前窗口会自动检测并提示同步
-- 如果 ChatGPT/Codex 桌面应用正在运行，切换账号后会尝试自动重启；未运行则跳过
+- ChatGPT/Codex 桌面应用联动默认关闭；开启后按所选策略处理已运行的应用
 - Free 账户的 30 天配额窗口显示为“每月”；付费账户的 7 天窗口显示为“每周”
 - 配额显示依赖当前账号会话返回的数据
 
@@ -307,8 +311,8 @@ npx @vscode/vsce package
 
 ## 支持
 
-- ⭐ [GitHub Star](https://github.com/wannanbigpig/codex-tools)
-- 💬 [反馈问题](https://github.com/wannanbigpig/codex-tools/issues)
+- ⭐ [GitHub Star](https://github.com/wannanbigpig/codex-accounts-manager)
+- 💬 [反馈问题](https://github.com/wannanbigpig/codex-accounts-manager/issues)
 
 ---
 
@@ -318,7 +322,7 @@ npx @vscode/vsce package
 
 如果这个项目对你有帮助，欢迎赞助项目的持续开发和维护。
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-支持作者-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://github.com/wannanbigpig/codex-tools/blob/master/docs/DONATE.md)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-支持作者-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://github.com/wannanbigpig/codex-accounts-manager/blob/master/docs/DONATE.md)
 
 ---
 

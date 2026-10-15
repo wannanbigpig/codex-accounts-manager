@@ -1,20 +1,20 @@
-# Codex Accounts Manager 
+# Codex Accounts Manager
 
 English · [简体中文](README.md)
 
 VS Code extension for managing multiple Codex accounts, viewing quota usage, and switching the active global `auth.json`.
 
-![Version](https://img.shields.io/badge/version-0.1.20-blue)
+![Version](https://img.shields.io/badge/version-0.1.21-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
-![License](https://img.shields.io/github/license/wannanbigpig/codex-tools)
-![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-tools?style=flat)
-![Last Commit](https://img.shields.io/github/last-commit/wannanbigpig/codex-tools)
+![License](https://img.shields.io/github/license/wannanbigpig/codex-accounts-manager)
+![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-accounts-manager?style=flat)
+![Last Commit](https://img.shields.io/github/last-commit/wannanbigpig/codex-accounts-manager)
 
 ---
 
 Manage multiple Codex accounts inside VS Code, inspect quota usage, switch the active global account, and monitor key quota data from the status bar.
 
-**Features:** quota dashboard, multi-account management, OAuth sign-in, first-run local account detection and binding, immediate quota refresh after import, cross-window account sync, ChatGPT/Codex desktop auto-restart, status bar monitoring, details panel, multilingual UI, and extension-level language override.
+**Features:** multi-account quota dashboard, OAuth sign-in, account import/export and recovery, cross-window sync, five independent wakeup schedules, execution diagnostics, automatic account switching and quota warnings, background token refresh, status bar monitoring, account details, privacy mode, and multilingual UI.
 
 **Language:** follows the current VS Code display language. Primary support is for Simplified Chinese and English, with additional localization for other languages.
 
@@ -24,11 +24,15 @@ Manage multiple Codex accounts inside VS Code, inspect quota usage, switch the a
 
 ## Preview
 
-| Quota Dashboard | Details Panel |
-| --- | --- |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/dashboard.png" alt="Codex Tools quota dashboard" width="420" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/detail.png" alt="Codex Tools details panel" width="420" /> |
-| Settings Panel | Status Bar |
-| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/setting.png" alt="Codex Tools settings panel" width="260" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-tools/master/media/status_bar.png" alt="Codex Tools status bar" width="220" /> |
+These screenshots show the current `0.1.21` interface with demo accounts, quotas, and execution history. The examples use Simplified Chinese; the extension also supports English and other UI languages.
+
+![Quota dashboard with the active account, gauges, and saved account cards](https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/dashboard.jpg)
+
+| Wakeup tasks: independent enable/pause                                                                                                                                                                        | Per-account settings: five schedules                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/wakeup-tasks.jpg" alt="Weekday, quota reset, and paused startup wakeup tasks" width="440" />               | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/wakeup-config.jpg" alt="Dedicated wakeup settings opened from an account card" width="440" />                   |
+| History: replies and failure diagnostics                                                                                                                                                                      | Settings: appearance and automation                                                                                                                                                                                |
+| <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/wakeup-history.jpg" alt="Wakeup history with reply, duration, error stage, and HTTP status" width="440" /> | <img src="https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/settings.jpg" alt="Current settings with theme, language, and a 1 to 60 minute refresh interval" width="440" /> |
 
 ---
 
@@ -41,26 +45,29 @@ The extension provides a Webview dashboard for managing and monitoring all saved
 - Current account summary with team info and quick actions
 - Quota gauges for 5-hour, weekly, and code review usage
 - Saved accounts list for multi-account management
-- Account cards use the original responsive columns starting at `280px` and a `340px` baseline height, preserving the column layout and front/back sizing; full emails are available on hover
+- Account cards show plan, health, tags, and quota windows; flip a card for workspace, subscription, and sign-in details
+- Privacy mode hides account identifiers and wakeup replies for demos and screenshots
 - Quick actions for add, import, and refresh-all
 
 ### Scheduled Wakeups
 
-Open the clock button at the top right of the quota dashboard to add wakeup tasks. Choose saved accounts and one of five schedules: daily, weekly, interval, quota reset, or after startup. Select a model from the dropdown or enter a custom model ID, select a reasoning effort, and use a short prompt (default: `Reply with OK.`). Tasks support editing, pausing, deleting, manual tests, and recent execution history. There is no master switch. Enable or pause each task in its editor or on its card; enabled tasks follow their configured schedule immediately after saving.
+Use the top-right clock to manage all tasks, or the bottom-right clock on an account card to configure that account. Each task is enabled or paused independently, without a master switch. Choose accounts, model, reasoning effort, and prompt (default: `Reply with OK.`); custom model IDs are supported. Model access depends on the selected accounts.
 
-- Keep at least one VS Code window running. Occurrences missed by more than five minutes are skipped, including after shutdown or sleep.
-- Fixed intervals support 1 minute to 7 days. The first run is one interval after saving or resuming the task; subsequent runs keep the scheduled cadence. Manual tests do not change it, and missed cycles are not replayed in a batch. Reload all VS Code windows after upgrading. Tasks use storage format 4, which older schedulers preserve and refuse to process. Existing tasks retain their individual enabled/paused states; the old master switch no longer affects execution. Existing calendar/interval tasks remain compatible.
-- Quota reset supports the short window, long window, or either, including cached additional model windows. Only accounts whose window resets at that occurrence are woken. Missing reset times leave the task waiting; no fixed reset cadence is guessed.
-- After startup supports a `0–1440` minute delay; `0` runs immediately. Saved, edited, or resumed settings apply on the next startup, when the task must be enabled. Continuously running windows share one startup batch; a new batch starts after every window has exited. Sleep/resume does not start a new batch.
-- Model choices include the GPT-6 and GPT-5.6 families; access depends on the selected accounts. Saved models are not replaced automatically. GPT-5.5 retires from Codex with ChatGPT sign-in on 2026-10-14; the editor displays a reminder. See the [official model guidance](https://learn.chatgpt.com/docs/models#gpt-55-retirement).
-- Requests use each selected account's OAuth tokens and consume a small amount of quota. Quotas refresh afterward; wakeups leave the current `auth.json` and active account intact. The actual quota window is determined by the server.
-- Windows and profiles under the same OS user on the same host share tasks. File leases and durable occurrence claims prevent duplicate scheduled dispatches. Failed or interrupted occurrences are not replayed automatically; a definitive HTTP 401 allows one token refresh and retry.
-- Due tasks start independently without waiting for other tasks to finish; requests for the same account are serialized within each window. A window claims a shared task only when it contains every account needed for that occurrence; other windows leave the occurrence available. Update associated tasks after deleting an account.
-- Editing, pausing, or deleting a task cancels its unfinished requests. Each task is controlled independently; manual tests remain available for paused tasks.
-- The bottom-right wakeup button on each account card opens its dedicated task settings. Existing single-account tasks can be edited directly; multiple schedules remain selectable in a list. The global clock button continues to manage all tasks and multi-account selections.
-- History records the model and reasoning effort used for each run, per-account duration, a short sanitized reply, failure stage / HTTP status, and any post-wakeup quota refresh warning. Privacy mode also hides reply summaries. Existing history remains readable.
-- Metadata lives in `~/.codex-accounts-manager/wakeup/`, without account tokens. Remote hosts schedule independently. The latest 100 history entries are retained; durable occurrence markers are kept separately.
-- The request follows [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools/blob/main/src-tauri/src/modules/codex_local_access_foundation.rs). Enter a model ID available to the selected accounts.
+| Schedule      | Configuration and behavior                                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Daily         | Run at a chosen time in the local time zone each day                                                                                                            |
+| Weekly        | Choose weekdays and a time, such as 09:30 on workdays                                                                                                           |
+| Interval      | 1 minute to 7 days; the first run is one interval after saving or resuming                                                                                      |
+| Quota reset   | Follow refreshed reset timestamps for the short window, long window, or either; wake only accounts due at that occurrence, and wait when timestamps are missing |
+| After startup | Delay `0–1440` minutes; `0` runs immediately. Saved, edited, or resumed settings apply on the next startup batch                                                |
+
+- Edit, pause, delete, or manually test tasks. The per-account clock opens a single dedicated task directly, or a list when several exist.
+- History shows model and effort, per-account duration, a short sanitized reply, failure stage / HTTP status, and post-wakeup quota refresh warnings. Privacy mode also hides replies.
+- Wakeups use each account's OAuth tokens and consume a small amount of quota, then refresh it. They leave the current `auth.json` and active account unchanged. Reset schedules follow new timestamps received during manual or automatic quota refresh.
+- Keep at least one VS Code window running. Occurrences missed by more than five minutes are skipped. Failed or interrupted occurrences are not replayed automatically; a definitive HTTP 401 permits one token refresh and retry. Manual tests do not change the schedule and remain available for paused tasks.
+- Windows and profiles under the same OS user on the same host share tasks, with file leases and durable claims preventing duplicate dispatches. Remote hosts schedule independently. Continuously running windows share one startup batch; all windows must exit before a new batch starts. Sleep/resume does not restart the delay.
+- Due tasks run independently; requests for the same account are serialized within a window. Windows missing required accounts leave the occurrence available. Update tasks after deleting accounts. Editing, pausing, or deleting a task cancels its unfinished requests.
+- Tasks and the latest 100 history entries live in `~/.codex-accounts-manager/wakeup/`, without account tokens. Reload every VS Code window after upgrading. Existing tasks retain their enabled/paused state; the former master switch no longer blocks them. See the [CHANGELOG](docs/CHANGELOG.md) for upgrade details.
 
 ### Multi-Account Management
 
@@ -72,6 +79,8 @@ Open the clock button at the top right of the quota dashboard to add wakeup task
 - Store multiple accounts locally
 - Switch the active account with one click
 - Remove accounts you no longer use
+- Restore from backups, `auth.json`, or shared JSON
+- Export selected accounts and import them on another computer
 
 ### Cross-Window Sync
 
@@ -82,9 +91,21 @@ Open the clock button at the top right of the quota dashboard to add wakeup task
 ### ChatGPT / Codex Desktop Integration
 
 - Detect the merged `ChatGPT.app` or legacy `Codex.app` when switching accounts
-- Automatically restart the matching desktop app if it is already running
+- Integration is disabled by default. When enabled, ask before restarting by default, or choose automatic restart
 - Skip restart if the desktop app is installed but not currently running
 - Currently supports common macOS, Windows, and Linux install/process patterns
+
+### Using AiDeck Alongside This Extension
+
+For fuller session management, session recovery, CLI launching, and multi-instance scheduling, see the [AiDeck uTools plugin](https://github.com/wannanbigpig/aideck).
+
+### Automatic Switching and Quota Warnings
+
+- Disabled by default; configure separate 5-hour and weekly thresholds from `0%` to `20%`
+- Only valid quota windows participate in automation; 5-hour automation also requires enabling 5-hour quota control
+- Optionally reload the VS Code window after an automatic switch, or temporarily lock an account against automatic switching
+- Background token refresh is enabled by default and checks saved credentials while VS Code is running
+- Sanitized network diagnostics are available in the `Codex Accounts Network` output channel
 
 ### Quota Visibility
 
@@ -113,12 +134,9 @@ Each account can show:
 
 ### Details Panel
 
-Open a per-account details panel to inspect:
+Inspect account email, workspace, sign-in method, subscription expiry, tags, user / account IDs, quota windows, and reset countdowns. The page also shows usage over the last 30 days; values are estimates and may update with a delay.
 
-- Account email
-- Team / organization information
-- User ID / account ID
-- Raw quota payload
+![Account details with profile, subscription, and quotas](https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/details.jpg)
 
 ---
 
@@ -135,7 +153,7 @@ You can change these directly from the settings button in the top-right corner o
   - `Restart automatically`: restart the matching desktop app on account switch if it is already running
   - `Ask every time`: let you confirm each restart manually
 - `Automatic Quota Refresh`
-  - Can be disabled, or set to `5 / 10 / 15 / 30 / 60` minutes
+  - Can be disabled, or set to any whole number from `1` to `60` minutes
   - Disabled by default
   - When disabled, no timed refresh runs
 - `5-hour Quota Control`
@@ -149,8 +167,12 @@ You can change these directly from the settings button in the top-right corner o
 - `Codex App Launch Path`
   - Optional custom desktop app path
   - Leave empty to use auto-detection
-- `Dashboard Display`
-  - Choose whether to show the `Code Review` quota
+- `Dashboard Theme`
+  - Follow VS Code, or choose light / dark
+- `Background Token Refresh`
+  - Enabled by default; check and renew saved tokens while VS Code is running
+- `Quota Colors`
+  - Configure green and yellow remaining-quota thresholds
 - `Quota Warning`
   - Enable or disable low-quota alerts
   - Disabled by default
@@ -168,6 +190,7 @@ You can change these directly from the settings button in the top-right corner o
 4. Or run `Codex Accounts: Import Current auth.json`
 5. Run `Codex Accounts: Show Quota Summary`
 6. Refresh quotas, switch accounts, inspect details, and manage status bar visibility from the dashboard
+7. Use an account card clock to configure a dedicated wakeup task; use the top clock for all tasks and execution history
 
 ---
 
@@ -180,8 +203,12 @@ Available commands in the VS Code Command Palette:
 - `Codex Accounts: Switch Account`
 - `Codex Accounts: Refresh Quota`
 - `Codex Accounts: Refresh All Quotas`
+- `Codex Accounts: Restore Accounts from Backup`
+- `Codex Accounts: Restore Accounts from auth.json`
+- `Codex Accounts: Restore Accounts from Shared JSON`
 - `Codex Accounts: Remove Account`
 - `Codex Accounts: Open Details`
+- `Codex Accounts: Open Codex Home`
 - `Codex Accounts: Show Quota Summary`
 
 ---
@@ -202,7 +229,7 @@ You can also open the Marketplace page directly:
 
 ### Option 2: Install from VSIX
 
-1. Download the released `.vsix` file
+1. Download the latest `.vsix` from [GitHub Releases](https://github.com/wannanbigpig/codex-accounts-manager/releases/latest)
 2. Open the Command Palette in VS Code
 3. Run `Extensions: Install from VSIX...`
 4. Select the downloaded `.vsix` file
@@ -216,9 +243,9 @@ code --install-extension codex-accounts-manager-x.y.z.vsix
 ### Option 3: Run from Source
 
 ```bash
-git clone https://github.com/wannanbigpig/codex-tools.git
-cd codex-tools
-npm install
+git clone https://github.com/wannanbigpig/codex-accounts-manager.git
+cd codex-accounts-manager
+npm ci
 npm run compile
 ```
 
@@ -229,8 +256,10 @@ Press `F5` in VS Code to launch an Extension Development Host.
 ## Package VSIX
 
 ```bash
-npx @vscode/vsce package
+npm run package
 ```
+
+This compiles the extension and creates a `.vsix`. Before packaging, the icon check verifies a PNG image no larger than `1024×1024`.
 
 ---
 
@@ -240,7 +269,7 @@ npx @vscode/vsce package
 - Switching accounts updates the machine-wide active Codex `auth.json`
 - Quota is refreshed immediately after local account bind/import
 - External account changes from another window are detected automatically
-- ChatGPT/Codex desktop restart only happens when the app is already running
+- Desktop integration is disabled by default; when enabled, the selected restart policy only handles an already-running app
 - Free accounts label the 30-day quota window as `Monthly`; paid 7-day windows remain `Weekly`
 - Quota visibility depends on the data returned by the current Codex session
 
@@ -248,8 +277,8 @@ npx @vscode/vsce package
 
 ## Support
 
-- ⭐ [GitHub Star](https://github.com/wannanbigpig/codex-tools)
-- 💬 [Report Issues](https://github.com/wannanbigpig/codex-tools/issues)
+- ⭐ [GitHub Star](https://github.com/wannanbigpig/codex-accounts-manager)
+- 💬 [Report Issues](https://github.com/wannanbigpig/codex-accounts-manager/issues)
 
 ---
 
@@ -259,7 +288,7 @@ Thanks for using `Codex Accounts Manager`.
 
 If this project helps you, you can support its ongoing development and maintenance.
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://github.com/wannanbigpig/codex-tools/blob/master/docs/DONATE.en.md)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://github.com/wannanbigpig/codex-accounts-manager/blob/master/docs/DONATE.en.md)
 
 ---
 
