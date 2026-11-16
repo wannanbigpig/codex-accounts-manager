@@ -22,7 +22,7 @@ export class AccountsStatusBarProvider {
     private readonly context: vscode.ExtensionContext,
     private readonly repo: AccountsRepository
   ) {
-    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    this.item = vscode.window.createStatusBarItem("codexAccounts.quota", vscode.StatusBarAlignment.Right, 100);
     this.item.name = "Codex Accounts Manager Quota";
     this.item.command = "codexAccounts.showQuotaSummary";
     this.context.subscriptions.push(
