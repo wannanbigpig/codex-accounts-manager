@@ -1,7 +1,8 @@
-import * as fsSync from "fs";
+import { isDeepStrictEqual } from "util";
 import { createError } from "../core/errors";
 import type { CodexAccountRecord, CodexAccountsIndex } from "../core/types";
 import { normalizeQuotaSummary } from "../utils/quotaWindows";
+import { workspaceKind } from "../services/workspaceIdentity";
 import { normalizePlanType } from "../utils/quotaLabels";
 import { normalizeAccountTags } from "./sharedAccounts";
 
@@ -33,19 +34,55 @@ export function createEmptyIndex(): CodexAccountsIndex {
 }
 
 export function cloneIndex(index: CodexAccountsIndex): CodexAccountsIndex {
+  const accountIds = new Set(Array.isArray(index?.accounts) ? index.accounts.map((account) => account.id) : []);
   const normalized: CodexAccountsIndex = {
     currentAccountId: index?.currentAccountId,
+    dashboardAccountOrder: Array.isArray(index?.dashboardAccountOrder)
+      ? [...new Set(index.dashboardAccountOrder.filter((id) => accountIds.has(id)))] : undefined,
     accounts: Array.isArray(index?.accounts)
       ? index.accounts.map((account) => ({
           ...account,
           planType: normalizePlanType(account.planType),
           tags: normalizeAccountTags(account.tags),
-          quotaSummary: normalizeQuotaSummary(account.quotaSummary)
+          quotaSummary: normalizeQuotaSummary(account.quotaSummary, workspaceKind(account.accountStructure, account.planType))
         }))
       : []
   };
 
   return structuredClone(normalized);
+}
+
+/** Apply a caller's edits to the latest disk snapshot, preserving unrelated concurrent changes. */
+export function applyIndexChanges(
+  latest: CodexAccountsIndex,
+  before: CodexAccountsIndex,
+  after: CodexAccountsIndex
+): void {
+  const originals = new Map(before.accounts.map((account) => [account.id, account]));
+  const edits = new Map(after.accounts.map((account) => [account.id, account]));
+  latest.accounts = latest.accounts.filter((account) => !originals.has(account.id) || edits.has(account.id));
+  const records = new Map(latest.accounts.map((account) => [account.id, account]));
+  for (const account of after.accounts) {
+    const original = originals.get(account.id);
+    const current = records.get(account.id);
+    if (!current) {
+      if (!original) {
+        latest.accounts.push({ ...account });
+      }
+      continue;
+    }
+    const keys = Object.keys({ ...original, ...account }) as (keyof CodexAccountRecord)[];
+    for (const key of keys) {
+      if (key !== "isActive" && !isDeepStrictEqual(original?.[key], account[key])) {
+        Object.assign(current, { [key]: account[key] });
+      }
+    }
+  }
+  const activeId =
+    before.currentAccountId === after.currentAccountId
+      ? (latest.currentAccountId ?? latest.accounts.find((account) => account.isActive)?.id)
+      : after.currentAccountId;
+  syncActiveAccountState(latest, activeId);
 }
 
 export function parseAccountsIndex(raw: string, filePath: string): CodexAccountsIndex {
@@ -63,27 +100,6 @@ export function parseAccountsIndex(raw: string, filePath: string): CodexAccounts
 
 export function getBackupPath(indexPath: string, slot: number): string {
   return indexPath.replace(/\.json$/i, `.backup-${slot}.json`);
-}
-
-export function countAvailableBackupsSync(indexPath: string, backupCount: number): number {
-  let count = 0;
-  for (let slot = 1; slot <= backupCount; slot += 1) {
-    if (fsSync.existsSync(getBackupPath(indexPath, slot))) {
-      count += 1;
-    }
-  }
-
-  return count;
-}
-
-export function readCurrentIndexForBackupSync(indexPath: string): string | undefined {
-  try {
-    const raw = fsSync.readFileSync(indexPath, "utf8");
-    parseAccountsIndex(raw, indexPath);
-    return raw;
-  } catch (error) {
-    return undefined;
-  }
 }
 
 function isValidAccountsIndex(value: unknown): value is CodexAccountsIndex {

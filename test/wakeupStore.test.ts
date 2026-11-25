@@ -67,7 +67,7 @@ describe("shared wakeup storage", () => {
     expect((await store.read()).tasks[0]?.nextRunAt).toBe(calendar.nextRunAt);
     const interval = await store.saveTask({ ...input, scheduleMode: "interval", intervalMinutes: 300 }, now);
     const state = await new WakeupStore(directory).read();
-    expect(state.version).toBe(4);
+    expect(state.version).toBe(5);
     expect(state.tasks).toHaveLength(2);
     expect(state.tasks[1]?.nextRunAt).toBe(interval.nextRunAt);
     expect(state.tasks[0]?.nextRunAt).toBe(calendar.nextRunAt);

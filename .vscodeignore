@@ -18,6 +18,7 @@ coverage/**
 tsconfig.json
 tsconfig.webview.json
 tsconfig.eslint.json
+eslint.config.cjs
 vite.webview.config.mts
 vitest.config.mts
 

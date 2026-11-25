@@ -41,7 +41,7 @@ describe("independent task enablement", () => {
       const legacy = JSON.stringify({ ...(await store.read()), version, enabled });
       await fs.writeFile(file, legacy);
       const migrated = await store.read();
-      expect(migrated.version).toBe(4);
+      expect(migrated.version).toBe(5);
       expect(migrated).not.toHaveProperty("enabled");
       expect(migrated.tasks.map((task) => task.enabled)).toEqual([true, false]);
       // Reads do not rewrite a file outside the shared state lease.
@@ -49,7 +49,7 @@ describe("independent task enablement", () => {
       expect(await store.claim(active.id, "scheduled", active.nextRunAt, active.nextRunAt)).toBeDefined();
       expect(await store.claim(paused.id, "scheduled", paused.nextRunAt, paused.nextRunAt)).toBeUndefined();
       const persisted = JSON.parse(await fs.readFile(file, "utf8"));
-      expect(persisted.version).toBe(4);
+      expect(persisted.version).toBe(5);
       expect(persisted).not.toHaveProperty("enabled");
     }
   );

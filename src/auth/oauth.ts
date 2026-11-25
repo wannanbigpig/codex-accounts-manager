@@ -6,6 +6,7 @@ import { isTokenExpired } from "../utils/jwt";
 import { fetchWithTimeout } from "../utils/network";
 import { logNetworkEvent } from "../utils/debug";
 import { AuthError, ErrorCode, APIError } from "../core/errors";
+import { describeOAuthRejection, isOAuthDeviceLimit } from "./oauthErrors";
 import {
   AUTH_ENDPOINT,
   TOKEN_ENDPOINT,
@@ -163,16 +164,44 @@ export function prepareOAuthLoginSession(port = CALLBACK_PORT): PreparedOAuthLog
 
 export async function completeOAuthLoginSession(
   session: Pick<PreparedOAuthLoginSession, "state" | "verifier" | "redirectUri">,
-  callbackUrl: string
+  callbackUrl: string,
+  cancellationToken?: vscode.CancellationToken
 ): Promise<CodexTokens> {
   const code = extractCodeFromCallbackUrl(callbackUrl, session.redirectUri, session.state);
-  return exchangeCodeForTokens(code, session.verifier, session.redirectUri);
+  return exchangeCallbackCode(session, code, cancellationToken);
+}
+
+export function checkOAuthCancellation(token?: vscode.CancellationToken): void {
+  if (token?.isCancellationRequested) {
+    throw new AuthError("OAuth login cancelled by user.", { code: ErrorCode.AUTH_OAUTH_FAILED });
+  }
+}
+
+async function exchangeCallbackCode(
+  session: Pick<PreparedOAuthLoginSession, "verifier" | "redirectUri">,
+  code: string,
+  cancellationToken?: vscode.CancellationToken
+): Promise<CodexTokens> {
+  checkOAuthCancellation(cancellationToken);
+  const controller = new AbortController();
+  const subscription = cancellationToken?.onCancellationRequested(() => controller.abort());
+  try {
+    const tokens = await exchangeCodeForTokens(code, session.verifier, session.redirectUri, controller.signal);
+    checkOAuthCancellation(cancellationToken);
+    return tokens;
+  } catch (error) {
+    checkOAuthCancellation(cancellationToken);
+    throw error;
+  } finally {
+    subscription?.dispose();
+  }
 }
 
 export async function runPreparedOAuthLoginSession(
   session: PreparedOAuthLoginSession,
   cancellationToken?: vscode.CancellationToken
 ): Promise<CodexTokens> {
+  checkOAuthCancellation(cancellationToken);
   const runtimeSession: OAuthSession = {
     state: session.state,
     verifier: session.verifier,
@@ -180,6 +209,7 @@ export async function runPreparedOAuthLoginSession(
     redirectUri: session.redirectUri
   };
   const codeWaiter = createCodeWaiter(runtimeSession, cancellationToken);
+  void codeWaiter.promise.catch(() => undefined);
 
   const opened = await vscode.env.openExternal(vscode.Uri.parse(session.authUrl));
   if (!opened) {
@@ -198,7 +228,7 @@ export async function runPreparedOAuthLoginSession(
   }
 
   const code = await codeWaiter.promise;
-  return exchangeCodeForTokens(code, session.verifier, session.redirectUri);
+  return exchangeCallbackCode(session, code, cancellationToken);
 }
 
 export function extractCodeFromCallbackUrl(callbackUrl: string, redirectUri: string, expectedState: string): string {
@@ -280,6 +310,14 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
           return;
         }
 
+        const rejection = describeOAuthRejection(url.searchParams.get("error"), url.searchParams.get("error_description"));
+        if (rejection) {
+          res.writeHead(403);
+          res.end(rejection);
+          finish(() => reject(new AuthError(rejection, { code: ErrorCode.AUTH_OAUTH_FAILED })));
+          return;
+        }
+
         if (!code) {
           res.writeHead(400);
           res.end("Missing code");
@@ -321,11 +359,12 @@ function createCodeWaiter(session: OAuthSession, cancellationToken?: vscode.Canc
   };
 }
 
-async function exchangeCodeForTokens(code: string, verifier: string, redirectUri: string): Promise<CodexTokens> {
+export async function exchangeCodeForTokens(code: string, verifier: string, redirectUri: string, signal?: AbortSignal): Promise<CodexTokens> {
   const response = await fetchWithTimeout(
     TOKEN_ENDPOINT,
     {
       method: "POST",
+      signal,
       headers: {
         "Content-Type": "application/x-www-form-urlencoded"
       },
@@ -346,18 +385,36 @@ async function exchangeCodeForTokens(code: string, verifier: string, redirectUri
     ok: response.ok,
     status: response.status,
     redirectUri,
-    bodyPreview: raw
+    ...(signal ? {} : { bodyPreview: raw })
   });
   if (!response.ok) {
     const errorCode = extractTokenErrorCode(raw);
-    throw new APIError(`Token exchange failed: ${raw}`, {
+    let rejection: string | undefined;
+    try {
+      const body = JSON.parse(raw) as { error?: { message?: unknown }; message?: unknown; error_description?: string };
+      if (isOAuthDeviceLimit(body?.error?.message, body?.message, body?.error_description)) {
+        rejection = "Device limit reached";
+      }
+    } catch {
+      if (isOAuthDeviceLimit(raw)) {
+        rejection = "Device limit reached";
+      }
+    }
+    throw new APIError(rejection ?? describeOAuthRejection(errorCode ?? null, null) ?? `OAuth token exchange failed (HTTP ${response.status})`, {
       statusCode: response.status,
-      responseBody: raw,
       context: errorCode ? { errorCode } : undefined
     });
   }
 
-  const payload = JSON.parse(raw) as Record<string, unknown>;
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(raw) as Record<string, unknown>;
+  } catch (error) {
+    if (!signal) {
+      throw error;
+    }
+    throw new AuthError("Invalid OAuth token exchange response", { code: ErrorCode.AUTH_OAUTH_FAILED });
+  }
   return {
     idToken: readString(payload, "id_token"),
     accessToken: readString(payload, "access_token"),
@@ -383,6 +440,10 @@ function validateManualCallback(value: string, redirectUri: string, expectedStat
     }
     if (url.searchParams.get("state") !== expectedState) {
       return "State mismatch in callback URL";
+    }
+    const rejection = describeOAuthRejection(url.searchParams.get("error"), url.searchParams.get("error_description"));
+    if (rejection) {
+      return rejection;
     }
     if (!url.searchParams.get("code")) {
       return "Callback URL does not include code";

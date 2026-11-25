@@ -2,7 +2,7 @@
   "name": "codex-accounts-manager",
   "displayName": "Codex Accounts Manager",
   "description": "Manage multiple Codex accounts in VS Code, inspect quota, and switch the active global auth.json.",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "publisher": "wannanbigpig",
   "icon": "media/CT_logo_transparent_square_hd.png",
   "license": "MIT",
@@ -84,6 +84,13 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Automatically refresh saved account tokens in the background before they expire while VS Code is running."
+        },
+        "codexAccounts.autoRefreshPlanTypes": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["free", "plus", "pro", "business", "enterprise", "edu", "other"] },
+          "uniqueItems": true,
+          "default": ["free", "plus", "pro", "business", "enterprise", "edu", "other"],
+          "markdownDescription": "Plans included in scheduled quota refresh. Current accounts, manual refresh and token renewal keep their normal behavior."
         },
         "codexAccounts.autoSwitchEnabled": {
           "type": "boolean",
@@ -242,6 +249,7 @@
     "undici": "6.28.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.16.11",
     "@types/proper-lockfile": "4.1.4",
     "@types/vscode": "^1.96.0",

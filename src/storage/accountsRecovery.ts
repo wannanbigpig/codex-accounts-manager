@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { createEmptyIndex, cloneIndex, getBackupPath } from "./accountsIndex";
+import { createEmptyIndex, getBackupPath } from "./accountsIndex";
 import {
   backupCurrentIndex,
   countAvailableBackups,
@@ -21,32 +21,12 @@ export function isIndexHealthError(error: unknown): boolean {
   );
 }
 
-export async function restoreMissingIndex(
-  state: AccountsRepositoryState,
-  indexPath: string,
-  backupCount: number
-): Promise<CodexAccountsIndex> {
-  console.info("[codexAccounts] accounts index not found, using empty index");
-  state.indexHealth = {
-    status: "healthy",
-    availableBackups: await countAvailableBackups(indexPath, backupCount)
-  };
-  const empty = createEmptyIndex();
-  state.cache = {
-    data: empty,
-    timestamp: Date.now()
-  };
-  return cloneIndex(empty);
-}
-
 export async function markUnrecoverableIndex(params: {
   state: AccountsRepositoryState;
   indexPath: string;
   backupCount: number;
   cause: unknown;
 }): Promise<never> {
-  params.state.cache = null;
-  params.state.pendingSave = null;
   params.state.indexHealth = {
     status: "corrupted_unrecoverable",
     lastRestoreSource: params.state.indexHealth.lastRestoreSource,
@@ -56,10 +36,7 @@ export async function markUnrecoverableIndex(params: {
   throw createError.storageIndexRecoveryFailed(params.indexPath, params.cause);
 }
 
-export async function readIndexForRecovery(
-  state: AccountsRepositoryState,
-  readIndex: () => Promise<CodexAccountsIndex>
-): Promise<CodexAccountsIndex> {
+export async function readIndexForRecovery(readIndex: () => Promise<CodexAccountsIndex>): Promise<CodexAccountsIndex> {
   try {
     return await readIndex();
   } catch (error) {
@@ -67,12 +44,7 @@ export async function readIndexForRecovery(
       throw error;
     }
 
-    const empty = createEmptyIndex();
-    state.cache = {
-      data: empty,
-      timestamp: Date.now()
-    };
-    return cloneIndex(empty);
+    return createEmptyIndex();
   }
 }
 
@@ -84,19 +56,9 @@ export async function persistRecoveredIndex(params: {
   tempSuffix: string;
   backupCount: number;
 }): Promise<void> {
-  if (params.state.saveDebounceTimer) {
-    clearTimeout(params.state.saveDebounceTimer);
-    params.state.saveDebounceTimer = null;
-  }
-  params.state.pendingSave = null;
   await fs.mkdir(path.dirname(params.indexPath), { recursive: true });
   await backupCurrentIndex(params.indexPath, params.backupCount);
   await writeIndexAtomically(params.indexPath, params.index, params.tempSuffix);
-  params.state.isDirty = false;
-  params.state.cache = {
-    data: cloneIndex(params.index),
-    timestamp: Date.now()
-  };
   params.state.indexHealth = {
     status: params.source === "backup" ? "restored_from_backup" : "healthy",
     lastRestoreSource: params.source,

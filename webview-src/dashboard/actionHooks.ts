@@ -73,6 +73,7 @@ export function useDashboardActions(state: AppState, dispatch: AppDispatch) {
       requestId,
       payload
     });
+    return requestId;
   };
 
   const sendSetting = (key: DashboardSettingKey, value: string | number | boolean): void => {

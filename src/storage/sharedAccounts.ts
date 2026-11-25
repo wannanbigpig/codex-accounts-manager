@@ -1,6 +1,6 @@
 import { AccountError, ErrorCode } from "../core/errors";
 import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens, SharedCodexAccountJson } from "../core/types";
-import { buildAccountStorageId } from "../utils/accountIdentity";
+import { resolveAccountStorageId } from "../utils/accountIdentity";
 import { extractClaims } from "../utils/jwt";
 
 export function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTokens): SharedCodexAccountJson {
@@ -36,7 +36,7 @@ export function toSharedAccountJson(account: CodexAccountRecord, tokens: CodexTo
   };
 }
 
-export function previewSharedEntry(entry: SharedCodexAccountJson): { storageId?: string; email?: string } {
+export function previewSharedEntry(entry: SharedCodexAccountJson, accounts: readonly CodexAccountRecord[] = []): { storageId: string; email: string } {
   const restoredTokens = restoreSharedTokens(entry);
   const claims = extractClaims(restoredTokens.idToken, restoredTokens.accessToken);
   if (!claims.email) {
@@ -46,7 +46,7 @@ export function previewSharedEntry(entry: SharedCodexAccountJson): { storageId?:
   }
 
   return {
-    storageId: buildAccountStorageId(claims.email, claims.accountId, claims.organizationId),
+    storageId: resolveAccountStorageId({ ...claims, email: claims.email }, accounts),
     email: claims.email
   };
 }
@@ -68,7 +68,7 @@ export function restoreSharedTokens(entry: SharedCodexAccountJson): CodexTokens 
   };
 }
 
-export function normalizeAccountTags(tags: unknown, fallback?: string[] | null | undefined): string[] | undefined {
+export function normalizeAccountTags(tags: unknown, fallback?: string[] | null): string[] | undefined {
   const source = Array.isArray(tags) ? tags : Array.isArray(fallback) ? fallback : [];
   const normalized = Array.from(
     new Map(
@@ -160,9 +160,10 @@ export function fromSharedQuotaError(
 }
 
 export function sanitizeOptionalValue(value: unknown): string | undefined {
-  const normalized = typeof value === "string" ? value : value == null ? undefined : String(value);
-  const trimmed = normalized?.trim();
-  return trimmed ?? undefined;
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    return undefined;
+  }
+  return String(value).trim();
 }
 
 export function normalizeEpochMs(value: number | undefined): number | undefined {

@@ -5,6 +5,7 @@ import {
   ExtensionSettingsStore,
   getCodexAccountsConfiguration,
   normalizeAutoRefreshMinutes,
+  readAutoRefreshPlanTypes,
   normalizeDashboardTheme
 } from "../../infrastructure/config/extensionSettings";
 import { isDashboardLanguageOption } from "../../localization/languages";
@@ -60,6 +61,12 @@ export async function handleDashboardSettingUpdate(
         updated = true;
       }
       break;
+    case "autoRefreshPlanTypes":
+      if (typeof value === "string") {
+        await updateDashboardConfiguration(config, key, readAutoRefreshPlanTypes(value.split(",")));
+        updated = true;
+      }
+      break;
     case "displayLanguage":
       if (typeof value === "string" && isDashboardLanguageOption(value)) {
         await updateDashboardConfiguration(config, key, value);
@@ -76,7 +83,7 @@ export async function handleDashboardSettingUpdate(
 async function updateDashboardConfiguration(
   config: vscode.WorkspaceConfiguration,
   key: DashboardConfigurationKey,
-  value: string | number | boolean
+  value: string | number | boolean | readonly string[]
 ): Promise<void> {
   await config.update(key, value, resolveConfigurationTarget(config, key));
 }

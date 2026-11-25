@@ -4,7 +4,7 @@ English · [简体中文](README.md)
 
 VS Code extension for managing multiple Codex accounts, viewing quota usage, and switching the active global `auth.json`.
 
-![Version](https://img.shields.io/badge/version-0.1.21-blue)
+![Version](https://img.shields.io/badge/version-0.1.22-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.96.0-007acc)
 ![License](https://img.shields.io/github/license/wannanbigpig/codex-accounts-manager)
 ![Stars](https://img.shields.io/github/stars/wannanbigpig/codex-accounts-manager?style=flat)
@@ -24,7 +24,7 @@ Manage multiple Codex accounts inside VS Code, inspect quota usage, switch the a
 
 ## Preview
 
-These screenshots show the current `0.1.21` interface with demo accounts, quotas, and execution history. The examples use Simplified Chinese; the extension also supports English and other UI languages.
+These screenshots show the `0.1.21` interface with demo accounts, quotas, and execution history. The examples use Simplified Chinese. The extension also supports English and other UI languages.
 
 ![Quota dashboard with the active account, gauges, and saved account cards](https://raw.githubusercontent.com/wannanbigpig/codex-accounts-manager/master/docs/images/dashboard.jpg)
 

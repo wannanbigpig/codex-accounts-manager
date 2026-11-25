@@ -41,7 +41,13 @@ export function ModalShell(props: {
 }) {
   return (
     <div class={`overlay ${props.open ? "open" : ""}`} onClick={props.onClose}>
-      <div class={`settings-modal dashboard-modal ${props.className ?? ""}`.trim()} onClick={(event) => event.stopPropagation()}>
+      <div
+        class={`settings-modal dashboard-modal ${props.className ?? ""}`.trim()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.title}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div class="settings-modal-head">
           <div class="settings-modal-title">{props.title}</div>
           <button class="settings-close" type="button" aria-label={props.closeLabel} onClick={props.onClose}>

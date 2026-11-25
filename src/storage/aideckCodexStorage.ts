@@ -5,14 +5,20 @@ import { randomUUID } from "crypto";
 import type { CodexAccountRecord, CodexQuotaSummary, CodexTokens, SharedCodexAccountJson } from "../core/types";
 import { extractClaims } from "../utils/jwt";
 import { normalizePlanType } from "../utils/quotaLabels";
+import { withCredentialLock } from "./credentialLocks";
 
 type JsonRecord = Record<string, unknown>;
+
+const INDEX_FILE = "accounts-index.json";
+const CURRENT_FILE = "current.json";
 
 export type AideckMirrorTokenSnapshot = Partial<CodexTokens> & {
   email?: string;
   userId?: string;
   organizationId?: string;
 };
+
+type AideckSharedAccount = { entry: SharedCodexAccountJson; sourceId: string };
 
 export async function readAideckCodexTokens(accountId: string): Promise<AideckMirrorTokenSnapshot | undefined> {
   const filePath = getAideckCodexAccountFilePath(accountId);
@@ -53,12 +59,24 @@ export async function readAideckCodexTokens(accountId: string): Promise<AideckMi
   }
 }
 
-export async function listAideckCodexSharedAccounts(): Promise<SharedCodexAccountJson[]> {
+export async function readAideckCodexSharedAccount(sourceId: string): Promise<SharedCodexAccountJson | undefined> {
+  if (path.basename(sourceId) !== sourceId) {
+    return undefined;
+  }
+  return readSharedCodexAccountFile(path.join(getAideckCodexRoot(), "accounts", `${sourceId}.json`));
+}
+
+async function readSharedCodexAccountFile(filePath: string): Promise<SharedCodexAccountJson | undefined> {
+  const parsed = await readJsonFile(filePath);
+  return parsed ? toSharedCodexAccount(parsed) : undefined;
+}
+
+export async function listAideckCodexSharedAccounts(): Promise<AideckSharedAccount[]> {
   const root = getAideckCodexRoot();
   const accountFiles = new Set<string>();
 
   try {
-    const index = (await readJsonFile(path.join(root, "accounts-index.json"))) ?? {};
+    const index = (await readJsonFile(path.join(root, INDEX_FILE))) ?? {};
     const accounts = Array.isArray(index["accounts"]) ? index["accounts"] : [];
     for (const item of accounts) {
       const record = getRecord(item);
@@ -67,7 +85,9 @@ export async function listAideckCodexSharedAccounts(): Promise<SharedCodexAccoun
         accountFiles.add(getAideckCodexAccountFilePath(id));
       }
     }
-  } catch {}
+  } catch {
+    // The account directory scan can still discover records absent from the index.
+  }
 
   try {
     const dir = path.join(root, "accounts");
@@ -77,14 +97,15 @@ export async function listAideckCodexSharedAccounts(): Promise<SharedCodexAccoun
         accountFiles.add(path.join(dir, entry.name));
       }
     }
-  } catch {}
+  } catch {
+    // AiDeck may not have created its account directory yet.
+  }
 
-  const shared: SharedCodexAccountJson[] = [];
+  const shared: AideckSharedAccount[] = [];
   for (const filePath of accountFiles) {
-    const parsed = await readJsonFile(filePath);
-    const entry = parsed ? toSharedCodexAccount(parsed) : undefined;
+    const entry = await readSharedCodexAccountFile(filePath);
     if (entry) {
-      shared.push(entry);
+      shared.push({ entry, sourceId: path.basename(filePath).slice(0, -".json".length) });
     }
   }
 
@@ -97,61 +118,78 @@ export async function mirrorAideckCodexAccount(account: CodexAccountRecord, toke
   }
 
   try {
-    const now = Date.now();
-    const filePath = getAideckCodexAccountFilePath(account.id);
-    await ensurePrivateDirectory(getAideckCodexRoot());
-    await ensurePrivateDirectory(path.dirname(filePath));
-    const existing = (await readWritableMirrorJson(filePath)) ?? {};
-    await readWritableMirrorJson(path.join(getAideckCodexRoot(), "accounts-index.json"));
-    const existingTokens = getRecord(existing["tokens"]) ?? {};
-    const existingQuota = getRecord(existing["quota"]);
-    const existingQuotaError = getSharedQuotaError(existing["quota_error"]);
-    const safeTokens = shouldMirrorTokensForAccount(account, tokens) ? tokens : undefined;
-    const nextTokens = safeTokens
-      ? {
-          ...existingTokens,
-          id_token: safeTokens.idToken,
-          access_token: safeTokens.accessToken,
-          refresh_token: safeTokens.refreshToken,
-          account_id: account.accountId ?? safeTokens.accountId ?? readString(existingTokens["account_id"]) ?? ""
-        }
-      : existingTokens;
-    const next = {
-      ...existing,
-      id: account.id,
-      email: account.email.trim().toLowerCase(),
-      auth_mode: readString(existing["auth_mode"]) ?? "",
-      user_id: account.userId ?? readString(existing["user_id"]) ?? "",
-      // The Aideck mirror is a compatibility layer, not an authority for workspace-scoped metadata.
-      // Preserve existing workspace/quota fields when they already exist to avoid amplifying stale context from VS Code.
-      plan_type: normalizePlanType(readString(existing["plan_type"]) ?? account.planType) ?? "",
-      subscription_active_until:
-        readString(existing["subscription_active_until"]) ?? account.subscriptionActiveUntil ?? "",
-      account_id: account.accountId ?? readString(existing["account_id"]) ?? "",
-      organization_id: account.organizationId ?? readString(existing["organization_id"]) ?? "",
-      account_name: readString(existing["account_name"]) ?? account.accountName ?? "",
-      account_structure: readString(existing["account_structure"]) ?? account.accountStructure ?? "",
-      added_via: account.addedVia ?? readString(existing["added_via"]) ?? "",
-      added_at: readNumber(existing["added_at"]) ?? account.createdAt ?? now,
-      created_at: account.createdAt ?? readNumber(existing["created_at"]) ?? now,
-      last_used: account.isActive ? now : (readNumber(existing["last_used"]) ?? account.updatedAt ?? 0),
-      updated_at: now,
-      tokens: nextTokens,
-      quota: existingQuota ?? (account.quotaSummary ? toAideckQuota(account.quotaSummary, account.lastQuotaAt) : null),
-      quota_error:
-        existingQuotaError ??
-        (account.quotaError
-          ? {
-              code: account.quotaError.code,
-              message: account.quotaError.message,
-              timestamp: account.quotaError.timestamp
-            }
-          : null),
-      tags: account.tags?.length ? [...account.tags] : []
-    };
+    const root = getAideckCodexRoot();
+    await ensurePrivateDirectory(root);
+    await withAideckMirrorLock(root, INDEX_FILE, async (indexPath, assertHeld) => {
+      const now = Date.now();
+      const filePath = getAideckCodexAccountFilePath(account.id);
+      await ensurePrivateDirectory(path.dirname(filePath));
+      const existing = (await readWritableMirrorJson(filePath)) ?? {};
+      const index = (await readWritableMirrorJson(indexPath)) ?? {};
+      const existingTokens = getRecord(existing["tokens"]) ?? {};
+      const existingQuota = getRecord(existing["quota"]);
+      const existingQuotaError = getSharedQuotaError(existing["quota_error"]);
+      const safeTokens = shouldMirrorTokensForAccount(account, tokens) ? tokens : undefined;
+      const nextTokens = safeTokens
+        ? {
+            ...existingTokens,
+            id_token: safeTokens.idToken,
+            access_token: safeTokens.accessToken,
+            refresh_token: safeTokens.refreshToken,
+            account_id: account.accountId ?? safeTokens.accountId ?? readString(existingTokens["account_id"]) ?? ""
+          }
+        : existingTokens;
+      const next = {
+        ...existing,
+        id: account.id,
+        email: account.email.trim().toLowerCase(),
+        auth_mode: readString(existing["auth_mode"]) ?? "",
+        user_id: account.userId ?? readString(existing["user_id"]) ?? "",
+        // The Aideck mirror is a compatibility layer, not an authority for workspace-scoped metadata.
+        // Preserve existing workspace/quota fields when they already exist to avoid amplifying stale context from VS Code.
+        plan_type: normalizePlanType(readString(existing["plan_type"]) ?? account.planType) ?? "",
+        subscription_active_until:
+          readString(existing["subscription_active_until"]) ?? account.subscriptionActiveUntil ?? "",
+        account_id: account.accountId ?? readString(existing["account_id"]) ?? "",
+        organization_id: account.organizationId ?? readString(existing["organization_id"]) ?? "",
+        account_name: readString(existing["account_name"]) ?? account.accountName ?? "",
+        account_structure: readString(existing["account_structure"]) ?? account.accountStructure ?? "",
+        added_via: account.addedVia ?? readString(existing["added_via"]) ?? "",
+        added_at: readNumber(existing["added_at"]) ?? account.createdAt ?? now,
+        created_at: account.createdAt ?? readNumber(existing["created_at"]) ?? now,
+        last_used: account.isActive ? now : (readNumber(existing["last_used"]) ?? account.updatedAt ?? 0),
+        updated_at: now,
+        tokens: nextTokens,
+        quota:
+          existingQuota ?? (account.quotaSummary ? toAideckQuota(account.quotaSummary, account.lastQuotaAt) : null),
+        quota_error:
+          existingQuotaError ??
+          (account.quotaError
+            ? {
+                code: account.quotaError.code,
+                message: account.quotaError.message,
+                timestamp: account.quotaError.timestamp
+              }
+            : null),
+        tags: account.tags?.length ? [...account.tags] : []
+      };
 
-    await writeJsonFile(filePath, next);
-    await writeAideckCodexIndex(account.id, next);
+      const accounts: unknown[] = Array.isArray(index["accounts"]) ? index["accounts"] : [];
+      const nextAccounts = accounts.filter((item) => getRecord(item)?.["id"] !== account.id);
+      nextAccounts.push(buildAideckIndexRecord(next));
+
+      await writeJsonFile(filePath, next, assertHeld);
+      await writeJsonFile(
+        indexPath,
+        {
+          ...index,
+          schema_version: readNumber(index["schema_version"]) ?? 1,
+          updated_at: now,
+          accounts: nextAccounts
+        },
+        assertHeld
+      );
+    });
   } catch {
     console.warn("[codexAccounts] AiDeck mirror sync could not be completed");
   }
@@ -163,12 +201,11 @@ export async function mirrorAideckCurrentAccount(accountId: string): Promise<voi
   }
 
   try {
-    const currentPath = path.join(getAideckCodexRoot(), "current.json");
-    await fs.mkdir(path.dirname(currentPath), { recursive: true });
-    await writeJsonFile(currentPath, {
-      id: accountId,
-      updated_at: Date.now()
-    });
+    const root = getAideckCodexRoot();
+    await ensurePrivateDirectory(root);
+    await withAideckMirrorLock(root, CURRENT_FILE, (filePath, assertHeld) =>
+      writeJsonFile(filePath, { id: accountId, updated_at: Date.now() }, assertHeld)
+    );
   } catch {
     // Best-effort compatibility mirror.
   }
@@ -180,9 +217,13 @@ export async function removeAideckCodexAccount(accountId: string): Promise<void>
   }
 
   try {
-    await fs.rm(getAideckCodexAccountFilePath(accountId), { force: true });
-    await removeAideckCodexIndexRecord(accountId);
-    await clearAideckCurrentAccountIfMatches(accountId);
+    const root = getAideckCodexRoot();
+    await withAideckMirrorLock(root, INDEX_FILE, async (indexPath, assertHeld) => {
+      assertHeld();
+      await fs.rm(getAideckCodexAccountFilePath(accountId), { force: true });
+      await removeAideckCodexIndexRecord(indexPath, accountId, assertHeld);
+    });
+    await clearAideckCurrentAccountIfMatches(root, accountId);
   } catch {
     // Aideck storage is a compatibility mirror. Failing to clean it must not block the VS Code extension store.
   }
@@ -201,24 +242,11 @@ function getAideckDataRoot(): string {
   return envDataRoot ? envDataRoot.replace(/^['"]|['"]$/g, "") : path.join(os.homedir(), ".ai_deck");
 }
 
-async function writeAideckCodexIndex(accountId: string, account: JsonRecord): Promise<void> {
-  const indexPath = path.join(getAideckCodexRoot(), "accounts-index.json");
-  await ensurePrivateDirectory(path.dirname(indexPath));
-  const existing = (await readWritableMirrorJson(indexPath)) ?? {};
-  const accounts: unknown[] = Array.isArray(existing["accounts"]) ? existing["accounts"].slice() : [];
-  const summary = buildAideckIndexRecord(account);
-  const nextAccounts = accounts.filter((item) => getRecord(item)?.["id"] !== accountId);
-  nextAccounts.push(summary);
-  await writeJsonFile(indexPath, {
-    ...existing,
-    schema_version: readNumber(existing["schema_version"]) ?? 1,
-    updated_at: Date.now(),
-    accounts: nextAccounts
-  });
-}
-
-async function removeAideckCodexIndexRecord(accountId: string): Promise<void> {
-  const indexPath = path.join(getAideckCodexRoot(), "accounts-index.json");
+async function removeAideckCodexIndexRecord(
+  indexPath: string,
+  accountId: string,
+  assertHeld: () => void
+): Promise<void> {
   const existing = await readJsonFile(indexPath);
   if (!existing) {
     return;
@@ -230,23 +258,38 @@ async function removeAideckCodexIndexRecord(accountId: string): Promise<void> {
     return;
   }
 
-  await fs.mkdir(path.dirname(indexPath), { recursive: true });
-  await writeJsonFile(indexPath, {
-    ...existing,
-    schema_version: readNumber(existing["schema_version"]) ?? 1,
-    updated_at: Date.now(),
-    accounts: nextAccounts
+  await writeJsonFile(
+    indexPath,
+    {
+      ...existing,
+      schema_version: readNumber(existing["schema_version"]) ?? 1,
+      updated_at: Date.now(),
+      accounts: nextAccounts
+    },
+    assertHeld
+  );
+}
+
+async function clearAideckCurrentAccountIfMatches(root: string, accountId: string): Promise<void> {
+  await withAideckMirrorLock(root, CURRENT_FILE, async (filePath, assertHeld) => {
+    const current = await readJsonFile(filePath);
+    if (readString(current?.["id"]) === accountId) {
+      assertHeld();
+      await fs.rm(filePath, { force: true });
+    }
   });
 }
 
-async function clearAideckCurrentAccountIfMatches(accountId: string): Promise<void> {
-  const currentPath = path.join(getAideckCodexRoot(), "current.json");
-  const current = await readJsonFile(currentPath);
-  if (readString(current?.["id"]) !== accountId) {
-    return;
-  }
-
-  await fs.rm(currentPath, { force: true });
+async function withAideckMirrorLock(
+  root: string,
+  fileName: typeof INDEX_FILE | typeof CURRENT_FILE,
+  operation: (filePath: string, assertHeld: () => void) => Promise<void>
+): Promise<void> {
+  // Profiles and Codex homes can share this mirror even when their repository locks differ.
+  const directory = await fs.realpath(root);
+  await withCredentialLock(path.join(directory, ".codex-accounts-locks"), fileName, (assertHeld) =>
+    operation(path.join(directory, fileName), assertHeld)
+  );
 }
 
 function buildAideckIndexRecord(account: JsonRecord): JsonRecord {
@@ -478,7 +521,7 @@ async function readJsonFile(filePath: string): Promise<JsonRecord | undefined> {
   }
 }
 
-async function writeJsonFile(filePath: string, value: JsonRecord): Promise<void> {
+async function writeJsonFile(filePath: string, value: JsonRecord, beforePublish?: () => void): Promise<void> {
   await ensurePrivateDirectory(path.dirname(filePath));
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   try {
@@ -489,6 +532,7 @@ async function writeJsonFile(filePath: string, value: JsonRecord): Promise<void>
     } finally {
       await file.close();
     }
+    beforePublish?.();
     await fs.rename(temporary, filePath);
   } finally {
     await fs.rm(temporary, { force: true });

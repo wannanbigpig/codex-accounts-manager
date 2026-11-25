@@ -20,10 +20,25 @@ export function applyQuotaUpdate(params: {
   params.account.updatedAt = params.now;
   const previousQuotaSummary = params.account.quotaSummary;
   const nextQuotaSummary = normalizeQuotaSummary(params.quotaSummary);
+  const creditInventory = params.account.resetCreditInventory;
+  if (nextQuotaSummary && creditInventory) {
+    const reportedCount = nextQuotaSummary.resetCreditsAvailable;
+    if (reportedCount !== undefined && reportedCount !== creditInventory.usageCount) {
+      creditInventory.usageCount = reportedCount;
+      if (reportedCount !== creditInventory.snapshot?.availableCount) {
+        creditInventory.refreshAt = 0;
+      }
+    }
+    if (creditInventory.snapshot) {
+      nextQuotaSummary.resetCreditsAvailable = creditInventory.snapshot.availableCount;
+      nextQuotaSummary.resetCreditsNextExpiresAt = creditInventory.snapshot.nextExpiresAt;
+    }
+  }
   const incomingResetCreditsNextExpiresAt = nextQuotaSummary?.resetCreditsNextExpiresAt;
   let preservedResetCreditsExpiry = false;
   if (
     nextQuotaSummary &&
+    !creditInventory?.snapshot &&
     nextQuotaSummary.resetCreditsNextExpiresAt == null &&
     (nextQuotaSummary.resetCreditsAvailable ?? 0) > 0 &&
     previousQuotaSummary?.resetCreditsNextExpiresAt != null
@@ -55,9 +70,17 @@ export function applyQuotaUpdate(params: {
     params.account.planType = updatedPlanType;
     if (isFreePlanType(updatedPlanType)) {
       params.account.subscriptionActiveUntil = undefined;
+      params.account.subscriptionExpirySource = "confirmed-free";
+      params.account.subscriptionQueryLastError = undefined;
+      params.account.subscriptionQueryNextRetryAt = undefined;
+    } else if (params.account.subscriptionExpirySource === "confirmed-free") {
+      params.account.subscriptionExpirySource = undefined;
     }
   }
-  if (params.updatedSubscriptionActiveUntil && !isFreePlanType(updatedPlanType ?? params.account.planType)) {
+  if (
+    params.updatedSubscriptionActiveUntil && !params.account.subscriptionExpirySource &&
+    !isFreePlanType(updatedPlanType ?? params.account.planType)
+  ) {
     params.account.subscriptionActiveUntil = params.updatedSubscriptionActiveUntil;
   }
 

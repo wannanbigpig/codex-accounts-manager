@@ -8,6 +8,7 @@ import type {
 } from "../core/types";
 import { normalizeQuotaSummary } from "../utils/quotaWindows";
 import { normalizePlanType } from "../utils/quotaLabels";
+import { clearDerivedWorkspaceData } from "./accountMetadata";
 import {
   fromSharedQuota,
   fromSharedQuotaError,
@@ -17,24 +18,36 @@ import {
   sanitizeOptionalValue
 } from "./sharedAccounts";
 
-export function toSharedEntries(input: SharedCodexAccountJson | SharedCodexAccountJson[]): SharedCodexAccountJson[] {
-  const entries = Array.isArray(input) ? input : [input];
-  return entries.map(normalizeSharedAccountImportEntry);
+export function toSharedEntries(input: unknown): unknown[] {
+  return Array.isArray(input) ? input : [input];
+}
+
+function isSharedAccountEntry(entry: unknown): entry is SharedCodexAccountJson {
+  return typeof entry === "object" && entry !== null && !Array.isArray(entry);
+}
+
+export function requireSharedAccountEntry(entry: unknown): SharedCodexAccountJson {
+  if (!isSharedAccountEntry(entry)) {
+    throw new Error("Shared account entry must be a JSON object");
+  }
+  return entry;
 }
 
 export function previewSharedAccountsImportEntries(
-  entries: SharedCodexAccountJson[],
-  existingIds: Set<string>
+  entries: unknown[],
+  existingIds: Set<string>,
+  accounts: readonly CodexAccountRecord[] = []
 ): CodexImportPreviewSummary {
-  const normalizedEntries = toSharedEntries(entries);
   const invalidEntries: CodexImportPreviewIssue[] = [];
+  const validEntries: NonNullable<CodexImportPreviewSummary["validEntries"]> = [];
   let valid = 0;
   let overwriteCount = 0;
 
-  normalizedEntries.forEach((entry, index) => {
+  entries.forEach((entry, index) => {
     try {
-      const preview = previewSharedEntry(entry);
+      const preview = previewSharedEntry(requireSharedAccountEntry(entry), accounts);
       valid += 1;
+      validEntries.push({ index, email: preview.email });
       if (preview.storageId && existingIds.has(preview.storageId)) {
         overwriteCount += 1;
       }
@@ -44,33 +57,43 @@ export function previewSharedAccountsImportEntries(
   });
 
   return {
-    total: normalizedEntries.length,
+    total: entries.length,
     valid,
     overwriteCount,
     invalidCount: invalidEntries.length,
-    invalidEntries
+    invalidEntries,
+    ...(validEntries.length ? { validEntries } : {})
   };
 }
 
-export function createSharedImportIssue(
-  entry: SharedCodexAccountJson,
-  index: number,
-  error: unknown
-): CodexImportResultIssue {
+export function createSharedImportIssue(entry: unknown, index: number, error: unknown): CodexImportResultIssue {
+  const account = isSharedAccountEntry(entry) ? entry : undefined;
   return {
     index,
-    accountId: sanitizeOptionalValue(entry.account_id) ?? sanitizeOptionalValue(entry.id),
-    email: sanitizeOptionalValue(entry.email),
+    accountId: sanitizeOptionalValue(account?.account_id) ?? sanitizeOptionalValue(account?.id),
+    email: sanitizeOptionalValue(account?.email),
     message: typeof error === "string" ? error : getErrorMessage(error)
   };
 }
 
 export function applySharedAccountEntry(account: CodexAccountRecord, entry: SharedCodexAccountJson): void {
-  account.userId = sanitizeOptionalValue(entry.user_id) ?? account.userId;
-  account.planType = normalizePlanType(sanitizeOptionalValue(entry.plan_type) ?? account.planType);
-  account.subscriptionActiveUntil = sanitizeOptionalValue(entry.subscription_active_until) ?? account.subscriptionActiveUntil;
-  account.accountId = sanitizeOptionalValue(entry.account_id) ?? account.accountId;
-  account.organizationId = sanitizeOptionalValue(entry.organization_id) ?? account.organizationId;
+  const accountId = sanitizeOptionalValue(entry.account_id) ?? account.accountId;
+  const organizationId = sanitizeOptionalValue(entry.organization_id) ?? account.organizationId;
+  const userId = sanitizeOptionalValue(entry.user_id) ?? account.userId;
+  if (
+    (account.accountId && account.accountId !== accountId) ||
+    (account.organizationId && account.organizationId !== organizationId) ||
+    (account.userId && account.userId !== userId)
+  ) {
+    clearDerivedWorkspaceData(account);
+  }
+  if (!account.subscriptionExpirySource) {
+    account.planType = normalizePlanType(sanitizeOptionalValue(entry.plan_type) ?? account.planType);
+    account.subscriptionActiveUntil = sanitizeOptionalValue(entry.subscription_active_until) ?? account.subscriptionActiveUntil;
+  }
+  account.userId = userId;
+  account.accountId = accountId;
+  account.organizationId = organizationId;
   account.accountName = sanitizeOptionalValue(entry.account_name) ?? account.accountName;
   account.tags = normalizeAccountTags(entry.tags, account.tags);
   account.addedVia = sanitizeOptionalValue(entry.added_via) ?? account.addedVia ?? "json";
@@ -91,8 +114,4 @@ export function applySharedAccountEntry(account: CodexAccountRecord, entry: Shar
       account.lastQuotaAt = account.updatedAt;
     }
   }
-}
-
-function normalizeSharedAccountImportEntry(entry: SharedCodexAccountJson): SharedCodexAccountJson {
-  return entry;
 }

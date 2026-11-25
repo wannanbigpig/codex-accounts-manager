@@ -33,7 +33,7 @@ export class WakeupStore {
     } catch (error) {
       if (hasCode(error, "ENOENT")) {
         return {
-          version: 4,
+          version: 5,
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           tasks: [],
           history: []
@@ -43,7 +43,7 @@ export class WakeupStore {
     }
     const state = JSON.parse(raw) as Omit<WakeupState, "version"> & { version: number; enabled?: unknown };
     if (
-      ![1, 2, 3, 4].includes(state?.version) ||
+      ![1, 2, 3, 4, 5].includes(state?.version) ||
       (state.version < 4 && typeof state.enabled !== "boolean") ||
       typeof state.timeZone !== "string" ||
       !Array.isArray(state.tasks) ||
@@ -117,9 +117,9 @@ export class WakeupStore {
       throw new Error("Wakeup history storage is invalid; existing data was preserved");
     }
     // Keep each task's explicit state; the retired master switch no longer gates execution.
-    // The next mutation persists version 4 under the shared lease, preventing older hosts from overwriting it.
+    // Older hosts cannot execute schedules whose stored occurrence includes a delay.
     delete state.enabled;
-    return { ...state, version: 4 };
+    return { ...state, version: 5 };
   }
 
   async saveTask(input: WakeupTaskInput, now = Date.now()): Promise<WakeupTask> {
@@ -224,7 +224,7 @@ export class WakeupStore {
         }
         await fs.writeFile(hostPath, JSON.stringify({ pid: process.pid }), { flag: "wx", mode: 0o600 });
         return { ...state.startupSession };
-      });
+      }, true);
       let released = false;
       return {
         session,
@@ -247,7 +247,10 @@ export class WakeupStore {
     }
   }
 
-  async syncQuotaSchedules(getAccount: (id: string) => Promise<CodexAccountRecord | undefined>): Promise<void> {
+  async syncQuotaSchedules(
+    getAccount: (id: string) => Promise<CodexAccountRecord | undefined>,
+    now = Date.now()
+  ): Promise<void> {
     const current = await this.read();
     if (!current.tasks.some((task) => task.enabled && task.scheduleMode === "quota_reset")) {
       return;
@@ -256,6 +259,8 @@ export class WakeupStore {
       const accounts = new Map<string, CodexAccountRecord | undefined>();
       for (const task of state.tasks.filter((task) => task.enabled && task.scheduleMode === "quota_reset")) {
         const snapshots = task.quotaResetSnapshots ?? {};
+        const floor = Math.max(task.updatedAt, task.lastScheduledAt ?? 0);
+        const delay = (task.quotaResetDelayMinutes ?? 0) * 60_000;
         for (const id of task.accountIds) {
           if (!accounts.has(id)) {
             try {
@@ -269,12 +274,17 @@ export class WakeupStore {
             continue;
           }
           const observedAt = account.lastQuotaAt ?? 0;
-          if (!snapshots[id] || snapshots[id]!.observedAt <= observedAt) {
-            snapshots[id] = { observedAt, times: collectQuotaResetTimes(account.quotaSummary, task.quotaResetWindow!) };
+          const previous = snapshots[id];
+          if (!previous || previous.observedAt <= observedAt) {
+            // A refresh after the boundary can report only the next reset. Keep the outstanding occurrence.
+            const due = previous?.times.filter((time) => time > floor && time - delay <= Math.min(now, observedAt)) ?? [];
+            const future = collectQuotaResetTimes(account.quotaSummary, task.quotaResetWindow!)
+              .filter((time) => time > task.updatedAt)
+              .map((time) => time + delay);
+            snapshots[id] = { observedAt, times: [...new Set([...due, ...future])] };
           }
         }
         task.quotaResetSnapshots = snapshots;
-        const floor = Math.max(task.updatedAt, task.lastScheduledAt ?? 0);
         const times = task.accountIds.flatMap((id) => snapshots[id]?.times ?? []).filter((time) => time > floor);
         task.nextRunAt = times.length ? Math.min(...times) : 0;
         task.nextRunAccountIds = task.accountIds.filter((id) => snapshots[id]?.times.includes(task.nextRunAt));
@@ -332,11 +342,9 @@ export class WakeupStore {
         trigger === "scheduled" && task.scheduleMode === "quota_reset"
           ? { ...task, accountIds: [...(task.nextRunAccountIds ?? [])] }
           : task;
-      if (!executionTask.accountIds.length) {
-        return undefined;
-      }
-      // Check the latest task under the state lock before consuming its occurrence.
-      if (canExecute && !(await canExecute(executionTask))) {
+      const missed = trigger === "scheduled" && expectedDue !== undefined && now - expectedDue > WAKEUP_GRACE_MS;
+      // Give other windows a chance to claim the occurrence until its grace period ends.
+      if (!missed && (!executionTask.accountIds.length || (canExecute && !(await canExecute(executionTask))))) {
         return undefined;
       }
       if (trigger === "scheduled") {
@@ -362,7 +370,7 @@ export class WakeupStore {
         status: "running",
         results: []
       };
-      if (trigger === "scheduled" && now - expectedDue! > WAKEUP_GRACE_MS) {
+      if (missed) {
         run.status = "missed";
         run.finishedAt = now;
         state.history = [run, ...state.history].slice(0, 100);
@@ -432,7 +440,7 @@ export class WakeupStore {
     return path.join(this.directory, `run-${createHash("sha256").update(taskId).digest("hex")}`);
   }
 
-  private async mutate<T>(operation: (state: WakeupState) => T | Promise<T>): Promise<T> {
+  private async mutate<T>(operation: (state: WakeupState) => T | Promise<T>, persistUnchanged = false): Promise<T> {
     return this.mutex.runExclusive("state", async () => {
       await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
       let compromised: Error | undefined;
@@ -445,15 +453,20 @@ export class WakeupStore {
       });
       try {
         const state = await this.read();
+        const before = persistUnchanged ? undefined : JSON.stringify(state, null, 2);
         const result = await operation(state);
         if (compromised) {
           throw compromised;
+        }
+        const serialized = JSON.stringify(state, null, 2);
+        if (before === serialized) {
+          return result;
         }
         const temporary = `${this.statePath}.${randomUUID()}.tmp`;
         try {
           const file = await fs.open(temporary, "wx", 0o600);
           try {
-            await file.writeFile(JSON.stringify(state, null, 2));
+            await file.writeFile(serialized);
             await file.sync();
           } finally {
             await file.close();

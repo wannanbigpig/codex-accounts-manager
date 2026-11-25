@@ -48,6 +48,10 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
       return 30_000;
     case "refreshAll":
       return 120_000;
+    case "getResetCreditHistory":
+      return 90_000;
+    case "previewImportSharedJson":
+      return 300_000;
     case "restoreFromBackup":
     case "restoreFromAuthJson":
       return 60_000;
@@ -63,6 +67,8 @@ export function getActionTimeoutMs(action: DashboardActionName): number {
     case "startOAuthAutoFlow":
     case "runWakeupTask":
       return 300_000;
+    case "completeDeviceOAuthSession":
+      return 930_000;
     default:
       return 30_000;
   }

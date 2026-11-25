@@ -181,6 +181,10 @@ describe("renderAccountPanel", () => {
     expect(panel).not.toContain("Business");
   });
 
+  it("shows an explicit Pro tier in the status tooltip", () => {
+    expect(renderAccountPanel({ ...account, planType: "codex-pro-20x" }, true, true)).toContain("Pro 20x");
+  });
+
   it("shows Code Review when that window is present", () => {
     const panel = renderAccountPanel(
       {

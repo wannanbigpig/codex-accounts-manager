@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -6,6 +8,12 @@ import { WakeupRequestError } from "../src/domain/wakeup/diagnostics";
 import { WakeupStore } from "../src/storage/wakeupStore";
 import { WakeupService } from "../src/application/wakeup/service";
 import type { WakeupTaskInput } from "../src/domain/wakeup/types";
+import { sendWakeupRequest } from "../src/services/wakeupClient";
+
+vi.mock("../src/infrastructure/config/proxyEnvironment", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/infrastructure/config/proxyEnvironment")>(),
+  getCodexProxyDispatcher: () => undefined
+}));
 
 const input: WakeupTaskInput = {
   name: "Morning",
@@ -73,6 +81,54 @@ describe("wakeup execution", () => {
     expect(run.results[1]!.message).not.toContain("secret-value");
     await store.saveTask({ ...task, model: "edited-model" }, due);
     expect((await store.read()).history[0]!.model).toBe(input.model);
+  });
+  it.each(["declared SSE failure", "truncated HTTP body"] as const)("persists %s as a failed run without a reply or retry", async (failure) => {
+    const task = await store.saveTask({ ...input, accountIds: ["a"] }, before);
+    const delta = 'data: {"type":"response.output_text.delta","delta":"Partial reply"}\n\n';
+    let requests = 0;
+    const server = createServer((request, response) => {
+      requests += 1;
+      request.resume();
+      const headers = { "Content-Type": "text/event-stream", Connection: "close" };
+      if (failure === "declared SSE failure") {
+        response.writeHead(200, headers);
+        response.end(delta + 'event: response.failed\ndata: {"response":{"status":"failed"}}\n\n');
+      } else {
+        // Closing before Content-Length bytes have arrived makes this a transport error.
+        response.writeHead(200, { ...headers, "Content-Length": Buffer.byteLength(delta) + 100 });
+        response.end(delta);
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    try {
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("The local wakeup fixture has no listening port");
+      }
+      const endpoint = `http://127.0.0.1:${address.port}/responses`;
+      const tokens = { accessToken: "fixture-access-token", idToken: "fixture-id-token" };
+      const owner = service((_id, wakeup, signal) => sendWakeupRequest(tokens, wakeup, signal, { endpoint }));
+      await owner.poll();
+      await owner.poll();
+
+      const { history } = await store.read();
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({
+        taskId: task.id, status: "failed", trigger: "scheduled",
+        results: [{ accountId: "a", status: "failed", errorStage: "stream" }]
+      });
+      expect(history[0]?.results[0]?.reply).toBeUndefined();
+      expect(history[0]?.results[0]?.message).toBe(
+        failure === "declared SSE failure"
+          ? "Codex wakeup response failed or was incomplete"
+          : "Codex wakeup stream ended unexpectedly"
+      );
+      expect(requests).toBe(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
   it("serializes tasks sharing an account and cancels queued requests on disposal", async () => {
     await store.saveTask({ ...input, name: "First", accountIds: ["a"] }, before);
@@ -324,6 +380,26 @@ describe("wakeup execution", () => {
     await service(execute, due + 300_001).poll();
     expect(execute).not.toHaveBeenCalled();
     expect((await store.read()).history[0]?.status).toBe("missed");
+  });
+  it("advances and records the missed occurrence when an account stays unavailable past the grace period", async () => {
+    const task = await store.saveTask(input, before);
+    const execute = vi.fn(async () => undefined);
+    const owner = new WakeupService(
+      store,
+      {
+        getAccount: async (id) => (id === "a" ? repo.getAccount(id) : undefined)
+      },
+      execute,
+      () => {},
+      () => due + 300_001
+    );
+    services.push(owner);
+    await owner.poll();
+    await owner.poll();
+    const state = await store.read();
+    expect(state.history).toMatchObject([{ taskId: task.id, scheduledAt: due, status: "missed" }]);
+    expect(state.tasks[0]!.nextRunAt).toBeGreaterThan(due + 300_001);
+    expect(execute).not.toHaveBeenCalled();
   });
   it("redacts credentials from persistent failure messages and does not automatically retry", async () => {
     await store.saveTask(input, before);

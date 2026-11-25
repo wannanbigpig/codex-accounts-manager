@@ -1,19 +1,27 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type * as vscode from "vscode";
-import type { CodexTokens } from "../src/core/types";
+import type { CodexAuthFile, CodexTokens } from "../src/core/types";
 
-const { writeAuthFileMock, readAuthFileMock } = vi.hoisted(() => ({
+const fixtureHome = vi.hoisted(() => vi.fn<() => string | undefined>());
+vi.mock("os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("os")>();
+  return { ...actual, homedir: () => fixtureHome() ?? actual.homedir() };
+});
+
+const { writeAuthFileMock, readAuthFileMock, getAuthJsonPathMock } = vi.hoisted(() => ({
   writeAuthFileMock: vi.fn(),
-  readAuthFileMock: vi.fn()
+  readAuthFileMock: vi.fn(),
+  getAuthJsonPathMock: vi.fn()
 }));
 
 vi.mock("../src/codex", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/codex")>();
   return {
     ...actual,
+    getAuthJsonPath: getAuthJsonPathMock,
     readAuthFile: readAuthFileMock,
     writeAuthFile: writeAuthFileMock
   };
@@ -22,6 +30,7 @@ vi.mock("../src/codex", async (importOriginal) => {
 import { AccountsRepository } from "../src/storage";
 import { mirrorAideckCodexAccount } from "../src/storage/aideckCodexStorage";
 import * as profileService from "../src/services/profile";
+import { SUBSCRIPTION_ACCOUNTS_CHECK_URL, SUBSCRIPTIONS_URL } from "../src/infrastructure/config/apiEndpoints";
 import { buildAccountStorageId } from "../src/utils/accountIdentity";
 
 function createJwt(payload: Record<string, unknown>): string {
@@ -35,6 +44,7 @@ function createTokens(
   options: {
     organizationId?: string;
     userId?: string;
+    issuedAt?: number;
   } = {}
 ): CodexTokens {
   const authPayload: Record<string, unknown> = {
@@ -53,10 +63,23 @@ function createTokens(
       "https://api.openai.com/auth": authPayload
     }),
     accessToken: createJwt({
+      iat: options.issuedAt,
       "https://api.openai.com/auth": authPayload
     }),
     refreshToken: "refresh-token",
     accountId
+  };
+}
+
+function authForTokens(value: CodexTokens): CodexAuthFile {
+  return {
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: value.idToken,
+      access_token: value.accessToken,
+      refresh_token: value.refreshToken,
+      account_id: value.accountId
+    }
   };
 }
 
@@ -85,22 +108,112 @@ async function writeAideckAccountJson(accountId: string, value: Record<string, u
 describe("AccountsRepository token persistence", () => {
   let tempDir: string;
   let originalAideckDataDir: string | undefined;
+  let profile: MockInstance<typeof profileService.fetchRemoteAccountProfile>;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-accounts-test-"));
+    fixtureHome.mockReturnValue(tempDir);
+    getAuthJsonPathMock.mockReturnValue(path.join(tempDir, "auth.json"));
     originalAideckDataDir = process.env.AIDECK_DATA_DIR;
     process.env.AIDECK_DATA_DIR = path.join(tempDir, "aideck-data");
     writeAuthFileMock.mockReset();
     readAuthFileMock.mockReset().mockResolvedValue(undefined);
+    profile = vi.spyOn(profileService, "fetchRemoteAccountProfile").mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
+    profile.mockRestore();
     if (originalAideckDataDir === undefined) {
       delete process.env.AIDECK_DATA_DIR;
     } else {
       process.env.AIDECK_DATA_DIR = originalAideckDataDir;
     }
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("reports malformed JSON rows individually and imports the remaining valid accounts", async () => {
+    const repo = new AccountsRepository({
+      globalStorageUri: { fsPath: tempDir },
+      secrets: { get: vi.fn(), store: vi.fn() }
+    } as unknown as vscode.ExtensionContext);
+    const token = createTokens();
+    const mixed = [null, { tokens: { id_token: token.idToken, access_token: token.accessToken } }, []];
+
+    try {
+      expect(await repo.previewSharedAccountsImport(mixed)).toMatchObject({
+        total: 3,
+        valid: 1,
+        invalidCount: 2,
+        invalidEntries: [{ index: 0 }, { index: 2 }]
+      });
+      expect(await repo.importSharedAccountsWithSummary(mixed)).toMatchObject({
+        total: 3,
+        successCount: 1,
+        failedCount: 2,
+        failures: [{ index: 0 }, { index: 2 }]
+      });
+      expect((await repo.listAccounts()).map((account) => account.email)).toEqual(["dev@example.com"]);
+    } finally {
+      repo.dispose();
+    }
+  });
+
+  it("persists each workspace's subscription detail and protects it from later quota or profile fallback", async () => {
+    const personal = createTokens("acct_personal", "dev@example.com", { userId: "user_1" });
+    const business = createTokens("acct_business", "dev@example.com", { userId: "user_1", organizationId: "org_business" });
+    const secrets = new Map([
+      ["codex.account.personal", JSON.stringify(personal)],
+      ["codex.account.business", JSON.stringify(business)]
+    ]);
+    const repo = new AccountsRepository({
+      globalStorageUri: { fsPath: tempDir },
+      secrets: {
+        get: async (key: string) => secrets.get(key),
+        store: async (key: string, value: string) => { secrets.set(key, value); }
+      }
+    } as unknown as vscode.ExtensionContext);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.origin + url.pathname === SUBSCRIPTION_ACCOUNTS_CHECK_URL) {
+        return Response.json({
+          accounts: {
+            acct_business: {
+              account: { account_id: "acct_business", organization_id: "org_business", structure: "workspace", name: "Business", plan_type: "business" },
+              entitlement: { subscription_plan: "business", expires_at: "2099-12-01T00:00:00Z" }
+            },
+            acct_personal: {
+              account: { account_id: "acct_personal", structure: "personal", plan_type: "plus" },
+              entitlement: { subscription_plan: "plus", expires_at: "2099-11-01T00:00:00Z" }
+            }
+          },
+          account_ordering: ["acct_business", "acct_personal"]
+        });
+      }
+      if (url.origin + url.pathname === SUBSCRIPTIONS_URL) {
+        return url.searchParams.get("account_id") === "acct_personal"
+          ? Response.json({ subscription_plan: "plus", active_until: "2099-10-01T00:00:00Z" })
+          : Response.json({ subscription_plan: "business", active_until: "2099-09-01T00:00:00Z" });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    try {
+      await fs.writeFile(path.join(tempDir, "accounts-index.json"), JSON.stringify({ accounts: [
+        { id: "personal", email: "dev@example.com", accountId: "acct_personal", accountStructure: "personal", planType: "plus", isActive: false, createdAt: 1, updatedAt: 1 },
+        { id: "business", email: "dev@example.com", accountId: "acct_business", accountStructure: "workspace", organizationId: "org_business", accountName: "Business", planType: "team", isActive: false, createdAt: 1, updatedAt: 1 }
+      ] }));
+
+      await Promise.all([repo.refreshSubscriptionState("personal", true), repo.refreshSubscriptionState("business", true)]);
+      expect(await repo.getAccount("personal")).toMatchObject({ planType: "plus", subscriptionExpirySource: "subscription", subscriptionActiveUntil: "2099-10-01T00:00:00Z" });
+      expect(await repo.getAccount("business")).toMatchObject({ planType: "business", subscriptionExpirySource: "subscription", subscriptionActiveUntil: "2099-09-01T00:00:00Z" });
+
+      await repo.updateQuota("business", { hourlyPercentage: 90, weeklyPercentage: 80 }, undefined, undefined, "business", "2099-12-01T00:00:00Z");
+      profile.mockResolvedValueOnce({ accountId: "acct_business", organizationId: "org_business", subscriptionActiveUntil: "2099-12-01T00:00:00Z" });
+      await repo.refreshAccountProfileMetadata("business");
+      expect(await repo.getAccount("business")).toMatchObject({ subscriptionExpirySource: "subscription", subscriptionActiveUntil: "2099-09-01T00:00:00Z" });
+    } finally {
+      fetchMock.mockRestore();
+      repo.dispose();
+    }
   });
 
   it("syncs active auth.json when quota refresh produces updated tokens", async () => {
@@ -143,11 +256,14 @@ describe("AccountsRepository token persistence", () => {
     );
 
     const repo = new AccountsRepository(context);
+    const previousTokens = { ...createTokens("acct_123"), refreshToken: "previous-refresh-token" };
     const updatedTokens = createTokens("acct_123");
+    await context.secrets.store("codex.account.account-1", JSON.stringify(previousTokens));
+    readAuthFileMock.mockResolvedValue(authForTokens(previousTokens));
 
-    await repo.updateQuota("account-1", undefined, undefined, updatedTokens);
+    await repo.updateQuota("account-1", undefined, undefined, updatedTokens, undefined, undefined, previousTokens);
 
-    expect(writeAuthFileMock).toHaveBeenCalledWith(updatedTokens);
+    expect(writeAuthFileMock).toHaveBeenCalledExactlyOnceWith(updatedTokens);
     expect(JSON.parse(secrets.get("codex.account.account-1") ?? "{}")).toMatchObject({
       refreshToken: "refresh-token",
       accountId: "acct_123"
@@ -230,7 +346,32 @@ describe("AccountsRepository token persistence", () => {
     repo.dispose();
   });
 
-  it("reads fresher Codex tokens from Aideck account storage", async () => {
+  it.each([
+    {
+      description: "keeps the existing refresh token when AiDeck has the same access generation",
+      mirrorIssuedAt: 20,
+      storedRefreshToken: "stored-refresh-token",
+      adopts: false
+    },
+    {
+      description: "keeps the existing refresh token when AiDeck is a known older generation",
+      mirrorIssuedAt: 10,
+      storedRefreshToken: "stored-refresh-token",
+      adopts: false
+    },
+    {
+      description: "adopts the AiDeck refresh token when its access generation is known newer",
+      mirrorIssuedAt: 30,
+      storedRefreshToken: "stored-refresh-token",
+      adopts: true
+    },
+    {
+      description: "fills a missing refresh token from AiDeck with the same access generation",
+      mirrorIssuedAt: 20,
+      storedRefreshToken: undefined,
+      adopts: true
+    }
+  ])("$description", async ({ mirrorIssuedAt, storedRefreshToken, adopts }) => {
     const secrets = new Map<string, string>();
     const context = {
       globalStorageUri: {
@@ -265,10 +406,17 @@ describe("AccountsRepository token persistence", () => {
       }),
       "utf8"
     );
-    await context.secrets.store(`codex.account.${storageId}`, JSON.stringify(createTokens("acct_123")));
+    const current = {
+      ...createTokens("acct_123", "dev@example.com", { issuedAt: 20 }),
+      refreshToken: storedRefreshToken
+    };
+    await context.secrets.store(`codex.account.${storageId}`, JSON.stringify(current));
+    readAuthFileMock.mockResolvedValue(authForTokens(current));
 
-    const externalTokens = createTokens("acct_123");
-    externalTokens.refreshToken = "aideck-refreshed-token";
+    const externalTokens = {
+      ...createTokens("acct_123", "dev@example.com", { issuedAt: mirrorIssuedAt }),
+      refreshToken: "aideck-refreshed-token"
+    };
     const aideckAccountFile = path.join(
       process.env.AIDECK_DATA_DIR as string,
       "accounts",
@@ -293,13 +441,15 @@ describe("AccountsRepository token persistence", () => {
     );
 
     const repo = new AccountsRepository(context);
-    const merged = await repo.getTokens(storageId);
+    const expected = adopts ? externalTokens : current;
 
-    expect(merged?.refreshToken).toBe("aideck-refreshed-token");
-    expect(JSON.parse(secrets.get(`codex.account.${storageId}`) ?? "{}")).toMatchObject({
-      refreshToken: "aideck-refreshed-token",
-      accountId: "acct_123"
-    });
+    expect(await repo.getTokens(storageId)).toEqual(expected);
+    expect(JSON.parse(secrets.get(`codex.account.${storageId}`) ?? "{}")).toEqual(expected);
+    if (!adopts) {
+      expect(writeAuthFileMock).not.toHaveBeenCalled();
+    } else if (storedRefreshToken) {
+      expect(writeAuthFileMock).toHaveBeenCalledExactlyOnceWith(expected);
+    }
 
     repo.dispose();
   });
@@ -349,6 +499,7 @@ describe("AccountsRepository token persistence", () => {
 
     const repo = new AccountsRepository(context);
     await repo.init();
+    expect(profile).toHaveBeenCalledWith(expect.objectContaining({ accessToken: aideckTokens.accessToken }));
 
     const imported = await repo.getAccount(storageId);
     expect(imported).toMatchObject({
@@ -762,8 +913,10 @@ describe("AccountsRepository token persistence", () => {
     );
 
     const repo = new AccountsRepository(context);
-    const updatedTokens = createTokens("acct_123");
-    updatedTokens.refreshToken = "shared-refresh-token";
+    const previousTokens = createTokens("acct_123");
+    const updatedTokens = { ...previousTokens, refreshToken: "shared-refresh-token" };
+    await context.secrets.store(`codex.account.${storageId}`, JSON.stringify(previousTokens));
+    readAuthFileMock.mockResolvedValue(authForTokens(previousTokens));
 
     await repo.updateQuota(
       storageId,
@@ -782,7 +935,8 @@ describe("AccountsRepository token persistence", () => {
       undefined,
       updatedTokens,
       undefined,
-      "1800000000"
+      "1800000000",
+      previousTokens
     );
 
     const aideckAccountFile = path.join(
@@ -803,6 +957,7 @@ describe("AccountsRepository token persistence", () => {
       await fs.readFile(path.join(process.env.AIDECK_DATA_DIR as string, "accounts", "codex", "current.json"), "utf8")
     );
     expect(aideckCurrent.id).toBe(storageId);
+    expect(writeAuthFileMock).toHaveBeenCalledExactlyOnceWith(updatedTokens);
 
     const aideckIndex = JSON.parse(
       await fs.readFile(
@@ -1096,8 +1251,7 @@ describe("AccountsRepository token persistence", () => {
         })
       }
     } as unknown as vscode.ExtensionContext;
-    const profileSpy = vi
-      .spyOn(profileService, "fetchRemoteAccountProfile")
+    profile
       .mockResolvedValueOnce({ accountId: "acct-1", planType: "business" })
       .mockResolvedValueOnce({ accountId: "acct-1", planType: "plus", accountName: "Platform" });
     const repo = new AccountsRepository(context);
@@ -1107,7 +1261,6 @@ describe("AccountsRepository token persistence", () => {
 
     expect(synced.planType).toBe("business");
     expect(synced.accountName).toBe("Platform");
-    profileSpy.mockRestore();
     repo.dispose();
   });
 

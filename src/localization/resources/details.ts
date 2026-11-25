@@ -23,11 +23,31 @@ type DetailCopyResource = {
   reviewQuota: string;
   reset: string;
   usageTitle: string;
+  quotaHistoryTitle: string;
+  quotaHistoryConsumed: string;
+  quotaHistorySampleTime: string;
+  quotaHistoryEmpty: string;
+  quotaHistoryPoints: string;
+  quotaHistoryReset: string;
+  previousPage: string;
+  nextPage: string;
+  localSessionTitle: string;
+  localSessionHint: string;
+  localSessionLoad: string;
+  localSessionLimited: string;
+  localSessionProject: string;
+  localSessionModel: string;
+  localSessionAll: string;
+  localSessionTokens: string;
   usageHint: string;
   usageSubtitle: string;
   usageLoading: string;
   usageEmpty: string;
   usageError: string;
+  usageLifetimeLabel: string;
+  usageLifetimeLoading: string;
+  usageLifetimeEmpty: string;
+  usageLifetimeError: string;
   rangeLabelTemplate: string;
   metadata: string;
   accountId: string;
@@ -67,11 +87,31 @@ const en: DetailCopyResource = {
   reviewQuota: "Code review quota",
   reset: "Reset",
   usageTitle: "Usage details",
+  quotaHistoryTitle: "Local quota trend",
+  quotaHistoryConsumed: "Observed consumption",
+  quotaHistorySampleTime: "Sample time",
+  quotaHistoryEmpty: "Quota changes will appear here after successful refreshes.",
+  quotaHistoryPoints: "pp",
+  quotaHistoryReset: "Window changed",
+  previousPage: "Previous",
+  nextPage: "Next",
+  localSessionTitle: "Local session usage",
+  localSessionHint: "Last 30 days from this extension host. Includes sessions from any account.",
+  localSessionLoad: "Read local usage",
+  localSessionLimited: "Some records were skipped or exceeded the local scan limits.",
+  localSessionProject: "Project",
+  localSessionModel: "Model",
+  localSessionAll: "All",
+  localSessionTokens: "Tokens",
   usageHint: "Usage data is approximate and may be delayed.",
   usageSubtitle: "Personal usage",
   usageLoading: "Loading daily usage...",
   usageEmpty: "No data available for this period",
   usageError: "Failed to load daily usage.",
+  usageLifetimeLabel: "Official lifetime tokens",
+  usageLifetimeLoading: "Loading…",
+  usageLifetimeEmpty: "Unavailable",
+  usageLifetimeError: "Failed to load",
   rangeLabelTemplate: "Last {days} days",
   metadata: "Metadata",
   accountId: "Account ID",
@@ -112,11 +152,31 @@ export const detailCopyResources = defineLocaleResources(en, {
     reviewQuota: "代码审查配额",
     reset: "重置",
     usageTitle: "使用详情",
+    quotaHistoryTitle: "本地配额趋势",
+    quotaHistoryConsumed: "观测到的消耗",
+    quotaHistorySampleTime: "采样时间",
+    quotaHistoryEmpty: "成功刷新后会在这里记录配额变化。",
+    quotaHistoryPoints: "百分点",
+    quotaHistoryReset: "窗口已变更",
+    previousPage: "上一页",
+    nextPage: "下一页",
+    localSessionTitle: "本地会话用量",
+    localSessionHint: "读取当前扩展宿主近 30 天的会话，包含不同账号的记录。",
+    localSessionLoad: "读取本地用量",
+    localSessionLimited: "部分记录无法读取或超出本地扫描上限。",
+    localSessionProject: "项目",
+    localSessionModel: "模型",
+    localSessionAll: "全部",
+    localSessionTokens: "Token",
     usageHint: "使用数据为近似值，可能延迟更新。",
     usageSubtitle: "个人使用",
     usageLoading: "正在加载每日使用情况...",
     usageEmpty: "在此期间无数据",
     usageError: "每日使用情况加载失败。",
+    usageLifetimeLabel: "官方累计 Token",
+    usageLifetimeLoading: "加载中…",
+    usageLifetimeEmpty: "暂无数据",
+    usageLifetimeError: "加载失败",
     rangeLabelTemplate: "最近 {days} 天",
     metadata: "元数据",
     accountId: "账号 ID",
@@ -150,11 +210,31 @@ export const detailCopyResources = defineLocaleResources(en, {
     reviewQuota: "程式碼審查配額",
     reset: "重置",
     usageTitle: "使用詳情",
+    quotaHistoryTitle: "本機配額趨勢",
+    quotaHistoryConsumed: "觀測到的消耗",
+    quotaHistorySampleTime: "採樣時間",
+    quotaHistoryEmpty: "成功重新整理後會在這裡記錄配額變化。",
+    quotaHistoryPoints: "百分點",
+    quotaHistoryReset: "視窗已變更",
+    previousPage: "上一頁",
+    nextPage: "下一頁",
+    localSessionTitle: "本機工作階段用量",
+    localSessionHint: "讀取目前擴充功能宿主近 30 天的工作階段，包含不同帳號的記錄。",
+    localSessionLoad: "讀取本機用量",
+    localSessionLimited: "部分記錄無法讀取或超出本機掃描上限。",
+    localSessionProject: "專案",
+    localSessionModel: "模型",
+    localSessionAll: "全部",
+    localSessionTokens: "Token",
     usageHint: "使用資料為近似值，可能會延遲更新。",
     usageSubtitle: "個人使用",
     usageLoading: "正在載入每日使用情況...",
     usageEmpty: "此期間沒有資料",
     usageError: "每日使用情況載入失敗。",
+    usageLifetimeLabel: "官方累計 Token",
+    usageLifetimeLoading: "載入中…",
+    usageLifetimeEmpty: "暫無資料",
+    usageLifetimeError: "載入失敗",
     rangeLabelTemplate: "最近 {days} 天",
     metadata: "中繼資料",
     accountId: "帳號 ID",

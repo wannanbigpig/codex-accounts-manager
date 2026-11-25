@@ -83,11 +83,15 @@ export function reduceSharedImportActionResult(
   }
 
   if (message.action === "previewImportSharedJson" && message.payload?.importPreview) {
+    const preview = message.payload.importPreview;
+    const probes = preview.quotaProbes && new Map([
+      ...(state.importPreview?.quotaProbes ?? []), ...preview.quotaProbes
+    ].map((probe) => [probe.index, probe]));
     return {
       handled: true,
       next: {
         importJsonError: undefined,
-        importPreview: message.payload.importPreview,
+        importPreview: probes ? { ...preview, quotaProbes: [...probes.values()] } : preview,
         importResult: undefined
       }
     };

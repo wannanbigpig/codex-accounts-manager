@@ -1,4 +1,4 @@
-import type { DashboardCopy, DashboardOAuthSessionDescriptor, DashboardState } from "../../src/domain/dashboard/types";
+import type { DashboardCopy, DashboardDeviceOAuthGrant, DashboardOAuthSessionDescriptor, DashboardState } from "../../src/domain/dashboard/types";
 import type { CodexImportPreviewSummary, CodexImportResultSummary } from "../../src/core/types";
 import { ImportPreviewPanel, ImportResultPanel, ModalShell } from "./components";
 import { createShareFileName, formatTemplate, maskSharedJson } from "./helpers";
@@ -33,6 +33,15 @@ export function AddAccountModal(props: {
   oauthSession?: DashboardOAuthSessionDescriptor;
   oauthCallbackUrl: string;
   oauthError?: string;
+  deviceActive?: boolean;
+  deviceGrant?: DashboardDeviceOAuthGrant;
+  deviceCancellation?: "pending" | "finishing";
+  deviceBrowserFailed?: boolean;
+  onStartDevice: () => void;
+  onCancelDevice: () => void;
+  onOpenDevicePage: () => void;
+  onCopyDeviceCode: () => void;
+  onCopyDeviceLink: () => void;
   importJsonText: string;
   importJsonError?: string;
   importPreview?: CodexImportPreviewSummary;
@@ -51,7 +60,7 @@ export function AddAccountModal(props: {
   onCompleteOAuth: () => void;
   onImportFileSelected: (file: File) => void;
   onImportTextChange: (value: string) => void;
-  onPreviewImport: () => void;
+  onPreviewImport: (indexes?: number[]) => void;
   onSubmitImport: () => void;
 }) {
   return (
@@ -99,7 +108,7 @@ export function AddAccountModal(props: {
               <button
                 class={`modal-mini-btn modal-icon-btn ${props.copyFeedbackKey === "oauth-link" ? "is-success" : ""}`}
                 type="button"
-                disabled={!props.oauthSession?.authUrl}
+                disabled={!props.oauthSession?.authUrl || props.deviceActive}
                 aria-label={props.copyFeedbackKey === "oauth-link" ? props.copy.copySuccess : props.copy.copyLink}
                 onClick={props.onCopyOauthLink}
               >
@@ -110,7 +119,7 @@ export function AddAccountModal(props: {
           <button
             class="modal-primary-btn"
             type="button"
-            disabled={!props.oauthSession?.authUrl || props.startOAuthAutoPending}
+            disabled={!props.oauthSession?.authUrl || props.startOAuthAutoPending || props.deviceActive}
             onClick={props.onOpenInBrowser}
           >
             <span class="modal-btn-icon" aria-hidden="true">
@@ -131,7 +140,7 @@ export function AddAccountModal(props: {
               <button
                 class="modal-secondary-btn"
                 type="button"
-                disabled={!props.oauthSession || !props.oauthCallbackUrl.trim() || props.completeOAuthPending}
+                disabled={!props.oauthSession || !props.oauthCallbackUrl.trim() || props.completeOAuthPending || props.deviceActive}
                 onClick={props.onCompleteOAuth}
               >
                 {props.completeOAuthPending ? "..." : props.copy.authorizedContinue}
@@ -139,6 +148,45 @@ export function AddAccountModal(props: {
             </div>
           </div>
           <div class="modal-note">{props.copy.oauthReadyHint}</div>
+          {props.deviceActive ? (
+            <div class="modal-summary-card">
+              {props.deviceCancellation ? (
+                <div class="modal-note" role="status">
+                  {props.deviceCancellation === "pending" ? props.copy.deviceOauthCancelPending : props.copy.deviceOauthFinishing}
+                </div>
+              ) : props.deviceGrant ? (
+                <>
+                  <div class="modal-note">{props.copy.deviceOauthPrompt}</div>
+                  <div class="modal-input-row">
+                    <code>{props.deviceGrant.userCode}</code>
+                    <button type="button" class="modal-secondary-btn" onClick={props.onCopyDeviceCode}>
+                      {props.copyFeedbackKey === "device-code" ? props.copy.copySuccess : props.copy.deviceOauthCopy}
+                    </button>
+                  </div>
+                  <div class="modal-note">{props.copy.deviceOauthExpiresAt} {new Date(props.deviceGrant.expiresAt).toLocaleString()}</div>
+                  {props.deviceBrowserFailed ? <div class="modal-error" role="status">{props.copy.deviceOauthBrowserFailed}</div> : null}
+                </>
+              ) : <div class="modal-note" role="status">{props.copy.deviceOauthPreparing}</div>}
+              <div class="modal-actions">
+                {props.deviceGrant && !props.deviceCancellation ? (
+                  <>
+                    <button type="button" class="modal-primary-btn" onClick={props.onOpenDevicePage}>{props.copy.openInBrowser}</button>
+                    <button type="button" class="modal-secondary-btn" onClick={props.onCopyDeviceLink}>
+                      {props.copyFeedbackKey === "device-link" ? props.copy.copySuccess : props.copy.deviceOauthCopyLink}
+                    </button>
+                  </>
+                ) : null}
+                <button type="button" class="modal-secondary-btn" disabled={Boolean(props.deviceCancellation)} onClick={props.onCancelDevice}>
+                  {props.copy.deviceOauthCancel}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" class="modal-secondary-btn" onClick={props.onStartDevice}
+              disabled={props.startOAuthAutoPending || props.completeOAuthPending}>
+              {props.copy.deviceOauthStart}
+            </button>
+          )}
           {props.oauthError ? <div class="modal-error">{props.oauthError}</div> : null}
         </div>
       ) : (
@@ -164,7 +212,8 @@ export function AddAccountModal(props: {
             placeholder={props.copy.importJsonPlaceholder}
             onInput={(event) => props.onImportTextChange(event.currentTarget.value)}
           />
-          {props.importPreview ? <ImportPreviewPanel copy={props.copy} summary={props.importPreview} /> : null}
+          {props.importPreview ? <ImportPreviewPanel copy={props.copy} summary={props.importPreview}
+            pending={props.previewImportPending} onProbe={props.onPreviewImport} /> : null}
           {props.importResult ? <ImportResultPanel copy={props.copy} summary={props.importResult} /> : null}
           {props.importJsonError ? <div class="modal-error">{props.importJsonError}</div> : null}
           <div class="modal-actions">
@@ -190,7 +239,7 @@ export function AddAccountModal(props: {
               class="modal-secondary-btn"
               type="button"
               disabled={!props.importJsonText.trim() || props.previewImportPending}
-              onClick={props.onPreviewImport}
+              onClick={() => props.onPreviewImport()}
             >
               {props.previewImportPending ? "..." : props.copy.importJsonValidate}
             </button>
@@ -198,7 +247,7 @@ export function AddAccountModal(props: {
               class="modal-primary-btn"
               type="button"
               disabled={
-                !props.importJsonText.trim() || !props.importPreview || props.importPreview.valid <= 0 || props.importSharedPending
+                !props.importJsonText.trim() || !props.importPreview || props.importPreview.valid <= 0 || props.importSharedPending || props.previewImportPending
               }
               onClick={props.onSubmitImport}
             >

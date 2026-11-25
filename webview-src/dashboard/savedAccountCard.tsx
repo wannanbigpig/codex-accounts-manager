@@ -36,15 +36,19 @@ export function SavedAccountCard(props: {
   reauthorizePending: boolean;
   resyncProfilePending: boolean;
   refreshPending: boolean;
+  manualRefreshFailed?: boolean;
   detailsPending: boolean;
   removePending: boolean;
   togglePending: boolean;
   updateTagsPending: boolean;
-  consumeResetCreditPending: boolean;
   selected: boolean;
+  previousAccountId?: string;
+  nextAccountId?: string;
+  onMove?: (id: string, targetId: string, after: boolean) => void;
   onToggleSelected: () => void;
   onEditTags: () => void;
   onConfigureWakeup: () => void;
+  onManageResetCredits: () => void;
   onAction: (
     action:
       | "details"
@@ -55,7 +59,6 @@ export function SavedAccountCard(props: {
       | "refresh"
       | "remove"
       | "toggleStatusBar"
-      | "consumeResetCredit"
       | "openExternalUrl",
     accountId?: string,
     payload?: DashboardActionPayload
@@ -88,6 +91,13 @@ export function SavedAccountCard(props: {
     .filter(Boolean)
     .join(" ");
   const visibleMetrics = account.metrics.filter((metric) => metric.visible);
+  const refreshFailed = account.quotaRefreshFailed === true || props.manualRefreshFailed === true;
+  const retryAt = account.quotaRetryAt !== undefined ? new Date(account.quotaRetryAt) : undefined;
+  const validRetry = retryAt && Number.isFinite(retryAt.getTime()) ? retryAt : undefined;
+  const refreshStatus = account.quotaHttpStatus === 429 && (!validRetry || validRetry.getTime() > now)
+    ? copy.quotaRefreshRateLimited
+    : refreshFailed ? (account.lastQuotaAt ? copy.quotaRefreshStale : copy.quotaRefreshFailed)
+      : account.lastQuotaAt ? copy.quotaRefreshSuccess : undefined;
   const stopFlip = (event: Event): void => {
     event.stopPropagation();
   };
@@ -101,7 +111,23 @@ export function SavedAccountCard(props: {
   };
 
   return (
-    <article class={`saved-card-container ${cardStateClass}`}>
+    <article class={`saved-card-container ${cardStateClass}`}
+      onDragOver={(event) => {
+        if (account.reorderable && event.dataTransfer?.types.includes("application/x-codex-account")) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        if (!account.reorderable) {
+          return;
+        }
+        const source = event.dataTransfer?.getData("application/x-codex-account");
+        if (source && source !== account.id) {
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          props.onMove?.(source, account.id, event.clientY > rect.top + rect.height / 2);
+        }
+      }}>
       <div class={`saved-card-inner ${flipped ? "flipped" : ""}`}>
         <section
           class={`saved-card saved-card-front ${cardStateClass}`}
@@ -113,6 +139,18 @@ export function SavedAccountCard(props: {
         >
           <div class="saved-head">
             <div class="saved-top-actions" onClick={stopFlip}>
+              {props.previousAccountId ? (
+                <button type="button" class="saved-control" title={copy.moveAccountUp} aria-label={copy.moveAccountUp}
+                  disabled={props.busy} draggable={!props.busy}
+                  onDragStart={(event) => event.dataTransfer?.setData("application/x-codex-account", account.id)}
+                  onClick={() => props.onMove?.(account.id, props.previousAccountId!, false)}>↑</button>
+              ) : null}
+              {props.nextAccountId ? (
+                <button type="button" class="saved-control" title={copy.moveAccountDown} aria-label={copy.moveAccountDown}
+                  disabled={props.busy} draggable={!props.busy}
+                  onDragStart={(event) => event.dataTransfer?.setData("application/x-codex-account", account.id)}
+                  onClick={() => props.onMove?.(account.id, props.nextAccountId!, true)}>↓</button>
+              ) : null}
               {!account.isActive ? (
                 <button
                   class={`saved-control saved-status-toggle ${account.canToggleStatusBar ? "" : "disabled"} ${account.showInStatusBar ? "is-checked" : ""}`}
@@ -180,6 +218,14 @@ export function SavedAccountCard(props: {
             )}
           </div>
           {account.creditsText ? <div class="saved-credits-line">{account.creditsText}</div> : null}
+          {refreshStatus ? (
+            <div class="saved-credits-line" role="status">
+              {refreshStatus}
+              {account.quotaHttpStatus === 429 && validRetry ? (
+                <> · {copy.quotaRefreshRetryAt} <time dateTime={validRetry.toISOString()}>{validRetry.toLocaleString()}</time></>
+              ) : null}
+            </div>
+          ) : null}
           {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
             <div class="saved-credits-line saved-reset-credits-line">
               {copy.resetCreditsLabel ?? "重置次数"}: {account.resetCreditsAvailable}
@@ -201,16 +247,13 @@ export function SavedAccountCard(props: {
             ) : null}
             <ActionButton icon={renderSwitchIcon()} iconOnly label={copy.switchBtn} pending={props.switchPending} disabled={props.busy} onClick={() => onAction("switch", account.id)} />
             <ActionButton icon={renderRefreshIcon()} iconOnly label={copy.refreshBtn} pending={props.refreshPending} disabled={props.busy} onClick={() => onAction("refresh", account.id)} />
-            {account.resetCreditsAvailable != null && account.resetCreditsAvailable > 0 ? (
-              <ActionButton
-                icon={renderResetCreditsIcon()}
-                iconOnly
-                label={`${copy.resetCreditsBtn ?? "重置配额"} (${account.resetCreditsAvailable})`}
-                pending={props.consumeResetCreditPending}
-                disabled={props.busy}
-                onClick={() => onAction("consumeResetCredit", account.id)}
-              />
-            ) : null}
+            <ActionButton
+              icon={renderResetCreditsIcon()}
+              iconOnly
+              label={copy.resetCreditsManageBtn}
+              disabled={props.busy}
+              onClick={props.onManageResetCredits}
+            />
             <ActionButton icon={renderDetailsIcon()} iconOnly label={copy.detailsBtn} pending={props.detailsPending} disabled={props.busy} onClick={() => onAction("details", account.id, { privacyMode })} />
             <ActionButton icon={renderRemoveIcon()} iconOnly label={copy.removeBtn} pending={props.removePending} disabled={props.busy} onClick={() => onAction("remove", account.id)} />
             <ActionButton icon={<ClockIcon />} iconOnly label={getWakeupCopy(props.lang).configureAccount} disabled={props.busy} onClick={props.onConfigureWakeup} />

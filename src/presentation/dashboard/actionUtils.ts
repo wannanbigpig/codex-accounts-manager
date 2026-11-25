@@ -1,14 +1,7 @@
 import type { DashboardHostMessage } from "../../domain/dashboard/types";
-import type {
-  CodexAccountsRestoreResult,
-  CodexImportResultSummary,
-  SharedCodexAccountJson
-} from "../../core/types";
+import type { CodexAccountsRestoreResult, CodexImportResultSummary } from "../../core/types";
 
-export function parseSharedJsonInput(
-  jsonText: string,
-  onParseError?: (message: string) => string
-): SharedCodexAccountJson | SharedCodexAccountJson[] {
+export function parseSharedJsonInput(jsonText: string, onParseError?: (message: string) => string): unknown {
   const normalized = jsonText.trim();
   if (!normalized) {
     const message = onParseError ? onParseError("Empty JSON input") : "Empty JSON input";
@@ -16,10 +9,10 @@ export function parseSharedJsonInput(
   }
 
   try {
-    return JSON.parse(normalized) as SharedCodexAccountJson | SharedCodexAccountJson[];
+    return JSON.parse(normalized) as unknown;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(onParseError ? onParseError(message) : message);
+    throw new Error(onParseError ? onParseError(message) : message, { cause: error });
   }
 }
 

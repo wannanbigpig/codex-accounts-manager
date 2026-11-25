@@ -21,22 +21,44 @@ export class SecretStore {
   async setTokens(
     accountId: string,
     tokens: CodexTokens,
-    options: { expectedTokens?: CodexTokens; afterSave?: () => Promise<void> } = {}
+    options: {
+      expectedTokens?: CodexTokens;
+      beforeSave?: () => Promise<boolean>;
+      afterSave?: (previous: CodexTokens | undefined) => Promise<void>;
+    } = {}
   ): Promise<boolean> {
-    return withCredentialLock(this.lockDirectory, `write:${accountId}`, async (assertHeld) => {
-      if ("expectedTokens" in options && !sameTokenSnapshot(await this.getTokens(accountId), options.expectedTokens)) {
+    return this.withTokenWrite(accountId, async (previous, save) => {
+      if ("expectedTokens" in options && !sameTokenSnapshot(previous, options.expectedTokens)) {
         return false;
       }
-      assertHeld();
-      await this.secrets.store(`${SECRET_PREFIX}${accountId}`, JSON.stringify(tokens));
-      await options.afterSave?.();
+      if (options.beforeSave && !(await options.beforeSave())) {
+        return false;
+      }
+      await save(tokens);
+      await options.afterSave?.(previous);
       return true;
     });
   }
 
-  async deleteTokens(accountId: string): Promise<void> {
+  async withTokenWrite<T>(
+    accountId: string,
+    operation: (previous: CodexTokens | undefined, save: (tokens: CodexTokens) => Promise<void>) => Promise<T>
+  ): Promise<T> {
+    return withCredentialLock(this.lockDirectory, `write:${accountId}`, async (assertHeld) => {
+      const previous = await this.getTokens(accountId);
+      return operation(previous, async (tokens) => {
+        assertHeld();
+        if (!sameTokenSnapshot(previous, tokens)) {
+          await this.secrets.store(`${SECRET_PREFIX}${accountId}`, JSON.stringify(tokens));
+        }
+      });
+    });
+  }
+
+  async deleteTokens(accountId: string, afterDelete: () => Promise<void>): Promise<void> {
     await withCredentialLock(this.lockDirectory, `write:${accountId}`, async () => {
       await this.secrets.delete(`${SECRET_PREFIX}${accountId}`);
+      await afterDelete();
     });
   }
 }

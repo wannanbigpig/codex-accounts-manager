@@ -1,7 +1,7 @@
 import { DashboardAccountViewModel, DashboardMetricViewModel, DashboardState } from "../../domain/dashboard/types";
 import { AccountsRepository } from "../../storage";
 import { ExtensionSettingsStore } from "../../infrastructure/config/extensionSettings";
-import { formatAccountStructure, formatAuthProvider, formatPlanType, getDashboardCopy } from "./copy";
+import { formatAccountPlan, formatAccountStructure, formatAuthProvider, getDashboardCopy } from "./copy";
 import { CodexAccountRecord, CodexCreditsSummary, CodexTokens, type CodexAnnouncementState } from "../../core/types";
 import { resolveCodexAppLaunchPath } from "../../utils/codexApp";
 import { getCurrentWindowRuntimeAccountId } from "../../presentation/workbench/windowRuntimeAccount";
@@ -9,7 +9,9 @@ import { getQuotaIssueKind } from "../../utils/quotaIssue";
 import { getTokenAutomationSnapshot } from "../../presentation/workbench/tokenAutomationState";
 import { getAutoSwitchRuntimeSnapshot } from "../../presentation/workbench/autoSwitchState";
 import { getAccountAutomationState, isHealthDismissed, resolveAccountHealth } from "../accounts/health";
+import { hasPendingResetCreditRedemption } from "../accounts/resetCreditRedemption";
 import { isFreePlanType, resolveLongQuotaLabel } from "../../utils/quotaLabels";
+import { workspaceKind } from "../../services/workspaceIdentity";
 
 export async function buildDashboardState(
   repo: AccountsRepository,
@@ -28,7 +30,7 @@ export async function buildDashboardState(
   const tokenAutomation = getTokenAutomationSnapshot();
   const autoSwitchRuntime = getAutoSwitchRuntimeSnapshot();
   const indexHealth = await repo.getIndexHealthSummary();
-  const accounts = await repo.listAccounts();
+  const [accounts, accountOrder] = await Promise.all([repo.listAccounts(), repo.getDashboardAccountOrder()]);
   const tokenEntries = await Promise.all(
     accounts.map(async (account) => [account.id, await repo.getTokens(account.id, { syncExternal: false })] as const)
   );
@@ -49,7 +51,7 @@ export async function buildDashboardState(
       ] as const;
     })
   );
-  const sortedAccounts = sortDashboardAccounts(accounts, currentWindowAccountId, accountViewStateById);
+  const sortedAccounts = sortDashboardAccounts(accounts, currentWindowAccountId, accountViewStateById, accountOrder);
   const extraSelectedCount = sortedAccounts.filter((account) => !account.isActive && account.showInStatusBar).length;
 
   return {
@@ -85,14 +87,17 @@ export async function buildDashboardState(
 export function sortDashboardAccounts<T extends Pick<CodexAccountRecord, "id" | "isActive" | "createdAt" | "email">>(
   accounts: readonly T[],
   currentWindowAccountId?: string,
-  accountViewStateById?: Map<string, { healthPriority: number }>
+  accountViewStateById?: Map<string, { healthPriority: number }>,
+  order: readonly string[] = []
 ): T[] {
+  const ranks = new Map(order.map((id, index) => [id, index]));
   return [...accounts].sort(
     (a, b) =>
       Number(b.id === currentWindowAccountId) - Number(a.id === currentWindowAccountId) ||
       Number(b.isActive) - Number(a.isActive) ||
       (accountViewStateById?.get(b.id)?.healthPriority ?? 0) -
         (accountViewStateById?.get(a.id)?.healthPriority ?? 0) ||
+      (ranks.get(a.id) ?? ranks.size) - (ranks.get(b.id) ?? ranks.size) ||
       b.createdAt - a.createdAt ||
       a.email.localeCompare(b.email)
   );
@@ -119,8 +124,9 @@ function mapAccount(
   const dismissedHealth = viewState?.dismissedHealth ?? isHealthDismissed(account, health);
   const automationState = viewState?.automationState;
   const subscription = resolveSubscriptionDisplay(account, viewState?.tokens, copy, lang);
-  const resetCreditsAvailable = account.quotaSummary?.resetCreditsAvailable;
-  const resetCreditsNextExpiresAt = account.quotaSummary?.resetCreditsNextExpiresAt;
+  const resetCreditsAvailable = account.quotaSummary?.resetCreditsAvailable ?? account.resetCreditInventory?.snapshot?.availableCount;
+  const resetCreditsNextExpiresAt = account.quotaSummary?.resetCreditsNextExpiresAt ?? account.resetCreditInventory?.snapshot?.nextExpiresAt;
+  const resetRedemption = hasPendingResetCreditRedemption(account) ? account.resetCreditRedemption : undefined;
   if ((resetCreditsAvailable ?? 0) > 0 && resetCreditsNextExpiresAt == null) {
     console.info("[codexAccounts] dashboard state missing reset credits expiry", {
       accountId: account.id,
@@ -149,13 +155,15 @@ function mapAccount(
     addMethodLabel: `${formatAddMethod(account.addedVia, lang)} | ${formatAuthProvider(account.authProvider, lang)}`,
     addedAtLabel: formatAddedAt(account.createdAt, copy.never),
     statusColor: account.isActive ? "var(--accent-green)" : health.kind === "healthy" ? undefined : "#ef4444",
-    planTypeLabel: formatPlanTypeWithQuota(account, lang),
-    creditsText: formatCreditsText(account.quotaSummary?.credits, lang),
+    planTypeLabel: formatAccountPlan(account, lang),
+    creditsText: formatCreditsText(account.quotaSummary?.credits, lang,
+      Boolean(account.quotaSummary) && workspaceKind(account.accountStructure, account.planType) === "workspace"),
     userId: account.userId,
     accountId: account.accountId,
     organizationId: account.organizationId,
     isActive: account.isActive,
     isCurrentWindowAccount: account.id === currentWindowAccountId,
+    reorderable: !account.isActive && account.id !== currentWindowAccountId && getHealthPriority(health) === 0,
     showInStatusBar: Boolean(account.showInStatusBar),
     canToggleStatusBar,
     statusToggleTitle: canToggleStatusBar
@@ -173,8 +181,14 @@ function mapAccount(
     lastTokenRefreshAt: automationState?.lastRefreshAt,
     lastTokenRefreshError: automationState?.lastError,
     lastQuotaAt: account.lastQuotaAt,
+    quotaRefreshFailed: Boolean(account.quotaError),
+    quotaHttpStatus: account.quotaError?.statusCode,
+    quotaRetryAt: account.quotaError?.statusCode === 429 && Number.isFinite(account.quotaError.retryAt)
+      ? account.quotaError.retryAt : undefined,
     resetCreditsAvailable,
     resetCreditsNextExpiresAt,
+    resetRedemptionPending: Boolean(resetRedemption),
+    resetRedemptionCreditId: resetRedemption?.creditId,
     autoSwitchLockedUntil: autoSwitchRuntime?.lockedAccountId === account.id ? autoSwitchRuntime.lockedUntil : undefined,
     metrics: buildMetrics(account, copy, lang)
   };
@@ -292,26 +306,38 @@ export function resolveSubscriptionDisplay(
   copy: DashboardState["copy"],
   lang: DashboardState["lang"]
 ): { text: string; title: string; color?: string } {
-  const timestampMs = readSubscriptionTimestampMs(account, tokens);
-  if (!timestampMs) {
-    return {
-      text: copy.unknown,
-      title: copy.unknown
-    };
+  if (account.subscriptionExpirySource === "confirmed-free") {
+    return { text: "—", title: copy.subscriptionNoPaidPlan };
   }
 
-  const diffMs = timestampMs - Date.now();
-  const dateText = formatSubscriptionDate(new Date(timestampMs));
-  const days = Math.max(0, Math.ceil(diffMs / 86_400_000));
-  const dayUnit = lang === "zh-hant" || lang === "zh" ? "天" : "d";
-  const text = lang === "zh" || lang === "zh-hant" ? `${dateText}（${days} ${dayUnit}）` : `${dateText} (${days}${dayUnit})`;
+  const timestampMs = readSubscriptionTimestampMs(account, tokens);
+  const date = timestampMs === undefined ? undefined : new Date(timestampMs);
+  if (!date || !Number.isFinite(date.getTime())) {
+    return { text: copy.unknown, title: copy.unknown };
+  }
+
+  const dateText = formatSubscriptionDate(date);
+  if (account.subscriptionQueryLastError) {
+    const text = withSubscriptionStatus(dateText, copy.subscriptionExpiryUnconfirmed, lang);
+    return { text, title: text };
+  }
+
+  const diffMs = date.getTime() - Date.now();
+  if (diffMs <= 0) {
+    const text = withSubscriptionStatus(dateText, copy.subscriptionExpired, lang);
+    return { text, title: text, color: "#ef4444" };
+  }
+
+  const days = Math.ceil(diffMs / 86_400_000);
+  const remaining = lang === "zh" || lang === "zh-hant" ? `${days} 天` : `${days}d`;
+  const text = withSubscriptionStatus(dateText, remaining, lang);
   const color = diffMs <= 3 * 86_400_000 ? "#ef4444" : diffMs <= 10 * 86_400_000 ? "#f59e0b" : "var(--accent-green)";
 
-  return {
-    text,
-    title: text,
-    color
-  };
+  return { text, title: text, color };
+}
+
+function withSubscriptionStatus(dateText: string, status: string, lang: DashboardState["lang"]): string {
+  return lang === "zh" || lang === "zh-hant" ? `${dateText}（${status}）` : `${dateText} (${status})`;
 }
 
 function readSubscriptionTimestampMs(account: CodexAccountRecord, tokens: CodexTokens | undefined): number | undefined {
@@ -319,8 +345,8 @@ function readSubscriptionTimestampMs(account: CodexAccountRecord, tokens: CodexT
   const accessAuth = getOpenAiAuthClaims(tokens?.accessToken);
   const raw = normalizeSubscriptionValue(
     account.subscriptionActiveUntil ??
-      idAuth?.["chatgpt_subscription_active_until"] ??
-      accessAuth?.["chatgpt_subscription_active_until"]
+      readWorkspaceSubscriptionClaim(account, idAuth) ??
+      readWorkspaceSubscriptionClaim(account, accessAuth)
   );
   if (!raw) {
     return undefined;
@@ -335,84 +361,45 @@ function readSubscriptionTimestampMs(account: CodexAccountRecord, tokens: CodexT
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function formatPlanTypeWithQuota(account: CodexAccountRecord, lang: DashboardState["lang"]): string {
-  const base = formatPlanType(account.planType, lang);
-  const normalized = account.planType?.trim().toLowerCase();
-  if (!normalized?.includes("pro")) {
-    return base;
+function readWorkspaceSubscriptionClaim(
+  account: CodexAccountRecord,
+  claims?: Record<string, unknown>
+): unknown {
+  const accountId = claims?.["chatgpt_account_id"] ?? claims?.["account_id"];
+  const organizationId = claims?.["organization_id"] ?? claims?.["chatgpt_organization_id"] ?? claims?.["org_id"];
+  if (
+    (account.accountId && typeof accountId === "string" && account.accountId !== accountId) ||
+    (account.organizationId && typeof organizationId === "string" && account.organizationId !== organizationId)
+  ) {
+    return undefined;
   }
-
-  const multiplier = inferProQuotaMultiplier(account);
-  return multiplier ? `Pro ${multiplier}` : base;
+  return claims?.["chatgpt_subscription_active_until"];
 }
 
-export function formatCreditsText(credits: CodexCreditsSummary | undefined, lang: DashboardState["lang"]): string | undefined {
-  if (!credits) {
+export function formatCreditsText(credits: CodexCreditsSummary | undefined, lang: DashboardState["lang"], showUnknown = false): string | undefined {
+  if (!credits && !showUnknown) {
     return undefined;
   }
 
-  const zh = lang === "zh" || lang === "zh-hant";
-  const value = credits.unlimited
-    ? zh
-      ? "无限"
-      : "Unlimited"
-    : credits.remaining !== undefined && credits.total !== undefined
-      ? `${credits.remaining} / ${credits.total}`
-      : credits.balance || (credits.hasCredits ? (zh ? "可用" : "Available") : "0");
-  const label = zh ? "剩余额度" : "Credits left";
-  return `${label}: ${value}`;
-}
-
-function inferProQuotaMultiplier(account: CodexAccountRecord): "5x" | "20x" | undefined {
-  const signals = collectQuotaPlanSignals(account.quotaSummary?.rawData);
-  if (account.planType) {
-    signals.unshift(account.planType);
+  const copy = lang === "zh"
+    ? { label: "剩余积分", limited: "已达限额", unlimited: "无限", available: "可用，余额未公开", unknown: "未知" }
+    : lang === "zh-hant"
+      ? { label: "剩餘積分", limited: "已達限額", unlimited: "無限", available: "可用，餘額未公開", unknown: "未知" }
+      : { label: "Credits left", limited: "Limit reached", unlimited: "Unlimited", available: "Available, balance undisclosed", unknown: "Unknown" };
+  const balance = credits?.remaining !== undefined && credits.total !== undefined
+    ? `${credits.remaining} / ${credits.total}`
+    : credits?.balance.trim();
+  let value = balance?.length ? balance : copy.unknown;
+  if (credits?.availability === "limited" || (!balance && credits?.overageLimitReached)) {
+    value = copy.limited;
+  } else if (credits?.unlimited) {
+    value = copy.unlimited;
+  } else if (credits?.availability === "exhausted" && !balance) {
+    value = "0";
+  } else if (!balance && credits?.hasCredits) {
+    value = copy.available;
   }
-
-  let saw5x = false;
-  let saw20x = false;
-  for (const signal of signals) {
-    const normalized = signal.toLowerCase();
-    if (/(^|[^a-z0-9])(?:pro[_\s-]*)?20\s*x([^a-z0-9]|$)/.test(normalized)) {
-      saw20x = true;
-    }
-    if (/(^|[^a-z0-9])(?:pro[_\s-]*)?5\s*x([^a-z0-9]|$)/.test(normalized)) {
-      saw5x = true;
-    }
-  }
-
-  return saw20x ? "20x" : saw5x ? "5x" : undefined;
-}
-
-function collectQuotaPlanSignals(value: unknown, depth = 0): string[] {
-  if (depth > 4 || value == null) {
-    return [];
-  }
-
-  if (typeof value === "string") {
-    return [value];
-  }
-
-  if (typeof value === "number" || typeof value === "boolean") {
-    return [];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => collectQuotaPlanSignals(item, depth + 1));
-  }
-
-  if (typeof value !== "object") {
-    return [];
-  }
-
-  const signals: string[] = [];
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof entry === "string") {
-      signals.push(`${key}:${entry}`);
-    }
-    signals.push(...collectQuotaPlanSignals(entry, depth + 1));
-  }
-  return signals;
+  return `${copy.label}: ${value}`;
 }
 
 function getOpenAiAuthClaims(token: string | undefined): Record<string, unknown> | undefined {

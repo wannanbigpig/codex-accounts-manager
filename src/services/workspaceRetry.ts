@@ -6,10 +6,12 @@ export function shouldRetryWithoutWorkspace(status: number, raw: string): boolea
   }
 
   const normalized = raw.toLowerCase();
+  if (normalized.includes("deactivated_workspace")) {
+    return false;
+  }
   return (
     normalized.includes("workspace") ||
     normalized.includes("account") ||
-    normalized.includes("deactivated_workspace") ||
     normalized.includes("no active workspace")
   );
 }

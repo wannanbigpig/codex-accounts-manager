@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { AccountsRepository } from "../src/storage";
 
 const { fetchResetCreditsMock, logNetworkEventMock } = vi.hoisted(() => ({
   fetchResetCreditsMock: vi.fn(),
@@ -36,10 +37,7 @@ describe("resetCreditsBackfill", () => {
   });
 
   it("returns false when there is nothing to backfill", async () => {
-    const repo = {
-      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
-      updateResetCreditsSnapshot: vi.fn(async () => undefined)
-    };
+    const repo = createBackfillRepo();
 
     const updated = await backfillMissingResetCreditExpiries(
       repo as never,
@@ -58,10 +56,7 @@ describe("resetCreditsBackfill", () => {
       credits: [],
       nextExpiresAt: 1_800_000_000
     });
-    const repo = {
-      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
-      updateResetCreditsSnapshot: vi.fn(async () => undefined)
-    };
+    const repo = createBackfillRepo();
     const onUpdated = vi.fn();
 
     const updated = await backfillMissingResetCreditExpiries(
@@ -80,7 +75,7 @@ describe("resetCreditsBackfill", () => {
         nextExpiresAt: 1_800_000_000
       })
     );
-    expect(repo.updateResetCreditsSnapshot).toHaveBeenCalledWith("account-1", 1, 1_800_000_000);
+    expect(repo.refreshResetCreditInventory).toHaveBeenCalledWith(expect.objectContaining({ id: "account-1" }), expect.any(Function), undefined);
     expect(onUpdated).toHaveBeenCalled();
     expect(updated).toBe(true);
   });
@@ -88,10 +83,7 @@ describe("resetCreditsBackfill", () => {
   it("logs backfill failures instead of swallowing them silently", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     fetchResetCreditsMock.mockRejectedValue(new Error("network down"));
-    const repo = {
-      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
-      updateResetCreditsSnapshot: vi.fn(async () => undefined)
-    };
+    const repo = createBackfillRepo();
 
     const updated = await backfillMissingResetCreditExpiries(
       repo as never,
@@ -123,10 +115,7 @@ describe("resetCreditsBackfill", () => {
       credits: [],
       nextExpiresAt: undefined
     });
-    const repo = {
-      getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
-      updateResetCreditsSnapshot: vi.fn(async () => undefined)
-    };
+    const repo = createBackfillRepo();
 
     await backfillMissingResetCreditExpiries(
       repo as never,
@@ -142,3 +131,12 @@ describe("resetCreditsBackfill", () => {
     infoSpy.mockRestore();
   });
 });
+
+
+function createBackfillRepo() {
+  return {
+    getAccount: async (id: string) => ({ id, accountId: id.replace("account-", "acct-") }),
+    getFreshTokens: vi.fn(async () => ({ accessToken: "token" })),
+    refreshResetCreditInventory: vi.fn<AccountsRepository["refreshResetCreditInventory"]>(async (current, fetch) => fetch(current))
+  };
+}

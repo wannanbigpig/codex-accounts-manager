@@ -11,15 +11,18 @@ import type { SendAction } from "./hookTypes";
 import { EditIcon, renderRemoveIcon } from "./icons";
 
 type ActionResult = Extract<DashboardHostMessage, { type: "dashboard:action-result" }>;
-const MODEL_PRESETS = [
-  "gpt-6-luna",
-  "gpt-6-sol",
-  "gpt-6.1-sol",
-  "gpt-6-astra",
-  "gpt-5.6-luna",
-  "gpt-5.6-terra",
-  "gpt-5.6-sol"
-];
+const MODEL_PRESETS = new Map([
+  ["gpt-6.2-sol", "GPT-6.2 Sol"],
+  ["gpt-6.2-astra", "GPT-6.2 Astra"],
+  ["gpt-6.1-terra", "GPT-6.1 Terra"],
+  ["gpt-6.1-sol", "GPT-6.1 Sol"],
+  ["gpt-6-astra", "GPT-6 Astra"],
+  ["gpt-6-sol", "GPT-6 Sol"],
+  ["gpt-6-luna", "GPT-6 Luna"],
+  ["gpt-5.6-sol", "GPT-5.6 Sol"],
+  ["gpt-5.6-terra", "GPT-5.6 Terra"],
+  ["gpt-5.6-luna", "GPT-5.6 Luna"]
+]);
 const CUSTOM_MODEL = "__custom__";
 
 function newDraft(): WakeupTaskInput {
@@ -73,10 +76,10 @@ export function WakeupModal(props: {
       : createDraft()
   );
   const [customModelMode, setCustomModelMode] = useState(
-    Boolean(initialTask && !MODEL_PRESETS.includes(initialTask.model))
+    Boolean(initialTask && !MODEL_PRESETS.has(initialTask.model))
   );
   const [customModelId, setCustomModelId] = useState(
-    initialTask && !MODEL_PRESETS.includes(initialTask.model) ? initialTask.model : ""
+    initialTask && !MODEL_PRESETS.has(initialTask.model) ? initialTask.model : ""
   );
   const [intervalUnit, setIntervalUnit] = useState<"hours" | "minutes">(
     (initialTask?.intervalMinutes ?? 300) % 30 === 0 ? "hours" : "minutes"
@@ -149,8 +152,9 @@ export function WakeupModal(props: {
         }
       : createDraft();
     setDraft(value);
-    setCustomModelMode(!MODEL_PRESETS.includes(value.model));
-    setCustomModelId(MODEL_PRESETS.includes(value.model) ? "" : value.model);
+    const isPresetModel = MODEL_PRESETS.has(value.model);
+    setCustomModelMode(!isPresetModel);
+    setCustomModelId(isPresetModel ? "" : value.model);
     setIntervalUnit((value.intervalMinutes ?? 300) % 30 === 0 ? "hours" : "minutes");
     setSearch("");
     setFormError("");
@@ -558,6 +562,13 @@ export function WakeupModal(props: {
                   ))}
                 </select>
               </label>
+              <label class="modal-field">
+                <span class="modal-label">{copy.quotaResetDelay}</span>
+                <input class="modal-input" type="number" min={0} max={1440} step={1} required
+                  value={draft.quotaResetDelayMinutes ?? 0}
+                  onInput={(event) => patch({ quotaResetDelayMinutes: event.currentTarget.valueAsNumber })}
+                />
+              </label>
               <p class="wakeup-muted">{copy.quotaResetHint}</p>
             </>
           ) : draft.scheduleMode === "startup" ? (
@@ -751,9 +762,9 @@ export function WakeupModal(props: {
                   patch({ model: model === CUSTOM_MODEL ? customModelId : model });
                 }}
               >
-                {MODEL_PRESETS.map((model) => (
+                {[...MODEL_PRESETS].map(([model, label]) => (
                   <option value={model} key={model}>
-                    {model}
+                    {label}
                   </option>
                 ))}
                 <option value={CUSTOM_MODEL}>{copy.customModel}</option>

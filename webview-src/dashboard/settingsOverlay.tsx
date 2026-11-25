@@ -1,4 +1,5 @@
 import type { DashboardCopy, DashboardSettingKey, DashboardSettings, DashboardState } from "../../src/domain/dashboard/types";
+import { AUTO_REFRESH_PLANS } from "../../src/domain/dashboard/types";
 import {
   SettingsDiscreteSlider,
   SettingsLanguageBlock,
@@ -37,6 +38,7 @@ export function SettingsOverlay(props: {
     props.onPatchSettings({ [key]: value } as Partial<DashboardSettings>);
     props.onSendSetting(key, value);
   };
+  const selectedPlans = props.settings.autoRefreshPlanTypes ?? AUTO_REFRESH_PLANS;
 
   return (
     <div class={`overlay ${props.open ? "open" : ""}`} onClick={props.onClose}>
@@ -117,6 +119,19 @@ export function SettingsOverlay(props: {
                 onPreview={(value) => props.onPatchSettings({ autoRefreshMinutes: value })}
                 onCommit={props.onAutoRefreshValue}
               />
+              <fieldset>
+                <legend>{props.copy.autoRefreshPlansLabel}</legend>
+                {AUTO_REFRESH_PLANS.map((plan) => (
+                  <label key={plan} style={{ display: "inline-block", marginInlineEnd: "12px" }}>
+                    <input type="checkbox" checked={selectedPlans.includes(plan)} onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      const next = AUTO_REFRESH_PLANS.filter((item) => item === plan ? checked : selectedPlans.includes(item));
+                      props.onPatchSettings({ autoRefreshPlanTypes: next });
+                      props.onSendSetting("autoRefreshPlanTypes", next.join(","));
+                    }} /> {plan === "edu" ? "Edu" : plan.charAt(0).toUpperCase() + plan.slice(1)}
+                  </label>
+                ))}
+              </fieldset>
             </div>
           </SettingsToggleBlock>
           <SettingsToggleBlock

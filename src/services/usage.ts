@@ -1,6 +1,6 @@
 import { CodexDailyUsageBreakdown, CodexDailyUsagePoint, CodexTokens } from "../core/types";
 import { APIError } from "../core/errors";
-import { DAILY_USAGE_BREAKDOWN_URL } from "../infrastructure/config/apiEndpoints";
+import { DAILY_USAGE_BREAKDOWN_URL, PROFILE_USAGE_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
 import { logNetworkEvent } from "../utils/debug";
 import { fetchWithTimeout } from "../utils/network";
@@ -9,18 +9,10 @@ type UnknownRecord = Record<string, unknown>;
 
 export async function fetchDailyUsageBreakdown(
   tokens: CodexTokens,
-  days = 30
+  days = 30,
+  preferredAccountId?: string
 ): Promise<CodexDailyUsageBreakdown | undefined> {
-  const claims = extractClaims(tokens.idToken, tokens.accessToken);
-  const headers = new Headers({
-    Authorization: `Bearer ${tokens.accessToken}`,
-    Accept: "application/json"
-  });
-
-  const accountId = tokens.accountId ?? claims.accountId;
-  if (accountId) {
-    headers.set("ChatGPT-Account-Id", accountId);
-  }
+  const headers = buildUsageHeaders(tokens, preferredAccountId);
 
   const url = new URL(DAILY_USAGE_BREAKDOWN_URL);
   url.searchParams.set("days", String(days));
@@ -37,7 +29,7 @@ export async function fetchDailyUsageBreakdown(
 
   const raw = await response.text();
   logNetworkEvent("daily-usage", {
-    accountId,
+    accountId: headers.get("ChatGPT-Account-Id"),
     days,
     status: response.status,
     ok: response.ok,
@@ -53,6 +45,55 @@ export async function fetchDailyUsageBreakdown(
 
   const payload = parseJson(raw);
   return parseDailyUsageBreakdown(payload, days);
+}
+
+export async function fetchProfileLifetimeTokens(tokens: CodexTokens, preferredAccountId?: string): Promise<number | undefined> {
+  const headers = buildUsageHeaders(tokens, preferredAccountId);
+  const response = await fetchWithTimeout(PROFILE_USAGE_URL, { method: "GET", headers }, 15_000, "Profile usage request");
+  logNetworkEvent("profile-usage", {
+    accountId: headers.get("ChatGPT-Account-Id"),
+    status: response.status,
+    ok: response.ok,
+    url: PROFILE_USAGE_URL
+  });
+  if (!response.ok) {
+    throw new APIError(`Profile usage API returned ${response.status}`, { statusCode: response.status });
+  }
+
+  const payload: unknown = await response.json().catch(() => undefined);
+  if (!isRecord(payload)) {
+    throw new APIError("Invalid profile usage response");
+  }
+
+  const stats = payload["stats"];
+  if (stats == null) {
+    return undefined;
+  }
+  if (!isRecord(stats)) {
+    throw new APIError("Invalid profile usage response");
+  }
+
+  const total = stats["lifetime_tokens"];
+  if (total == null) {
+    return undefined;
+  }
+  if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) {
+    throw new APIError("Invalid profile usage response");
+  }
+  return Math.max(0, total);
+}
+
+function buildUsageHeaders(tokens: CodexTokens, preferredAccountId?: string): Headers {
+  const scopedId = [preferredAccountId, tokens.accountId].find((id) => id?.trim())?.trim();
+  const accountId = scopedId ?? extractClaims(tokens.idToken, tokens.accessToken).accountId;
+  const headers = new Headers({
+    Authorization: `Bearer ${tokens.accessToken}`,
+    Accept: "application/json"
+  });
+  if (accountId) {
+    headers.set("ChatGPT-Account-Id", accountId);
+  }
+  return headers;
 }
 
 function parseDailyUsageBreakdown(payload: unknown, fallbackDays: number): CodexDailyUsageBreakdown | undefined {

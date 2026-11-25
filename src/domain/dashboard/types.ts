@@ -4,7 +4,9 @@ import type {
   CodexAnnouncementState,
   CodexImportPreviewSummary,
   CodexImportResultSummary,
-  CodexIndexHealthSummary
+  CodexIndexHealthSummary,
+  CodexResetCreditHistoryPage,
+  CodexResetCreditLocalRecord
 } from "../../core/types";
 
 export type DashboardSettingKey =
@@ -13,6 +15,7 @@ export type DashboardSettingKey =
   | "codexAppRestartMode"
   | "backgroundTokenRefreshEnabled"
   | "autoRefreshMinutes"
+  | "autoRefreshPlanTypes"
   | "autoSwitchEnabled"
   | "hourlyQuotaControlEnabled"
   | "autoSwitchReloadWindowEnabled"
@@ -32,6 +35,7 @@ export interface DashboardSettings {
   codexAppRestartMode: "auto" | "manual";
   backgroundTokenRefreshEnabled: boolean;
   autoRefreshMinutes: number;
+  autoRefreshPlanTypes?: readonly string[];
   autoSwitchEnabled: boolean;
   hourlyQuotaControlEnabled: boolean;
   autoSwitchReloadWindowEnabled: boolean;
@@ -50,7 +54,16 @@ export interface DashboardSettings {
 
 export type DashboardThemeOption = "auto" | "dark" | "light";
 
+export const AUTO_REFRESH_PLANS = ["free", "plus", "pro", "business", "enterprise", "edu", "other"] as const;
+
 export interface DashboardCopy {
+  autoRefreshPlansLabel: string;
+  localResetHistoryTitle: string;
+  localResetNoCharge: string;
+  moveAccountUp: string;
+  moveAccountDown: string;
+  batchResultPartial: string;
+  batchResultSuperseded: string;
   panelTitle: string;
   brandSub: string;
   refreshPage: string;
@@ -94,6 +107,11 @@ export interface DashboardCopy {
   tokenAutomationReauthorize: string;
   tokenAutomationDisabled: string;
   tokenAutomationQuota: string;
+  quotaRefreshSuccess: string;
+  quotaRefreshFailed: string;
+  quotaRefreshStale: string;
+  quotaRefreshRateLimited: string;
+  quotaRefreshRetryAt: string;
   resyncProfileBtn: string;
   syncProfileBtn: string;
   editTagsBtn: string;
@@ -156,7 +174,34 @@ export interface DashboardCopy {
   switchBtn: string;
   refreshBtn: string;
   resetCreditsBtn: string;
+  resetCreditsRetryBtn: string;
+  resetCreditsManageBtn: string;
   resetCreditsLabel: string;
+  resetCreditDialogTitle: string;
+  resetCreditDialogHint: string;
+  resetCreditAvailableTab: string;
+  resetCreditHistoryTab: string;
+  resetCreditRefresh: string;
+  resetCreditUse: string;
+  resetCreditFull: string;
+  resetCreditItem: string;
+  resetCreditExpires: string;
+  resetCreditNextExpiry: string;
+  resetCreditExpiryUnknown: string;
+  resetCreditNoAvailable: string;
+  resetCreditInventoryLoading: string;
+  resetCreditInventoryError: string;
+  resetCreditCardsUnavailable: string;
+  resetCreditsPendingNote: string;
+  resetCreditHistoryTitle: string;
+  resetCreditHistoryLoading: string;
+  resetCreditHistoryEmpty: string;
+  resetCreditHistoryError: string;
+  resetCreditHistoryRetry: string;
+  resetCreditHistoryMore: string;
+  resetCreditHistoryGranted: string;
+  resetCreditHistoryRedeemed: string;
+  resetCreditHistoryActivity: string;
   detailsBtn: string;
   removeBtn: string;
   settingsTitle: string;
@@ -174,6 +219,16 @@ export interface DashboardCopy {
   continueOauthBtn: string;
   cancelOauthBtn: string;
   oauthReadyHint: string;
+  deviceOauthStart: string;
+  deviceOauthPreparing: string;
+  deviceOauthPrompt: string;
+  deviceOauthCancel: string;
+  deviceOauthCancelPending: string;
+  deviceOauthFinishing: string;
+  deviceOauthCopy: string;
+  deviceOauthCopyLink: string;
+  deviceOauthBrowserFailed: string;
+  deviceOauthExpiresAt: string;
   jsonPreview: string;
   copyJson: string;
   copySuccess: string;
@@ -184,6 +239,12 @@ export interface DashboardCopy {
   importJsonSubmit: string;
   importJsonHint: string;
   importJsonValidate: string;
+  importProbeSelected: string;
+  importProbeNotChecked: string;
+  importProbeOk: string;
+  importProbeUnauthorized: string;
+  importProbeRateLimited: string;
+  importProbeFailed: string;
   importJsonSummaryTitle: string;
   importJsonSummaryTotal: string;
   importJsonSummaryValid: string;
@@ -285,6 +346,9 @@ export interface DashboardCopy {
   statusToggleTip: string;
   statusToggleTipChecked: string;
   statusLimitTip: string;
+  subscriptionNoPaidPlan: string;
+  subscriptionExpiryUnconfirmed: string;
+  subscriptionExpired: string;
   unknown: string;
   never: string;
   resetUnknown: string;
@@ -326,6 +390,7 @@ export interface DashboardAccountViewModel {
   organizationId?: string;
   isActive: boolean;
   isCurrentWindowAccount: boolean;
+  reorderable?: boolean;
   showInStatusBar: boolean;
   canToggleStatusBar: boolean;
   statusToggleTitle: string;
@@ -340,8 +405,13 @@ export interface DashboardAccountViewModel {
   lastTokenRefreshAt?: number;
   lastTokenRefreshError?: string;
   lastQuotaAt?: number;
+  quotaRefreshFailed?: boolean;
+  quotaHttpStatus?: number;
+  quotaRetryAt?: number;
   resetCreditsAvailable?: number;
   resetCreditsNextExpiresAt?: number;
+  resetRedemptionPending?: boolean;
+  resetRedemptionCreditId?: string;
   autoSwitchLockedUntil?: number;
   metrics: DashboardMetricViewModel[];
 }
@@ -366,12 +436,15 @@ export interface DashboardBatchResultFailure {
   accountId?: string;
   email?: string;
   message: string;
+  outcome?: "partial" | "superseded";
 }
 
 export interface DashboardBatchResult {
   kind: DashboardBatchResultKind;
   successCount: number;
   failedCount: number;
+  partialCount?: number;
+  supersededCount?: number;
   overwriteCount?: number;
   failures: DashboardBatchResultFailure[];
 }
@@ -410,6 +483,9 @@ export type DashboardActionName =
   | "previewImportSharedJson"
   | "importSharedJson"
   | "prepareOAuthSession"
+  | "prepareDeviceOAuthSession"
+  | "completeDeviceOAuthSession"
+  | "cancelDeviceOAuthSession"
   | "cancelOAuthSession"
   | "startOAuthAutoFlow"
   | "completeOAuthSession"
@@ -429,6 +505,9 @@ export type DashboardActionName =
   | "remove"
   | "toggleStatusBar"
   | "getResetCredits"
+  | "getResetCreditHistory"
+  | "getLocalResetCreditHistory"
+  | "moveDashboardAccount"
   | "consumeResetCredit";
 
 export interface DashboardOAuthSessionDescriptor {
@@ -437,16 +516,28 @@ export interface DashboardOAuthSessionDescriptor {
   redirectUri: string;
 }
 
+export interface DashboardDeviceOAuthGrant {
+  userCode: string;
+  verificationUrl: string;
+  expiresAt: number;
+}
+
+export type DashboardDeviceOAuthCancellation = "cancelled" | "committing" | "inactive";
+
 export interface DashboardActionPayload {
   wakeupTask?: WakeupTaskInput;
   wakeupTaskId?: string;
   enabled?: boolean;
   accountIds?: string[];
+  moveTargetAccountId?: string;
+  moveAfter?: boolean;
   jsonText?: string;
+  probeImportIndexes?: number[];
   text?: string;
   url?: string;
   filename?: string;
   oauthSessionId?: string;
+  deviceSessionId?: string;
   callbackUrl?: string;
   issueKey?: string;
   recoveryMode?: boolean;
@@ -455,11 +546,16 @@ export interface DashboardActionPayload {
   lockMinutes?: number;
   announcementId?: string;
   privacyMode?: boolean;
+  resetCreditHistoryCursor?: string;
+  resetCreditId?: string;
 }
 
 export interface DashboardActionResultPayload {
   sharedJson?: string;
   oauthSession?: DashboardOAuthSessionDescriptor;
+  deviceOAuthGrant?: DashboardDeviceOAuthGrant;
+  deviceOAuthCancellation?: DashboardDeviceOAuthCancellation;
+  externalUrlOpened?: boolean;
   importPreview?: CodexImportPreviewSummary;
   importResult?: CodexImportResultSummary;
   batchResult?: DashboardBatchResult;
@@ -468,6 +564,9 @@ export interface DashboardActionResultPayload {
   email?: string;
   restoredCount?: number;
   resetCredits?: import("../../core/types").CodexResetCreditsSnapshot;
+  resetCreditHistory?: CodexResetCreditHistoryPage;
+  localResetCreditHistory?: CodexResetCreditLocalRecord[];
+  resetCreditHistoryChanged?: true;
 }
 
 export type DashboardHostMessage =

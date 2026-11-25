@@ -1,4 +1,5 @@
 import type { CodexAccountRecord, CodexIndexHealthSummary } from "../../core/types";
+import { hasPendingResetCreditRedemption } from "../../application/accounts/resetCreditRedemption";
 import type { TokenAutomationSnapshot } from "./tokenAutomationState";
 import type { WakeupSnapshot } from "../../domain/wakeup/types";
 
@@ -17,6 +18,8 @@ export function buildWorkbenchRefreshSignature(params: {
         account.accountName ?? "",
         account.planType ?? "",
         account.subscriptionActiveUntil ?? "",
+        account.subscriptionExpirySource ?? "",
+        account.subscriptionQueryLastError ? "1" : "0",
         account.accountId ?? "",
         account.organizationId ?? "",
         account.userId ?? "",
@@ -28,6 +31,8 @@ export function buildWorkbenchRefreshSignature(params: {
         account.quotaError?.code ?? "",
         account.quotaError?.message ?? "",
         account.quotaError?.timestamp ?? 0,
+        account.quotaError?.statusCode ?? "",
+        account.quotaError?.retryAt ?? "",
         account.quotaSummary?.hourlyPercentage ?? "",
         account.quotaSummary?.hourlyResetTime ?? "",
         account.quotaSummary?.hourlyRequestsLeft ?? "",
@@ -48,6 +53,7 @@ export function buildWorkbenchRefreshSignature(params: {
         account.quotaSummary?.codeReviewWindowPresent ? "1" : "0",
         account.quotaSummary?.resetCreditsAvailable ?? "",
         account.quotaSummary?.resetCreditsNextExpiresAt ?? "",
+        hasPendingResetCreditRedemption(account) ? "1" : "0",
         account.quotaSummary?.credits?.balance ?? "",
         account.quotaSummary?.additionalRateLimits
           ?.map(

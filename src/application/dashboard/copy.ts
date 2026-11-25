@@ -1,3 +1,4 @@
+import type { CodexAccountRecord } from "../../core/types";
 import type { DashboardCopy } from "../../domain/dashboard/types";
 import type { DashboardLanguage } from "../../localization/languages";
 import { dashboardCopyResources } from "../../localization/resources/dashboard";
@@ -140,11 +141,15 @@ export function formatAccountStructure(value: string | undefined, language: Dash
   return ACCOUNT_STRUCTURE_LABELS[normalized]?.[language] ?? fallback;
 }
 
-export function formatPlanType(value: string | undefined, language: DashboardLanguage): string {
+function resolvePlanTypeCategory(value: string | undefined): string {
   const raw = (value ?? "").trim().toLowerCase();
   const matchedPlan =
-    ["enterprise", "business", "team", "plus", "pro", "free"].find((plan) => raw.includes(plan)) ?? raw;
-  const normalized = matchedPlan === "team" ? "business" : matchedPlan;
+    ["enterprise", "business", "team", "plus", "pro", "free", "edu"].find((plan) => raw.includes(plan)) ?? raw;
+  return matchedPlan === "team" ? "business" : matchedPlan;
+}
+
+export function formatPlanType(value: string | undefined, language: DashboardLanguage): string {
+  const normalized = resolvePlanTypeCategory(value);
   if (!normalized) {
     return UNKNOWN_LABELS[language] ?? UNKNOWN_LABELS.en;
   }
@@ -178,4 +183,45 @@ export function formatPlanType(value: string | undefined, language: DashboardLan
   }
 
   return normalized;
+}
+
+const EXPLICIT_PRO_PLAN_LABELS = new Map([
+  ["pro5x", "Pro 5x"],
+  ["codexpro5x", "Pro 5x"],
+  ["pro20x", "Pro 20x"],
+  ["codexpro20x", "Pro 20x"],
+  ["prolite", "Pro 100"],
+  ["chatgptprolite", "Pro 100"],
+  ["pro100", "Pro 100"],
+  ["pro200", "Pro 200"],
+  ["promax", "Pro 500"],
+  ["chatgptpromax", "Pro 500"],
+  ["pro500", "Pro 500"]
+]);
+
+function readQuotaPlanType(account: Pick<CodexAccountRecord, "quotaSummary">): string | undefined {
+  const raw = account.quotaSummary?.rawData;
+  return raw && typeof raw === "object" && "plan_type" in raw && typeof raw.plan_type === "string" ? raw.plan_type : undefined;
+}
+
+export function resolveAccountPlanCategory(account: Pick<CodexAccountRecord, "planType" | "quotaSummary">): string {
+  return resolvePlanTypeCategory(account.planType ?? readQuotaPlanType(account));
+}
+
+export function formatAccountPlan(
+  account: Pick<CodexAccountRecord, "planType" | "quotaSummary">,
+  language: DashboardLanguage
+): string {
+  const quotaPlan = readQuotaPlanType(account);
+  const plan = account.planType ?? quotaPlan;
+  const label = formatPlanType(plan, language);
+  if (label !== "Pro") {
+    return label;
+  }
+
+  return explicitProPlanLabel(plan) ?? explicitProPlanLabel(quotaPlan) ?? label;
+}
+
+function explicitProPlanLabel(plan?: string): string | undefined {
+  return plan ? EXPLICIT_PRO_PLAN_LABELS.get(plan.trim().toLowerCase().replace(/[-_\s]+/g, "")) : undefined;
 }

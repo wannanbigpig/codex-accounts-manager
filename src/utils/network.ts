@@ -9,13 +9,21 @@ export interface RetryWithBackoffOptions<T> {
   delaysMs?: readonly number[];
   shouldRetryError?: (error: unknown) => boolean;
   shouldRetryResult?: (result: T) => boolean;
+  /** Override a retriable result's delay. An undefined override stops retrying that result. */
+  resultRetryDelayMs?: (result: T, defaultDelayMs: number) => number | undefined;
+}
+
+interface FetchWithTimeoutOptions {
+  /** Observe headers immediately. Returning true keeps this HTTP status and headers if reading the body fails. */
+  onHeaders?: (response: Pick<Response, "status" | "headers">) => boolean;
 }
 
 export async function fetchWithTimeout(
   input: string | URL | globalThis.Request,
   init: RequestInit = {},
   timeoutMs = DEFAULT_FETCH_TIMEOUT_MS,
-  timeoutLabel = "Request"
+  timeoutLabel = "Request",
+  options: FetchWithTimeoutOptions = {}
 ): Promise<Response> {
   const controller = new AbortController();
   const callerSignal = init.signal ?? (input instanceof Request ? input.signal : undefined);
@@ -46,7 +54,17 @@ export async function fetchWithTimeout(
     }
     // These endpoints return finite JSON/text bodies. Keep the deadline through consumption.
     phase = "body";
-    const body = response.body ? await response.arrayBuffer() : null;
+    const preserveHeaders = options.onHeaders?.(response);
+    let body: ArrayBuffer | null = null;
+    try {
+      if (response.body) {
+        body = await response.arrayBuffer();
+      }
+    } catch (error) {
+      if (!preserveHeaders || callerSignal?.aborted) {
+        throw error;
+      }
+    }
     const buffered = new Response(body, {
       status: response.status,
       statusText: response.statusText,
@@ -84,8 +102,12 @@ export async function retryWithBackoff<T>(
     try {
       const result = await operation();
       if (attempt < delays.length && options.shouldRetryResult?.(result)) {
-        await sleep(delays[attempt]!);
-        continue;
+        const defaultDelay = delays[attempt]!;
+        const delay = options.resultRetryDelayMs ? options.resultRetryDelayMs(result, defaultDelay) : defaultDelay;
+        if (delay !== undefined) {
+          await sleep(delay);
+          continue;
+        }
       }
       return result;
     } catch (error) {

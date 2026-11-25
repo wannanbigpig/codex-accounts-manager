@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import { refreshSingleQuota } from "../../application/accounts/quota";
-import { fetchResetCredits, consumeResetCredit } from "../../services/quota";
+import { consumeResetCredit } from "../../services/quota";
+import { refreshResetCreditInventory } from "../../application/accounts/resetCreditInventory";
+import { probeSharedImportQuotas } from "../../application/accounts/importQuotaPreview";
+import { fetchResetCreditHistory } from "../../services/resetCreditHistory";
 import { getDashboardCopy } from "../../application/dashboard/copy";
 import type {
   DashboardActionName,
@@ -10,7 +13,7 @@ import type {
   DashboardHostMessage
 } from "../../domain/dashboard/types";
 import type { CodexAccountRecord } from "../../core/types";
-import type { DashboardLanguage } from "../../localization/languages";
+import { getIntlLocale, type DashboardLanguage } from "../../localization/languages";
 import { AccountsRepository } from "../../storage";
 import { AnnouncementService, type AnnouncementOptions } from "../../services/announcements";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
@@ -20,6 +23,8 @@ import { promptForTags } from "../tagEditor";
 import { parseSharedJsonInput, toFailureMessage, toImportActionPayload } from "./actionUtils";
 import type { DashboardOAuthCoordinator } from "./oauthCoordinator";
 import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
+import { hasPendingResetCreditRedemption, resolveResetCreditWorkspace } from "../../application/accounts/resetCreditRedemption";
+import { sameAccountWorkspace } from "../../storage/accountMetadata";
 import { getWakeupService } from "../workbench/wakeupRegistration";
 
 export type DashboardActionContext = {
@@ -49,7 +54,8 @@ export async function executeDashboardActionMessage(
   let errorMessage: string | undefined;
 
   try {
-    const account = message.accountId ? await ctx.repo.getAccount(message.accountId) : undefined;
+    const account = message.accountId && message.action !== "previewImportSharedJson"
+      ? await ctx.repo.getAccount(message.accountId) : undefined;
     payload = await runDashboardAction(ctx, message.action, message.payload, account);
   } catch (error) {
     status = "failed";
@@ -133,6 +139,12 @@ async function runDashboardAction(
       return handlePreviewImportSharedJson(ctx.repo, payload, translate);
     case "prepareOAuthSession":
       return ctx.oauth.prepareSession(translate);
+    case "prepareDeviceOAuthSession":
+      return ctx.oauth.prepareDeviceSession(payload?.deviceSessionId);
+    case "completeDeviceOAuthSession":
+      return ctx.oauth.completeDeviceSession(payload?.deviceSessionId, translate);
+    case "cancelDeviceOAuthSession":
+      return { deviceOAuthCancellation: ctx.oauth.cancelDeviceSession(payload?.deviceSessionId) };
     case "cancelOAuthSession":
       ctx.oauth.cancelSession(payload?.oauthSessionId);
       return undefined;
@@ -142,6 +154,12 @@ async function runDashboardAction(
       return ctx.oauth.completeSession(payload?.oauthSessionId, payload?.callbackUrl, translate);
     case "refreshView":
       await ctx.publishState(true);
+      return undefined;
+    case "moveDashboardAccount":
+      if (account && typeof payload?.moveTargetAccountId === "string") {
+        await ctx.repo.moveDashboardAccount(account.id, payload.moveTargetAccountId, payload.moveAfter === true);
+        ctx.schedulePublishState();
+      }
       return undefined;
     case "updateTags":
       return handleUpdateTags(ctx.repo, ctx.resolveLanguage, ctx.schedulePublishState, payload, account, translate);
@@ -162,8 +180,17 @@ async function runDashboardAction(
       return undefined;
     case "resyncProfile":
       if (account) {
-        await resyncAccountInfo(ctx.repo, account.id);
-        ctx.schedulePublishState();
+        try {
+          const result = await resyncAccountInfo(ctx.repo, account.id);
+          if (result) {
+            throw new Error(result.message);
+          }
+        } catch (error) {
+          void vscode.window.showWarningMessage(toFailureMessage(error));
+          throw error;
+        } finally {
+          ctx.schedulePublishState();
+        }
       }
       return undefined;
     case "dismissHealthIssue":
@@ -186,7 +213,10 @@ async function runDashboardAction(
       return undefined;
     case "refresh":
       if (account) {
-        await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
+        const refreshed = await vscode.commands.executeCommand<boolean>("codexAccounts.refreshQuota", account);
+        if (refreshed === false) {
+          throw new Error(getDashboardCopy(ctx.resolveLanguage()).quotaRefreshFailed);
+        }
       }
       return undefined;
     case "remove":
@@ -200,9 +230,25 @@ async function runDashboardAction(
       }
       return undefined;
     case "getResetCredits":
-      return handleGetResetCredits(ctx.repo, account);
+      return handleGetResetCredits(ctx.repo, account, ctx.schedulePublishState);
+    case "getResetCreditHistory":
+      return handleGetResetCreditHistory(ctx.repo, account, payload?.resetCreditHistoryCursor);
+    case "getLocalResetCreditHistory": {
+      if (!account) {
+        throw new Error("Account not found");
+      }
+      const tokens = await ctx.repo.getTokens(account.id, { syncExternal: false });
+      const latest = await ctx.repo.getAccount(account.id);
+      if (!latest || !sameAccountWorkspace(account, latest)) {
+        throw new Error("Codex workspace changed while reading local reset credit history");
+      }
+      const scope = tokens ? resolveResetCreditWorkspace(latest, tokens) : latest;
+      return { localResetCreditHistory: (latest.resetCreditLocalHistory ?? [])
+        .filter((row) => sameAccountWorkspace(row, scope)).reverse()
+        .map(({ requestId, occurredAt, outcome }) => ({ requestId, occurredAt, outcome })) };
+    }
     case "consumeResetCredit":
-      return handleConsumeResetCredit(ctx.repo, account, ctx.schedulePublishState, ctx.resolveLanguage());
+      return handleConsumeResetCredit(ctx.repo, account, ctx.schedulePublishState, ctx.resolveLanguage(), payload?.resetCreditId);
     default:
       return undefined;
   }
@@ -235,7 +281,7 @@ async function handleShareTokens(
       message: toFailureMessage(error)
     });
     void vscode.window.showErrorMessage(message);
-    throw new Error(message);
+    throw new Error(message, { cause: error });
   }
 }
 
@@ -260,7 +306,7 @@ async function handleRestoreFromBackup(
       message: toFailureMessage(error)
     });
     void vscode.window.showErrorMessage(message);
-    throw new Error(message);
+    throw new Error(message, { cause: error });
   }
 }
 
@@ -285,7 +331,7 @@ async function handleRestoreFromAuthJson(
       message: toFailureMessage(error)
     });
     void vscode.window.showErrorMessage(message);
-    throw new Error(message);
+    throw new Error(message, { cause: error });
   }
 }
 
@@ -303,8 +349,8 @@ async function handleOpenExternalUrl(payload: DashboardActionPayload | undefined
   if (!url) {
     return undefined;
   }
-  await vscode.env.openExternal(vscode.Uri.parse(url));
-  return undefined;
+  const externalUrlOpened = await vscode.env.openExternal(vscode.Uri.parse(url));
+  return { externalUrlOpened };
 }
 
 async function handleDownloadJsonFile(
@@ -365,7 +411,7 @@ async function handleImportSharedJson(
       message: toFailureMessage(error)
     });
     void vscode.window.showErrorMessage(message);
-    throw new Error(message);
+    throw new Error(message, { cause: error });
   }
 }
 
@@ -388,9 +434,12 @@ async function handlePreviewImportSharedJson(
   }
 
   const parsed = parseSharedJsonInput(jsonText, (message) => translate("message.sharedJsonParseFailed", { message }));
-  return {
-    importPreview: await repo.previewSharedAccountsImport(parsed)
-  };
+  const importPreview = await repo.previewSharedAccountsImport(parsed);
+  if (Array.isArray(payload?.probeImportIndexes) && payload.probeImportIndexes.length > 0) {
+    importPreview.quotaProbes = await probeSharedImportQuotas(parsed, payload.probeImportIndexes,
+      importPreview.validEntries?.map((entry) => entry.index) ?? []);
+  }
+  return { importPreview };
 }
 
 async function handleUpdateTags(
@@ -482,6 +531,7 @@ async function handleBatchRefresh(
           announce: false,
           forceRefresh: true,
           refreshView: false,
+          throwOnFailure: true,
           warnQuota: false
         });
         success += 1;
@@ -527,11 +577,22 @@ async function handleBatchResync(
   const accountsById = new Map(await Promise.all(targetIds.map(async (id) => [id, await repo.getAccount(id)] as const)));
   let success = 0;
   let failed = 0;
+  let partial = 0;
+  let superseded = 0;
   const failures: DashboardBatchResultFailure[] = [];
   await runWithConcurrencyLimit(targetIds, 4, async (id) => {
     try {
-      await resyncAccountInfo(repo, id);
-      success += 1;
+      const result = await resyncAccountInfo(repo, id);
+      if (result) {
+        if (result.outcome === "superseded") {
+          superseded += 1;
+        } else {
+          partial += 1;
+        }
+        failures.push({ accountId: id, email: accountsById.get(id)?.email, ...result });
+      } else {
+        success += 1;
+      }
     } catch (error) {
       failed += 1;
       failures.push({
@@ -543,12 +604,15 @@ async function handleBatchResync(
     }
   }, { delayMs: CODEX_BATCH_REFRESH_DELAY_MS });
   schedulePublishState();
-  const message = translate("message.batchResyncSummary", {
+  const message = translate(partial || superseded ? "message.batchResyncDetailedSummary" : "message.batchResyncSummary", {
     success,
-    failed
+    failed,
+    partial,
+    superseded
   });
-  if (failed > 0) {
-    void vscode.window.showWarningMessage(message);
+  if (failures.length) {
+    const reason = failures[0]?.message;
+    void vscode.window.showWarningMessage(reason ? `${message} ${reason}` : message);
   } else {
     void vscode.window.showInformationMessage(message);
   }
@@ -557,20 +621,26 @@ async function handleBatchResync(
       kind: "batch_resync" as const,
       successCount: success,
       failedCount: failed,
+      ...(partial ? { partialCount: partial } : {}),
+      ...(superseded ? { supersededCount: superseded } : {}),
       failures
     }
   };
 }
 
-async function resyncAccountInfo(repo: AccountsRepository, accountId: string): Promise<void> {
+async function resyncAccountInfo(repo: AccountsRepository, accountId: string): Promise<Pick<DashboardBatchResultFailure, "outcome" | "message"> | undefined> {
   await repo.refreshAccountProfileMetadata(accountId);
-  await refreshSingleQuota(repo, { refresh() {} }, accountId, {
-    announce: false,
-    awaitSubscriptionRefresh: true,
-    forceRefresh: true,
-    refreshView: false,
-    warnQuota: false
-  });
+  try {
+    await refreshSingleQuota(repo, { refresh() {} }, accountId, {
+      announce: false, awaitSubscriptionRefresh: true, forceRefresh: true,
+      refreshView: false, warnQuota: false, throwOnFailure: true
+    });
+  } catch (error) {
+    const cause = error instanceof Error ? error.cause as CodexAccountRecord["quotaError"] : undefined;
+    return { outcome: cause?.code === "quota_refresh_superseded" ? "superseded" : "partial", message: toFailureMessage(error) };
+  }
+  const latest = await repo.getAccount(accountId);
+  return latest?.subscriptionQueryLastError ? { outcome: "partial", message: latest.subscriptionQueryLastError } : undefined;
 }
 
 async function handleBatchRemove(
@@ -646,41 +716,93 @@ async function handleReloadPrompt(account: CodexAccountRecord | undefined) {
 
 async function handleGetResetCredits(
   repo: AccountsRepository,
-  account?: Awaited<ReturnType<AccountsRepository["getAccount"]>>
+  account?: CodexAccountRecord,
+  schedulePublishState?: () => void
 ) {
   if (!account) {
     throw new Error("Account not found");
   }
 
-  const accountId = account.accountId ?? undefined;
-  const snapshot = await runAuthenticatedAccountRequest(repo, account.id, (tokens) =>
-    fetchResetCredits(tokens.accessToken, accountId)
-  );
+  const snapshot = await refreshResetCreditInventory(repo, account, { force: true });
+  schedulePublishState?.();
   return { resetCredits: snapshot };
+}
+
+async function handleGetResetCreditHistory(
+  repo: AccountsRepository,
+  account: CodexAccountRecord | undefined,
+  cursor?: string
+) {
+  if (!account) {
+    throw new Error("Account not found");
+  }
+  if (cursor !== undefined && typeof cursor !== "string") {
+    throw new Error("Invalid reset credit history cursor");
+  }
+
+  let requestedWorkspace: ReturnType<typeof resolveResetCreditWorkspace> | undefined;
+  const resetCreditHistory = await runAuthenticatedAccountRequest(repo, account.id, async (tokens) => {
+    const latest = await repo.getAccount(account.id);
+    if (!latest || !sameAccountWorkspace(account, latest)) {
+      throw new Error("Codex workspace changed while reading reset credit history");
+    }
+    const workspace = resolveResetCreditWorkspace(latest, tokens);
+    if (requestedWorkspace && !sameAccountWorkspace(requestedWorkspace, workspace)) {
+      throw new Error("Codex credentials changed workspace while reading reset credit history");
+    }
+    requestedWorkspace = workspace;
+    return fetchResetCreditHistory(tokens.accessToken, workspace.accountId, cursor);
+  });
+
+  const latest = await repo.getAccount(account.id);
+  if (!latest || !sameAccountWorkspace(account, latest)) {
+    throw new Error("Codex workspace changed while reading reset credit history");
+  }
+  return { resetCreditHistory };
 }
 
 async function handleConsumeResetCredit(
   repo: AccountsRepository,
-  account?: Awaited<ReturnType<AccountsRepository["getAccount"]>>,
-  schedulePublishState?: () => void,
-  lang?: string
+  account: CodexAccountRecord | undefined,
+  schedulePublishState: () => void,
+  lang: DashboardLanguage,
+  creditId?: string
 ) {
   if (!account) {
     throw new Error("Account not found");
   }
 
-  const available = account.quotaSummary?.resetCreditsAvailable;
-  if (available == null || available <= 0) {
+  const retry = hasPendingResetCreditRedemption(account);
+  const available = account.quotaSummary?.resetCreditsAvailable ?? account.resetCreditInventory?.snapshot?.availableCount ?? 0;
+  if (creditId !== undefined && (typeof creditId !== "string" || !creditId.trim())) {
+    throw new Error("Invalid reset credit ID.");
+  }
+  if (retry && creditId !== undefined && account.resetCreditRedemption?.creditId !== creditId) {
+    throw new Error("Confirm the previous reset before using another credit.");
+  }
+  if (!retry && creditId === undefined && available <= 0) {
     throw new Error("No reset credits available");
   }
 
-  // 使用 Dashboard 语言设置而非 VS Code UI 语言
-  const isZh = (lang ?? vscode.env.language).toLowerCase().startsWith("zh");
-  const title = isZh ? "要重置你的使用量吗？" : "Reset your usage?";
-  const body = isZh
-    ? `重置速率限制后，继续不间断地工作。你还有 ${available} 次重置 可用。`
-    : `Reset your rate limit and keep working without interruption. You have ${available} reset(s) available.`;
-  const confirmBtn = isZh ? "重置速率限制" : "Reset Rate Limit";
+  const isZh = lang.startsWith("zh");
+  const title = retry
+    ? isZh ? "确认上次重置结果？" : "Confirm the previous reset?"
+    : isZh ? "要重置你的使用量吗？" : "Reset your usage?";
+  let body = retry
+    ? isZh ? "将使用原兑换请求确认结果。" : "The original redemption request will be retried."
+    : isZh ? `你还有 ${available} 次重置可用。` : `You have ${available} reset(s) available.`;
+  if (!retry && creditId !== undefined) {
+    body = isZh ? "将使用你选择的重置卡。" : "The selected reset credit will be used.";
+    const selected = account.resetCreditInventory?.snapshot?.credits.find((credit) => credit.id === creditId);
+    const expiration = new Date((selected?.expires_at ?? NaN) * 1000);
+    if (Number.isFinite(expiration.getTime())) {
+      const formatted = new Intl.DateTimeFormat(getIntlLocale(lang), { dateStyle: "medium", timeStyle: "short" }).format(expiration);
+      body = isZh ? `将使用 ${formatted} 到期的重置卡。` : `The reset credit expiring on ${formatted} will be used.`;
+    }
+  }
+  const confirmBtn = retry
+    ? isZh ? "确认上次重置" : "Confirm Previous Reset"
+    : isZh ? "重置速率限制" : "Reset Rate Limit";
 
   const choice = await vscode.window.showWarningMessage(
     `${title}\n\n${body}`,
@@ -691,23 +813,58 @@ async function handleConsumeResetCredit(
     return undefined;
   }
 
-  const accountId = account.accountId ?? undefined;
-  const redeemRequestId = crypto.randomUUID();
-  await runAuthenticatedAccountRequest(repo, account.id, (tokens) =>
-    consumeResetCredit(tokens.accessToken, accountId, redeemRequestId)
-  );
-
-  void vscode.window.showInformationMessage(
-    isZh ? "速率限制已重置，你可以继续工作了。" : "Rate limit has been reset. You can continue working."
-  );
-
-  if (account) {
-    try {
-      await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
-    } catch (error) {
-      console.warn("[codexAccounts] refresh quota after consuming reset credit failed:", error);
-      schedulePublishState?.();
+  let submitted = false;
+  let outcome: Awaited<ReturnType<typeof consumeResetCredit>>;
+  try {
+    const initialTokens = await repo.getFreshTokens(account.id);
+    if (!initialTokens?.accessToken) {
+      throw new Error("No access token available");
     }
+    const workspace = resolveResetCreditWorkspace(account, initialTokens);
+    outcome = await repo.redeemResetCredit(account, workspace, (requestId, selectedCreditId) => {
+      schedulePublishState();
+      return runAuthenticatedAccountRequest(repo, account.id, async (tokens) => {
+        const latest = await repo.getAccount(account.id);
+        if (!latest || !sameAccountWorkspace(workspace, resolveResetCreditWorkspace(latest, tokens))) {
+          throw new Error("Codex workspace changed during reset credit redemption");
+        }
+        submitted = true;
+        return consumeResetCredit(tokens.accessToken, workspace.accountId, requestId, selectedCreditId);
+      }, initialTokens);
+    }, creditId);
+  } catch (error) {
+    const message = submitted
+      ? isZh ? "重置结果待确认。再次确认时会使用同一个兑换请求。"
+        : "The reset result is unconfirmed. Retrying will reuse the same redemption request."
+      : toFailureMessage(error);
+    void vscode.window.showWarningMessage(message);
+    throw new Error(message, { cause: error });
+  } finally {
+    schedulePublishState();
   }
-  return undefined;
+
+  const redeemed = outcome === "reset" || outcome === "already_redeemed";
+  if (redeemed) {
+    void vscode.window.showInformationMessage(
+      isZh ? "速率限制已重置，你可以继续工作了。" : "Rate limit has been reset. You can continue working."
+    );
+  } else {
+    const message = outcome === "no_credit"
+      ? isZh ? "没有可用的重置卡。" : "No reset credits are available."
+      : isZh ? "当前额度无需重置。" : "The rate limit does not need to be reset.";
+    void vscode.window.showWarningMessage(message);
+  }
+  let resetCredits: Awaited<ReturnType<typeof refreshResetCreditInventory>>;
+  try {
+    resetCredits = await refreshResetCreditInventory(repo, account, { force: true });
+    schedulePublishState();
+  } catch {
+    console.warn("[codexAccounts] refresh reset credit inventory after redemption failed");
+  }
+  try {
+    await vscode.commands.executeCommand("codexAccounts.refreshQuota", account);
+  } catch (error) {
+    console.warn("[codexAccounts] refresh quota after consuming reset credit failed:", error);
+  }
+  return redeemed || resetCredits ? { resetCredits, resetCreditHistoryChanged: redeemed ? true as const : undefined } : undefined;
 }

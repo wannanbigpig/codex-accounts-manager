@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { needsRefresh } from "../../auth/oauth";
-import { getAutoRefreshMinutes, isBackgroundTokenRefreshEnabled } from "../../infrastructure/config/extensionSettings";
+import { getAutoRefreshMinutes, getCodexAccountsConfiguration, isBackgroundTokenRefreshEnabled, readAutoRefreshPlanTypes } from "../../infrastructure/config/extensionSettings";
+import { AUTO_REFRESH_PLANS } from "../../domain/dashboard/types";
 import type { AccountsRepository } from "../../storage";
 import { shouldRunAccountScheduler } from "./refreshSignature";
 import {
@@ -19,8 +20,41 @@ export function registerAutoRefreshScheduler(params: {
   onRefresh: () => void;
 }): vscode.Disposable {
   let timer: NodeJS.Timeout | undefined;
+  let inFlight = false;
+  let disposed = false;
+
+  const runAutoRefresh = async (): Promise<void> => {
+    if (inFlight || !timer) {
+      return;
+    }
+
+    inFlight = true;
+    try {
+      const accounts = await params.repo.listAccounts();
+      if (timer && shouldRunAccountScheduler(accounts.length)) {
+        await params.repo.runBackgroundQuotaBatch(async () => {
+          if (!timer) {
+            return;
+          }
+          const plans = readAutoRefreshPlanTypes(getCodexAccountsConfiguration().get<unknown>("autoRefreshPlanTypes"));
+          await vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", {
+            silent: true,
+            forceRefresh: true,
+            ...(plans.length !== AUTO_REFRESH_PLANS.length ? { backgroundPlanTypes: plans } : {})
+          });
+        });
+      }
+    } catch (error) {
+      console.warn("[codexAccounts] background quota refresh failed:", error);
+    } finally {
+      inFlight = false;
+    }
+  };
 
   const applySchedule = (): void => {
+    if (disposed) {
+      return;
+    }
     if (timer) {
       clearInterval(timer);
       timer = undefined;
@@ -31,25 +65,8 @@ export function registerAutoRefreshScheduler(params: {
       return;
     }
 
-    const runAutoRefresh = (): void => {
-      void params.repo.listAccounts().then((accounts) => {
-        if (!shouldRunAccountScheduler(accounts.length)) {
-          return;
-        }
-
-        void vscode.commands.executeCommand("codexAccounts.refreshAllQuotas", {
-          silent: true,
-          forceRefresh: true
-        });
-      });
-    };
-
-    timer = setInterval(runAutoRefresh, minutes * 60 * 1000);
-    void params.repo.listAccounts().then((accounts) => {
-      if (shouldRunAccountScheduler(accounts.length)) {
-        runAutoRefresh();
-      }
-    });
+    timer = setInterval(() => { void runAutoRefresh(); }, minutes * 60 * 1000);
+    void runAutoRefresh();
   };
 
   applySchedule();
@@ -63,9 +80,14 @@ export function registerAutoRefreshScheduler(params: {
   params.context.subscriptions.push(configDisposable);
   return {
     dispose(): void {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
       configDisposable.dispose();
       if (timer) {
         clearInterval(timer);
+        timer = undefined;
       }
     }
   };

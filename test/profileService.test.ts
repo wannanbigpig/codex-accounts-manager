@@ -223,73 +223,61 @@ describe("fetchRemoteAccountProfile", () => {
     });
   });
 
-  it("does not reuse cached profile across different organizations sharing the same token and accountId", async () => {
+  it("prefers confirmed account and organization IDs over a stale workspace name", async () => {
+    const tokens: CodexTokens = {
+      idToken: createJwt({ email: "dev@example.com", "https://api.openai.com/auth": { organization_id: "org_target" } }),
+      accessToken: createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_target" } })
+    };
+    fetchWithTimeoutMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      accounts: {
+        acct_other: { account: { account_id: "acct_other", organization_id: "org_other", name: "Old Name", type: "workspace" } },
+        acct_target: { account: { organization_id: "org_target", name: "New Name", type: "workspace" } }
+      }
+    })));
+
+    expect(await fetchRemoteAccountProfile(tokens, { forceRefresh: true, preferredAccountName: "Old Name" }))
+      .toMatchObject({ accountId: "acct_target", organizationId: "org_target", accountName: "New Name" });
+  });
+
+  it("rejects the same accountId when the response identifies a different organization", async () => {
+    const tokens: CodexTokens = {
+      idToken: createJwt({ email: "dev@example.com", "https://api.openai.com/auth": { organization_id: "org_target" } }),
+      accessToken: createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct_target" } })
+    };
+    const response = JSON.stringify({
+      accounts: [{ account_id: "acct_target", organization_id: "org_other", name: "Team", type: "workspace" }]
+    });
+    fetchWithTimeoutMock.mockImplementation(async () => new Response(response));
+
+    expect(await fetchRemoteAccountProfile(tokens, { forceRefresh: true })).toBeUndefined();
+  });
+
+  it("matches and caches different saved organizations even when the token, accountId and workspace name are shared", async () => {
     const accessToken = createJwt({
       "https://api.openai.com/auth": {
         chatgpt_account_id: "acct_shared"
       }
     });
-    const personalTokens: CodexTokens = {
+    const tokens: CodexTokens = {
       idToken: createJwt({
         email: "dev@example.com",
         "https://api.openai.com/auth": {
-          chatgpt_account_id: "acct_shared",
-          organization_id: "org_personal"
+          chatgpt_account_id: "acct_shared"
         }
       }),
       accessToken,
       accountId: "acct_shared"
     };
-    const teamTokens: CodexTokens = {
-      idToken: createJwt({
-        email: "dev@example.com",
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "acct_shared",
-          organization_id: "org_team"
-        }
-      }),
-      accessToken,
-      accountId: "acct_shared"
-    };
+    const body = JSON.stringify({
+      accounts: [
+        { id: "acct_shared", organization_id: "org_personal", plan_type: "plus", name: "Shared" },
+        { id: "acct_shared", organization_id: "org_team", plan_type: "team", name: "Shared" }
+      ]
+    });
+    fetchWithTimeoutMock.mockImplementation(async () => new Response(body));
 
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            email: "dev@example.com",
-            accounts: [
-              {
-                id: "acct_shared",
-                workspace_id: "ws_personal",
-                organization_id: "org_personal",
-                plan_type: "plus",
-                name: "Personal Workspace"
-              }
-            ]
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            email: "dev@example.com",
-            accounts: [
-              {
-                id: "acct_shared",
-                workspace_id: "ws_team",
-                organization_id: "org_team",
-                plan_type: "team",
-                name: "Team Workspace"
-              }
-            ]
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      );
-
-    const personalProfile = await fetchRemoteAccountProfile(personalTokens);
-    const teamProfile = await fetchRemoteAccountProfile(teamTokens);
+    const personalProfile = await fetchRemoteAccountProfile(tokens, { preferredOrganizationId: "org_personal", preferredAccountName: "Shared" });
+    const teamProfile = await fetchRemoteAccountProfile(tokens, { preferredOrganizationId: "org_team", preferredAccountName: "Shared" });
 
     expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
     expect(personalProfile?.organizationId).toBe("org_personal");

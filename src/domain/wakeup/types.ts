@@ -14,6 +14,7 @@ export interface WakeupTaskInput {
   scheduleMode?: "calendar" | WakeupScheduleMode;
   intervalMinutes?: number;
   quotaResetWindow?: WakeupQuotaResetWindow;
+  quotaResetDelayMinutes?: number;
   startupDelayMinutes?: number;
   model: string;
   effort: WakeupEffort;
@@ -69,7 +70,7 @@ export interface WakeupRun {
 
 export interface WakeupState {
   /** New formats are rejected by older hosts, so they cannot execute unsupported schedules. */
-  version: 4;
+  version: 5;
   timeZone: string;
   tasks: WakeupTask[];
   history: WakeupRun[];

@@ -178,6 +178,37 @@ body.privacy-hidden .privacy-sensitive-masked {
   color: var(--text);
   font-weight: 700;
 }
+
+.quota-history table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  table-layout: fixed;
+}
+.detail-history-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.detail-history-actions button[aria-pressed="true"] {
+  outline: 1px solid var(--vscode-focusBorder, currentColor);
+}
+.quota-history th,
+.quota-history td {
+  padding: 8px 4px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--vscode-panel-border, #ffffff26);
+}
+.quota-history td span,
+.quota-history td meter {
+  display: block;
+}
+.quota-history meter {
+  width: min(100%, 100px);
+}
 .badges {
   display: flex;
   gap: 8px;
@@ -480,5 +511,7 @@ html[data-theme="auto"] body.vscode-light .usage-bar::after {
   .hero-title-row { width: 100%; }
   .badges { justify-content: flex-start; }
   h1 { font-size: 20px; }
-  .usage-bars { gap: 4px; grid-auto-columns: minmax(8px, 1fr); }
+  .usage-chart { grid-template-columns: minmax(0, 1fr); }
+  .usage-bars { gap: 4px; grid-auto-columns: minmax(0, 1fr); }
+  .usage-bar { min-width: 0; }
 }

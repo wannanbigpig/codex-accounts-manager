@@ -19,7 +19,7 @@ import { WorkbenchRefreshCoordinator } from "../src/presentation/workbench/refre
 let wakeup: WakeupSnapshot;
 beforeEach(() => {
   vi.clearAllMocks();
-  wakeup = { version: 4, timeZone: "Asia/Shanghai", tasks: [], history: [] };
+  wakeup = { version: 5, timeZone: "Asia/Shanghai", tasks: [], history: [] };
   snapshot.mockImplementation(async () => structuredClone(wakeup));
 });
 function coordinator(): WorkbenchRefreshCoordinator {

@@ -95,6 +95,33 @@ export interface CodexResetCreditsSnapshot {
   nextExpiresAt?: number;
 }
 
+export interface CodexResetCreditHistoryEvent {
+  id: string;
+  kind: string;
+  occurredAt: string;
+}
+
+export interface CodexResetCreditHistoryPage {
+  events: CodexResetCreditHistoryEvent[];
+  nextCursor?: string;
+}
+
+/** The latest local attempt, including a settled ID to detect stale confirmations. */
+export interface CodexResetCreditRedemption {
+  requestId: string;
+  pending: boolean;
+  creditId?: string;
+  accountId: string;
+  organizationId?: string;
+  userId?: string;
+}
+
+export interface CodexResetCreditLocalRecord {
+  requestId: string;
+  occurredAt?: number;
+  outcome: "pending" | "reset" | "already_redeemed" | "nothing_to_reset" | "no_credit";
+}
+
 export interface CodexAdditionalQuotaLimit {
   limitName: string;
   meteredFeature?: string;
@@ -113,6 +140,7 @@ export interface CodexAdditionalQuotaLimit {
 }
 
 export interface CodexCreditsSummary {
+  availability?: "available" | "exhausted" | "limited" | "unknown";
   hasCredits: boolean;
   unlimited: boolean;
   overageLimitReached: boolean;
@@ -137,6 +165,10 @@ export interface CodexCreditsSummary {
 export interface CodexQuotaErrorInfo {
   /** 错误码 */
   code?: ErrorCode | string;
+  /** HTTP 状态码 */
+  statusCode?: number;
+  /** 服务端指定的最早重试时间 (毫秒) */
+  retryAt?: number;
   /** 错误消息 */
   message: string;
   /** 错误发生时间戳 (秒) */
@@ -163,6 +195,8 @@ export interface CodexAccountRecord {
   planType?: string;
   /** ChatGPT 订阅到期时间（原始字符串或时间戳字符串） */
   subscriptionActiveUntil?: string;
+  /** 来源优先级用于保护工作区订阅明细及明确的 Free 状态。 */
+  subscriptionExpirySource?: "subscription" | "entitlement" | "confirmed-free";
   /** 订阅查询最后尝试时间戳 (ms) */
   subscriptionQueryLastAttemptAt?: number;
   /** 订阅查询下次允许重试时间戳 (ms) — 对齐 cockpit 30min backoff */
@@ -191,6 +225,18 @@ export interface CodexAccountRecord {
   lastQuotaAt?: number;
   /** 配额摘要 */
   quotaSummary?: CodexQuotaSummary;
+  /** Local observations for this saved workspace. */
+  quotaHistory?: { scope: string; lastObservedAt: number; points: CodexQuotaHistoryPoint[] };
+  /** Local-only reset-card attempt. */
+  resetCreditRedemption?: CodexResetCreditRedemption;
+  resetCreditLocalHistory?: Array<CodexResetCreditLocalRecord & Pick<CodexResetCreditRedemption, "accountId" | "organizationId" | "userId">>;
+  /** Cached workspace inventory from the reset-credit endpoint. */
+  resetCreditInventory?: {
+    snapshot?: CodexResetCreditsSnapshot;
+    receivedAt?: number;
+    refreshAt: number;
+    usageCount?: number;
+  };
   /** 配额错误信息 */
   quotaError?: CodexQuotaErrorInfo;
   /** 创建时间戳 (毫秒) */
@@ -199,10 +245,18 @@ export interface CodexAccountRecord {
   updatedAt: number;
 }
 
+export type CodexQuotaHistoryWindow = { remaining: number; resetAt?: number; minutes?: number };
+export type CodexQuotaHistoryPoint = {
+  at: number;
+  hourly?: CodexQuotaHistoryWindow;
+  weekly?: CodexQuotaHistoryWindow;
+};
+
 /**
  * 账号索引数据结构
  */
 export interface CodexAccountsIndex {
+  dashboardAccountOrder?: string[];
   /** 当前激活账号 ID */
   currentAccountId?: string;
   /** 账号列表 */
@@ -382,6 +436,12 @@ export interface UsageRateLimitInfo extends UsageWindowInfo {
  * Codex 使用量 API 响应
  */
 export interface CodexUsageResponse {
+  account_id?: string;
+  accountId?: string;
+  organization_id?: string;
+  organizationId?: string;
+  user_id?: string;
+  userId?: string;
   /** 计划类型 */
   plan_type?: string;
   /** ChatGPT 订阅到期时间 */
@@ -594,6 +654,15 @@ export interface CodexImportPreviewSummary {
   overwriteCount: number;
   invalidCount: number;
   invalidEntries: CodexImportPreviewIssue[];
+  validEntries?: Array<{ index: number; email: string }>;
+  quotaProbes?: CodexImportQuotaProbe[];
+}
+
+export interface CodexImportQuotaProbe {
+  index: number;
+  status: "available" | "unauthorized" | "rate_limited" | "failed";
+  hourlyPercentage?: number;
+  weeklyPercentage?: number;
 }
 
 export interface CodexImportResultIssue {

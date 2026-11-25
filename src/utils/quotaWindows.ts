@@ -1,4 +1,5 @@
-import { CodexAdditionalQuotaLimit, CodexCreditsSummary, CodexQuotaSummary } from "../core/types";
+import { CodexAdditionalQuotaLimit, CodexQuotaSummary } from "../core/types";
+import { readUsageCredits } from "./quotaCredits";
 
 const MAX_HOURLY_WINDOW_MINUTES = 360;
 const MIN_WEEKLY_WINDOW_MINUTES = 1440;
@@ -12,7 +13,7 @@ type QuotaWindowSnapshot = {
   windowMinutes?: number;
 };
 
-export function normalizeQuotaSummary(summary?: CodexQuotaSummary): CodexQuotaSummary | undefined {
+export function normalizeQuotaSummary(summary?: CodexQuotaSummary, workspace?: "workspace" | "personal"): CodexQuotaSummary | undefined {
   if (!summary) {
     return summary;
   }
@@ -40,6 +41,11 @@ export function normalizeQuotaSummary(summary?: CodexQuotaSummary): CodexQuotaSu
   const resolvedHourly = classified.hourly ?? (hourlyWindow && !isWeeklyWindow(hourlyWindow) ? hourlyWindow : undefined);
   const resolvedWeekly = classified.weekly ?? (weeklyWindow && !isHourlyWindow(weeklyWindow) ? weeklyWindow : undefined);
 
+  const rawPlan = getRecord(summary.rawData)?.["plan_type"];
+  const inferredWorkspace = workspace ? workspace === "workspace" : (typeof rawPlan === "string" && /team|business|enterprise/i.test(rawPlan));
+  const credits = summary.credits?.availability && summary.credits.availability !== "unknown"
+    ? summary.credits
+    : readUsageCredits(summary.rawData, inferredWorkspace) ?? summary.credits;
   return {
     hourlyPercentage: resolvedHourly?.percentage ?? 100,
     hourlyResetTime: resolvedHourly?.resetTime,
@@ -61,7 +67,7 @@ export function normalizeQuotaSummary(summary?: CodexQuotaSummary): CodexQuotaSu
     codeReviewWindowPresent: summary.codeReviewWindowPresent,
     additionalRateLimits:
       summary.additionalRateLimits?.map((limit) => ({ ...limit })) ?? readAdditionalRateLimitsFromRawData(summary.rawData),
-    credits: summary.credits ? { ...summary.credits } : readCreditsFromRawData(summary.rawData),
+    credits: credits && { ...credits },
     resetCreditsAvailable: summary.resetCreditsAvailable,
     resetCreditsNextExpiresAt: summary.resetCreditsNextExpiresAt,
     rawData: summary.rawData
@@ -110,80 +116,6 @@ function readAdditionalRateLimitsFromRawData(rawData: unknown): CodexAdditionalQ
   });
 
   return limits.length ? limits : undefined;
-}
-
-function readCreditsFromRawData(rawData: unknown): CodexCreditsSummary | undefined {
-  const raw = getRecord(rawData);
-  const individualLimit = getRecord(getRecord(raw?.["spend_control"])?.["individual_limit"]);
-  if (individualLimit) {
-    const total = readFiniteNumber(individualLimit["limit"]);
-    const used = readFiniteNumber(individualLimit["used"]);
-    const remaining =
-      readFiniteNumber(individualLimit["remaining"]) ??
-      (total !== undefined && used !== undefined ? Math.max(0, total - used) : undefined);
-    const remainingPercentRaw =
-      readFiniteNumber(individualLimit["remaining_percent"]) ??
-      (total !== undefined && total > 0 && remaining !== undefined ? (remaining / total) * 100 : undefined);
-    const resetAt = readFiniteNumber(individualLimit["reset_at"]);
-    const resetAfterSeconds = readFiniteNumber(individualLimit["reset_after_seconds"]);
-    const resetTime =
-      resetAt !== undefined
-        ? resetAt > 1_000_000_000_000
-          ? Math.floor(resetAt / 1000)
-          : Math.floor(resetAt)
-        : resetAfterSeconds !== undefined && resetAfterSeconds >= 0
-          ? Math.floor(Date.now() / 1000) + resetAfterSeconds
-          : undefined;
-
-    if ([total, used, remaining, remainingPercentRaw].some((value) => value !== undefined)) {
-      return {
-        hasCredits: (remaining ?? 0) > 0,
-        unlimited: false,
-        overageLimitReached: remaining === 0,
-        balance: remaining === undefined ? "" : String(remaining),
-        approxLocalMessages: [],
-        approxCloudMessages: [],
-        total,
-        used,
-        remaining,
-        remainingPercent: remainingPercentRaw === undefined ? undefined : Math.round(clampPercent(remainingPercentRaw)),
-        resetTime
-      };
-    }
-  }
-
-  const credits = getRecord(raw?.["credits"]);
-  if (!credits) {
-    return undefined;
-  }
-
-  return {
-    hasCredits: credits["has_credits"] === true || credits["hasCredits"] === true,
-    unlimited: credits["unlimited"] === true,
-    overageLimitReached: credits["overage_limit_reached"] === true || credits["overageLimitReached"] === true,
-    balance: String(credits["balance"] ?? "").trim(),
-    approxLocalMessages: Array.isArray(credits["approx_local_messages"])
-      ? credits["approx_local_messages"]
-      : Array.isArray(credits["approxLocalMessages"])
-        ? credits["approxLocalMessages"]
-        : [],
-    approxCloudMessages: Array.isArray(credits["approx_cloud_messages"])
-      ? credits["approx_cloud_messages"]
-      : Array.isArray(credits["approxCloudMessages"])
-        ? credits["approxCloudMessages"]
-        : []
-  };
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }
 
 function createQuotaWindowSnapshot(

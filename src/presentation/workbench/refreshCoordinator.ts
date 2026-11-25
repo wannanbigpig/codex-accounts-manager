@@ -174,14 +174,12 @@ export class WorkbenchRefreshCoordinator {
     isVisible: () => boolean
   ): Promise<void> {
     const previousObservedIdentity = this.lastObservedAuthIdentity;
-    const nextObservedIdentity = await this.readObservedAuthIdentity();
-    this.lastObservedAuthIdentity = nextObservedIdentity;
-
     await this.repo.syncActiveAccountFromAuthFile();
-    view.refresh();
-
     const afterAccounts = await this.repo.listAccounts();
     const nextActive = afterAccounts.find((account) => account.isActive);
+    const nextObservedIdentity = await readCurrentAuthAccountStorageId(afterAccounts);
+    this.lastObservedAuthIdentity = nextObservedIdentity;
+    view.refresh();
 
     if (isVisible()) {
       return;
@@ -223,6 +221,6 @@ export class WorkbenchRefreshCoordinator {
   }
 
   private async readObservedAuthIdentity(): Promise<string | undefined> {
-    return readCurrentAuthAccountStorageId();
+    return readCurrentAuthAccountStorageId(await this.repo.listAccounts());
   }
 }

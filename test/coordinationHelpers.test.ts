@@ -1,11 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createAccountsRepositoryState } from "../src/storage/accountsRepositoryState";
-import {
-  assertWriteAllowed,
-  markPendingSave,
-  readPendingOrCachedIndex
-} from "../src/storage/accountsWriteCoordinator";
-import { ErrorCode, StorageError } from "../src/core/errors";
+import { assertWriteAllowed } from "../src/storage/accountsWriteCoordinator";
+import { applyIndexChanges } from "../src/storage/accountsIndex";
+import { StorageError } from "../src/core/errors";
 import { parseSharedJsonInput, toImportActionPayload } from "../src/presentation/dashboard/actionUtils";
 import { buildWorkbenchRefreshSignature, shouldRunAccountScheduler } from "../src/presentation/workbench/refreshSignature";
 import { buildDashboardStateSignature } from "../src/presentation/dashboard/signature";
@@ -13,25 +10,21 @@ import { runWithConcurrencyLimit } from "../src/utils/concurrency";
 import { normalizeAutoRefreshMinutes } from "../src/infrastructure/config/extensionSettings";
 
 describe("accountsWriteCoordinator helpers", () => {
-  it("prefers pending saves over cache and schedules a flush", () => {
-    vi.useFakeTimers();
-    const state = createAccountsRepositoryState();
-    const flush = vi.fn();
+  it("merges only changed fields and does not recreate records deleted by another writer", () => {
+    const removed = { id: "a", email: "a@example.test", createdAt: 1, updatedAt: 1, isActive: true };
+    const survivor = { ...removed, id: "b", email: "b@example.test", isActive: false };
+    const before = { currentAccountId: "a", accounts: [removed, survivor] };
+    const latest = { currentAccountId: "b", accounts: [{ ...survivor, isActive: true, tags: ["keep"] }] };
 
-    markPendingSave(
-      state,
-      {
-        currentAccountId: "a",
-        accounts: [{ id: "a", email: "a@example.com", isActive: true, createdAt: 1, updatedAt: 1 }]
-      },
-      100,
-      flush
-    );
+    applyIndexChanges(latest, before, {
+      ...before,
+      accounts: [
+        { ...removed, tags: ["discard"] },
+        { ...survivor, planType: "plus" }
+      ]
+    });
 
-    expect(readPendingOrCachedIndex(state, 5000)?.currentAccountId).toBe("a");
-    vi.advanceTimersByTime(100);
-    expect(flush).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
+    expect(latest.accounts).toEqual([{ ...survivor, isActive: true, tags: ["keep"], planType: "plus" }]);
   });
 
   it("blocks writes when the index is unrecoverable", () => {

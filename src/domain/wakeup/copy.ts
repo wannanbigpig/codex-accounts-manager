@@ -35,6 +35,7 @@ const en = {
   quotaReset: "Quota reset",
   startup: "After startup",
   quotaResetWindow: "Reset window",
+  quotaResetDelay: "Wait after reset (minutes)",
   quotaWindows: { hourly: "Short window (e.g. 5-hour)", weekly: "Long window (week/month)", either: "Either window" },
   quotaResetHint:
     "Uses cached quota reset times. Without a reset time, the task waits. Only accounts whose window resets are woken.",
@@ -143,6 +144,7 @@ const zh: typeof en = {
   quotaReset: "配额重置",
   startup: "启动后",
   quotaResetWindow: "配额重置窗口",
+  quotaResetDelay: "重置后等待（分钟）",
   quotaWindows: { hourly: "短周期窗口（如 5 小时）", weekly: "长周期窗口（周/月）", either: "任一窗口" },
   quotaResetHint: "依赖已缓存的实际配额重置时间；缺少时间时等待，仅唤醒当次到点的账号。",
   startupDelay: "启动后延迟分钟",

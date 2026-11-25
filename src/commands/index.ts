@@ -22,7 +22,7 @@ export function registerCommands(
     ),
     vscode.commands.registerCommand("codexAccounts.switchAccount", (item?: CodexAccountRecord) => service.switchAccount(item)),
     vscode.commands.registerCommand("codexAccounts.refreshQuota", (item?: CodexAccountRecord) => service.refreshQuota(item)),
-    vscode.commands.registerCommand("codexAccounts.refreshAllQuotas", (options?: { silent?: boolean }) => service.refreshAllQuotas(options)),
+    vscode.commands.registerCommand("codexAccounts.refreshAllQuotas", (options?: Parameters<typeof service.refreshAllQuotas>[0]) => service.refreshAllQuotas(options)),
     vscode.commands.registerCommand("codexAccounts.restoreAccountsFromBackup", () => service.restoreAccountsFromBackup()),
     vscode.commands.registerCommand("codexAccounts.restoreAccountsFromAuthJson", () => service.restoreAccountsFromAuthJson()),
     vscode.commands.registerCommand("codexAccounts.restoreAccountsFromSharedJson", () => service.restoreAccountsFromSharedJson()),

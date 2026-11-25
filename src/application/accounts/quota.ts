@@ -1,13 +1,14 @@
 import * as vscode from "vscode";
-import { createError } from "../../core";
-import { CodexAccountRecord } from "../../core/types";
+import { AccountError, createError, ErrorCode } from "../../core";
+import { CodexAccountRecord, CodexTokens } from "../../core/types";
 import {
   getCodexAccountsConfiguration,
   normalizeAutoSwitchThreshold,
   normalizeQuotaWarningThreshold
 } from "../../infrastructure/config/extensionSettings";
-import { QuotaRefreshResult, refreshQuota, fetchResetCredits } from "../../services";
+import { QuotaRefreshResult, refreshQuota } from "../../services";
 import { AccountsRepository } from "../../storage";
+import { sameAccountWorkspace } from "../../storage/accountMetadata";
 import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
 import {
   clearAutoSwitchLock,
@@ -16,9 +17,10 @@ import {
 } from "../../presentation/workbench/autoSwitchState";
 import { clearTokenAutomationError } from "../../presentation/workbench/tokenAutomationState";
 import { getCommandCopy, getLanguage, getQuotaWarningCopy, resolveLongQuotaLabel } from "../../utils";
+import { extractClaims } from "../../utils/jwt";
 import { getDashboardCopy } from "../dashboard/copy";
 import { autoReloadWindowForAccount, handleCodexAppRestartPreference } from "./switchEffects";
-import { runAuthenticatedAccountRequest } from "./authenticatedAccountRequest";
+import { refreshResetCreditInventory } from "./resetCreditInventory";
 
 const AUTO_SWITCH_ENABLED = "autoSwitchEnabled";
 const HOURLY_QUOTA_CONTROL_ENABLED = "hourlyQuotaControlEnabled";
@@ -40,15 +42,126 @@ type RefreshSingleQuotaOptions = {
   awaitSubscriptionRefresh?: boolean;
   forceRefresh?: boolean;
   refreshView?: boolean;
+  throwOnFailure?: boolean;
   warnQuota?: boolean;
 };
+
+/** Refresh and store quota without triggering any account switching or UI effects. */
+export async function refreshStoredAccountQuota(
+  repo: AccountsRepository,
+  account: CodexAccountRecord,
+  tokens: CodexTokens,
+  forceRefresh: boolean,
+  signal?: AbortSignal
+): Promise<{ result: QuotaRefreshResult; updatedAccount: CodexAccountRecord; requestTokens: CodexTokens }> {
+  let requestTokens = tokens;
+  let result = await refreshQuota(account, requestTokens, forceRefresh);
+  if (result.error?.statusCode === 401 && tokens.refreshToken && !signal?.aborted) {
+    await verifyQuotaWorkspace(repo, account);
+    const refreshed = await repo.getFreshTokens(account.id, {
+      force: true,
+      expectedTokens: tokens,
+      validateRefreshedTokens: (replacement, previous) => verifyQuotaRetryTokens(account, tokens, replacement, previous)
+    }).catch((error: unknown) => {
+      if (error instanceof AccountError && error.code === ErrorCode.ACCOUNT_INVALID_DATA) {
+        throw error;
+      }
+      return undefined;
+    });
+    await verifyQuotaWorkspace(repo, account);
+    if (!refreshed?.accessToken) {
+      result = { error: { ...result.error, message: `${result.error.message} (token refresh failed)` } };
+    } else if (!signal?.aborted) {
+      verifyQuotaRetryTokens(account, tokens, refreshed);
+      requestTokens = refreshed;
+      try {
+        result = await refreshQuota(account, requestTokens, true);
+      } catch {
+        result = {
+          error: { message: "Codex quota retry failed after token refresh", timestamp: Math.floor(Date.now() / 1000) }
+        };
+      }
+    }
+  }
+
+  let superseded = false;
+  const updatedAccount = await repo.updateQuota(
+    account.id,
+    result.quota,
+    result.error,
+    result.error ? undefined : result.updatedTokens,
+    result.updatedPlanType,
+    result.updatedSubscriptionActiveUntil,
+    requestTokens,
+    account,
+    result.observedAt,
+    () => { superseded = true; }
+  );
+  if (superseded) {
+    result = { error: { code: "quota_refresh_superseded", message: "Codex quota refresh was superseded by newer credentials", timestamp: Math.floor(Date.now() / 1000) } };
+  }
+  return { result, updatedAccount, requestTokens };
+}
+
+function verifyQuotaRetryTokens(
+  account: CodexAccountRecord,
+  previous: CodexTokens,
+  current: CodexTokens,
+  storedBeforeRenewal?: CodexTokens
+): void {
+  const oldWorkspace = getQuotaTokenWorkspace(previous);
+  const newWorkspace = getQuotaTokenWorkspace(current);
+  // An unchanged token hint is replaced by the saved workspace in updateTokens.
+  const changesSavedScope = storedBeforeRenewal && current.accountId !== storedBeforeRenewal.accountId &&
+    hasKnownIdentityConflict(account.accountId, current.accountId);
+  if (
+    changesSavedScope ||
+    (!account.accountId && hasKnownIdentityConflict(oldWorkspace.accountId, newWorkspace.accountId)) ||
+    hasKnownIdentityConflict(oldWorkspace.organizationId, newWorkspace.organizationId) ||
+    hasKnownIdentityConflict(oldWorkspace.userId, newWorkspace.userId)
+  ) {
+    throw new AccountError("Codex workspace changed during token refresh", { code: ErrorCode.ACCOUNT_INVALID_DATA });
+  }
+}
+
+function getQuotaTokenWorkspace(tokens: CodexTokens) {
+  const access = readTokenClaims(tokens.accessToken);
+  const identity = readTokenClaims(tokens.idToken);
+  return {
+    accountId: tokens.accountId ?? identity?.accountId ?? access?.accountId,
+    organizationId: access?.organizationId ?? identity?.organizationId,
+    userId: access?.userId ?? identity?.userId
+  };
+}
+
+function readTokenClaims(token: string): ReturnType<typeof extractClaims> | undefined {
+  try {
+    return extractClaims(token, token);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasKnownIdentityConflict(previous: string | undefined, current: string | undefined): boolean {
+  return Boolean(previous && current && previous !== current);
+}
+
+async function verifyQuotaWorkspace(repo: AccountsRepository, account: CodexAccountRecord): Promise<void> {
+  const current = await repo.getAccount(account.id);
+  if (!current) {
+    throw createError.accountNotFound(account.id);
+  }
+  if (!sameAccountWorkspace(current, account)) {
+    throw new AccountError("Codex workspace changed during quota refresh", { code: ErrorCode.ACCOUNT_INVALID_DATA });
+  }
+}
 
 export async function refreshSingleQuota(
   repo: AccountsRepository,
   view: RefreshView,
   accountId: string,
   options: RefreshSingleQuotaOptions = {}
-): Promise<void> {
+): Promise<boolean> {
   const announce = options.announce ?? true;
   const forceRefresh = options.forceRefresh ?? announce;
   const awaitSubscriptionRefresh = options.awaitSubscriptionRefresh ?? false;
@@ -56,7 +169,10 @@ export async function refreshSingleQuota(
   const warnQuota = options.warnQuota ?? true;
   const account = await repo.getAccount(accountId);
   if (!account) {
-    return;
+    if (options.throwOnFailure) {
+      throw createError.accountNotFound(accountId);
+    }
+    return false;
   }
 
   const tokens = await repo.getFreshTokens(accountId);
@@ -64,16 +180,7 @@ export async function refreshSingleQuota(
     throw createError.accountNotFound(account.email);
   }
 
-  const result = await refreshQuota(account, tokens, forceRefresh);
-  const updatedAccount = await repo.updateQuota(
-    accountId,
-    result.quota,
-    result.error,
-    result.updatedTokens,
-    result.updatedPlanType,
-    result.updatedSubscriptionActiveUntil,
-    tokens
-  );
+  const { result, updatedAccount, requestTokens } = await refreshStoredAccountQuota(repo, account, tokens, forceRefresh);
   const subscriptionRefresh = repo.refreshSubscriptionState(accountId, forceRefresh).catch(() => undefined);
   if (awaitSubscriptionRefresh) {
     // 账号信息同步需要等订阅写入完成后再发布页面状态，避免继续展示旧套餐和旧到期时间。
@@ -84,9 +191,7 @@ export async function refreshSingleQuota(
   }
   // 后台异步拉取重置次数明细（含最新可用次数与最近到期时间），不阻塞配额刷新
   if (!result.error && updatedAccount.quotaSummary) {
-    const credTokens = result.updatedTokens ?? tokens;
-    const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
-    void syncResetCreditsSnapshot(repo, view, accountId, updatedAccount, credAccountId, credTokens);
+    void syncResetCreditsSnapshot(repo, view, updatedAccount, result.updatedTokens ?? requestTokens);
   }
   if (!result.error) {
     clearTokenAutomationError(accountId);
@@ -95,14 +200,11 @@ export async function refreshSingleQuota(
     view.refresh();
   }
   const switched = warnQuota && account.isActive ? await maybeAutoSwitchForActiveQuota(repo, view) : false;
-  if (warnQuota) {
-    if (switched) {
-      return;
-    }
+  if (warnQuota && !switched) {
     await maybeWarnForAccount(repo, accountId);
   }
 
-  if (announce) {
+  if (announce && !switched) {
     const copy = getCommandCopy();
     const label = formatAccountToastLabel(account);
     if (result.error) {
@@ -111,6 +213,10 @@ export async function refreshSingleQuota(
       void vscode.window.showInformationMessage(copy.quotaRefreshed(label));
     }
   }
+  if (options.throwOnFailure && result.error) {
+    throw new Error(result.error.message, { cause: result.error });
+  }
+  return !result.error;
 }
 
 export async function refreshImportedAccountQuota(
@@ -127,22 +233,11 @@ export async function refreshImportedAccountQuota(
     throw createError.accountNotFound(account.email);
   }
 
-  const result = await refreshQuota(account, tokens, true);
-  const updatedAccount = await repo.updateQuota(
-    accountId,
-    result.quota,
-    result.error,
-    result.updatedTokens,
-    result.updatedPlanType,
-    result.updatedSubscriptionActiveUntil,
-    tokens
-  );
+  const { result, updatedAccount, requestTokens } = await refreshStoredAccountQuota(repo, account, tokens, true);
   // 后台异步刷新订阅到期时间
   void repo.refreshSubscriptionState(accountId, true).catch(() => undefined);
   if (!result.error && updatedAccount.quotaSummary) {
-    const credTokens = result.updatedTokens ?? tokens;
-    const credAccountId = updatedAccount.accountId ?? account.accountId ?? undefined;
-    void syncResetCreditsSnapshot(repo, undefined, accountId, updatedAccount, credAccountId, credTokens);
+    void syncResetCreditsSnapshot(repo, undefined, updatedAccount, result.updatedTokens ?? requestTokens);
   }
   if (!result.error) {
     clearTokenAutomationError(accountId);
@@ -154,24 +249,13 @@ export async function refreshImportedAccountQuota(
 async function syncResetCreditsSnapshot(
   repo: AccountsRepository,
   view: RefreshView | undefined,
-  accountId: string,
   updatedAccount: CodexAccountRecord,
-  remoteAccountId: string | undefined,
-  initialTokens: Parameters<typeof runAuthenticatedAccountRequest>[3]
+  tokens: CodexTokens
 ): Promise<void> {
   try {
-    const snapshot = await runAuthenticatedAccountRequest(repo, accountId, (tokens) =>
-      fetchResetCredits(tokens.accessToken, remoteAccountId),
-      initialTokens
-    );
-    if (updatedAccount.quotaSummary) {
-      updatedAccount.quotaSummary.resetCreditsAvailable = snapshot.availableCount;
-      updatedAccount.quotaSummary.resetCreditsNextExpiresAt = snapshot.nextExpiresAt;
+    if (await refreshResetCreditInventory(repo, updatedAccount, { tokens })) {
+      view?.refresh();
     }
-    await repo.updateResetCreditsSnapshot(accountId, snapshot.availableCount, snapshot.nextExpiresAt).catch(
-      () => undefined
-    );
-    view?.refresh();
   } catch {
     return;
   }
@@ -235,12 +319,14 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
     return false;
   }
 
+  const now = Math.floor(Date.now() / 1000);
   const candidates = accounts
     .filter(
       (account) =>
         !account.isActive &&
         !!account.quotaSummary &&
         !account.quotaError &&
+        !hasExhaustedQuotaWindow(account, now) &&
         (!activeHourlyTriggered ||
           (hasComparableHourlyWindow(account) && account.quotaSummary.hourlyPercentage > hourlyThreshold)) &&
         (!activeWeeklyTriggered ||
@@ -294,6 +380,14 @@ export async function maybeAutoSwitchForActiveQuota(repo: AccountsRepository, vi
     await vscode.commands.executeCommand("workbench.action.reloadWindow");
   }
   return true;
+}
+
+function hasExhaustedQuotaWindow(account: CodexAccountRecord, now: number): boolean {
+  const quota = account.quotaSummary;
+  return Boolean(quota && (
+    (quota.hourlyWindowPresent === true && quota.hourlyPercentage === 0 && (quota.hourlyResetTime ?? Infinity) > now) ||
+    (quota.weeklyWindowPresent === true && quota.weeklyPercentage === 0 && (quota.weeklyResetTime ?? Infinity) > now)
+  ));
 }
 
 export async function maybeWarnForAccount(repo: AccountsRepository, accountId: string): Promise<void> {

@@ -76,6 +76,10 @@ export function validateWakeupTask(input: WakeupTaskInput): WakeupTaskInput {
   if (scheduleMode === "quota_reset" && !["hourly", "weekly", "either"].includes(input.quotaResetWindow ?? "")) {
     throw new Error("Invalid quota reset window");
   }
+  const quotaResetDelayMinutes = input.quotaResetDelayMinutes ?? 0;
+  if (scheduleMode === "quota_reset" && (!Number.isInteger(quotaResetDelayMinutes) || quotaResetDelayMinutes < 0 || quotaResetDelayMinutes > 1440)) {
+    throw new Error("Quota reset delay must contain 0–1440 whole minutes");
+  }
   if (
     scheduleMode === "interval" &&
     (typeof input.intervalMinutes !== "number" ||
@@ -137,7 +141,7 @@ export function validateWakeupTask(input: WakeupTaskInput): WakeupTaskInput {
     scheduleMode,
     ...(scheduleMode === "interval" ? { intervalMinutes: input.intervalMinutes } : {}),
     ...(scheduleMode === "startup" ? { startupDelayMinutes: input.startupDelayMinutes } : {}),
-    ...(scheduleMode === "quota_reset" ? { quotaResetWindow: input.quotaResetWindow } : {}),
+    ...(scheduleMode === "quota_reset" ? { quotaResetWindow: input.quotaResetWindow, quotaResetDelayMinutes } : {}),
     model,
     effort: input.effort,
     prompt

@@ -298,6 +298,22 @@ describe("sharedAccounts helpers", () => {
 
     expect(restored.subscriptionActiveUntil).toBe("1900000000");
   });
+
+  it("keeps a confirmed subscription when reimporting stale metadata for the same workspace", () => {
+    const account: CodexAccountRecord = {
+      id: "business", email: "dev@example.com", accountId: "acct_business", organizationId: "org_business",
+      planType: "business", subscriptionExpirySource: "subscription", subscriptionActiveUntil: "2099-10-01T00:00:00Z",
+      isActive: false, createdAt: 1, updatedAt: 1
+    };
+
+    applySharedAccountEntry(account, {
+      account_id: "acct_business", organization_id: "org_business", plan_type: "plus", subscription_active_until: "2099-09-01T00:00:00Z"
+    });
+
+    expect(account).toMatchObject({
+      planType: "business", subscriptionExpirySource: "subscription", subscriptionActiveUntil: "2099-10-01T00:00:00Z"
+    });
+  });
 });
 
 describe("accountMetadata helpers", () => {

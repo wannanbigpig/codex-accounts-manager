@@ -2813,6 +2813,137 @@ html[data-theme="auto"] body.vscode-light .wakeup-form textarea {
 .dashboard-modal-body {
   gap: 16px;
 }
+.reset-credits-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, calc(100vw - 32px));
+}
+.reset-credits-modal .dashboard-modal-body {
+  min-height: 0;
+  padding: 14px 18px 16px;
+  gap: 0;
+}
+.reset-credit-intro {
+  padding-bottom: 14px;
+}
+.reset-credit-account {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.reset-credit-intro p,
+.reset-credit-message,
+.reset-credit-pending {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.reset-credit-intro p {
+  margin-top: 5px;
+}
+.reset-credit-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-block: 1px solid var(--border-muted);
+}
+.reset-credit-toolbar .modal-tab {
+  padding-inline: 10px;
+}
+.reset-credit-count {
+  font-variant-numeric: tabular-nums;
+}
+.reset-credit-panel {
+  display: grid;
+  min-width: 0;
+}
+.reset-credit-panel[hidden] {
+  display: none;
+}
+.reset-credit-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.reset-credit-list-row {
+  display: grid;
+  gap: 4px;
+  align-items: center;
+  padding: 13px 0;
+  font-size: 12px;
+}
+.reset-credit-list-row + .reset-credit-list-row {
+  border-top: 1px solid var(--border-muted);
+}
+.reset-credit-available-row,
+.reset-credit-history-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+}
+.reset-credit-details {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.reset-credit-item-title {
+  color: var(--text-primary);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.reset-credit-row-note,
+.reset-credit-event-date {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.reset-credit-event-date {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+.reset-credit-event-date span:first-child {
+  color: var(--text-primary);
+}
+.reset-credit-message,
+.reset-credit-pending,
+.reset-credit-feedback {
+  margin-block: 12px 2px;
+}
+.reset-credit-pending {
+  color: var(--accent-orange);
+}
+.reset-credit-feedback {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.reset-credit-local-history {
+  margin-top: 8px;
+  border-top: 1px solid var(--border-muted);
+}
+.reset-credit-local-history summary {
+  cursor: pointer;
+  padding: 10px 0 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+@media (max-width: 360px) {
+  .reset-credits-modal .dashboard-modal-body {
+    padding-inline: 12px;
+  }
+  .reset-credit-available-row,
+  .reset-credit-history-row {
+    column-gap: 8px;
+  }
+}
 .announcement-overlay {
   z-index: 40;
 }

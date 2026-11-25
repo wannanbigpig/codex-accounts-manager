@@ -116,6 +116,7 @@ export type TranslationKey =
   | "message.refreshAllSummary"
   | "message.batchRefreshSummary"
   | "message.batchResyncSummary"
+  | "message.batchResyncDetailedSummary"
   | "message.batchRemoveSummary"
   | "message.batchTagsSummary"
   // Confirm

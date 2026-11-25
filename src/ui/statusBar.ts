@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { AccountsRepository } from "../storage";
 import { CodexAccountRecord } from "../core/types";
-import { formatPlanType } from "../application/dashboard/copy";
+import { formatAccountPlan } from "../application/dashboard/copy";
 import { getCurrentWindowRuntimeAccountId } from "../presentation/workbench/windowRuntimeAccount";
 import { formatRelativeReset, formatTimestamp } from "../utils/time";
 import {
@@ -106,7 +106,7 @@ export function renderAccountPanel(account: CodexAccountRecord, current: boolean
   const _t = t();
   const language = getLanguage();
   const title = `${account.accountName ?? account.email} · ${account.email}`;
-  const plan = formatPlanType(account.planType, language);
+  const plan = formatAccountPlan(account, language);
   const markers = [
     current ? _t("account.current") : undefined,
     primary ? _t("account.primary") : undefined,

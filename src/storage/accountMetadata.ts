@@ -12,6 +12,28 @@ export type RemoteAccountProfileLike = {
   subscriptionActiveUntil?: string;
 };
 
+export type AccountWorkspace = Pick<CodexAccountRecord, "accountId" | "organizationId" | "userId">;
+
+export function sameAccountWorkspace(left: AccountWorkspace, right: AccountWorkspace): boolean {
+  return left.accountId === right.accountId && left.organizationId === right.organizationId && left.userId === right.userId;
+}
+
+export function clearDerivedWorkspaceData(account: CodexAccountRecord): void {
+  account.planType = undefined;
+  account.subscriptionExpirySource = undefined;
+  account.subscriptionActiveUntil = undefined;
+  account.subscriptionQueryLastAttemptAt = undefined;
+  account.subscriptionQueryLastError = undefined;
+  account.subscriptionQueryNextRetryAt = undefined;
+  account.lastQuotaAt = undefined;
+  account.quotaSummary = undefined;
+  account.quotaHistory = undefined;
+  account.resetCreditLocalHistory = undefined;
+  account.resetCreditInventory = undefined;
+  account.quotaError = undefined;
+  account.dismissedHealthIssueKey = undefined;
+}
+
 export function pickWorkspaceLikeTitle(candidates?: Array<string | undefined>, planType?: string): string | undefined {
   if (!candidates?.length) {
     return undefined;
@@ -150,11 +172,23 @@ export function buildAccountRecordDraft(params: {
   forceActive: boolean;
   now: number;
 }): CodexAccountRecord {
-  const remoteAccountIdMatchesClaims = didRemoteAccountMatchClaims(params.remoteProfile, params.claims.accountId);
-  const remoteAccountName = remoteAccountIdMatchesClaims
-    ? sanitizeWorkspaceName(params.remoteProfile?.accountName, params.claims.planType)
+  const remote = params.remoteProfile;
+  const expectedOrganizationId = params.claims.organizationId ?? params.existing?.organizationId;
+  const expectedUserId = params.claims.userId ?? params.existing?.userId;
+  const profile = didRemoteAccountMatchClaims(remote, params.claims.accountId) &&
+    (!remote?.organizationId || !expectedOrganizationId || remote.organizationId === expectedOrganizationId) &&
+    (!remote?.userId || !expectedUserId || remote.userId === expectedUserId)
+    ? remote
     : undefined;
-  const remoteAccountStructure = remoteAccountIdMatchesClaims ? params.remoteProfile?.accountStructure : undefined;
+  const remoteAccountName = sanitizeWorkspaceName(profile?.accountName, params.claims.planType);
+  const accountId = profile?.accountId ?? params.claims.accountId ?? params.tokens.accountId;
+  const organizationId = profile?.organizationId ?? params.claims.organizationId ??
+    (accountId === params.existing?.accountId ? params.existing?.organizationId : undefined);
+  const userId = params.claims.userId ?? (accountId === params.existing?.accountId ? params.existing?.userId : undefined);
+  const priorSubscription = params.existing && sameAccountWorkspace(params.existing, { accountId, organizationId, userId })
+    ? params.existing
+    : undefined;
+  const expirySource = priorSubscription?.subscriptionExpirySource;
   const claimsWorkspaceTitle = pickWorkspaceLikeTitle(
     params.claims.organizations?.map((item) => item.title),
     params.claims.planType
@@ -168,19 +202,23 @@ export function buildAccountRecordDraft(params: {
     id: params.storageId,
     loginAt: params.claims.loginAt ?? params.existing?.loginAt,
     email: params.claims.email,
-    userId: params.claims.userId,
+    userId,
     authProvider: params.claims.authProvider,
-    planType: normalizePlanType(params.remoteProfile?.planType ?? params.claims.planType ?? params.existing?.planType),
-    subscriptionActiveUntil: params.remoteProfile?.subscriptionActiveUntil ?? params.claims.subscriptionActiveUntil ?? params.existing?.subscriptionActiveUntil,
-    accountId: remoteAccountIdMatchesClaims
-      ? params.remoteProfile?.accountId ?? params.claims.accountId ?? params.tokens.accountId
-      : params.claims.accountId ?? params.tokens.accountId,
-    organizationId: params.remoteProfile?.organizationId ?? params.claims.organizationId,
+    planType: normalizePlanType((expirySource ? priorSubscription?.planType : undefined) ?? profile?.planType ?? params.claims.planType ?? params.existing?.planType),
+    subscriptionActiveUntil: expirySource
+      ? priorSubscription?.subscriptionActiveUntil
+      : profile?.subscriptionActiveUntil ?? params.claims.subscriptionActiveUntil ?? priorSubscription?.subscriptionActiveUntil,
+    subscriptionExpirySource: expirySource,
+    subscriptionQueryLastAttemptAt: priorSubscription?.subscriptionQueryLastAttemptAt,
+    subscriptionQueryLastError: priorSubscription?.subscriptionQueryLastError,
+    subscriptionQueryNextRetryAt: priorSubscription?.subscriptionQueryNextRetryAt,
+    accountId,
+    organizationId,
     accountName: resolvedAccountName,
     tags: normalizeAccountTagsForAccount(params.existing),
     addedVia: params.existing?.addedVia ?? params.addedVia,
     accountStructure: resolveAccountStructure(
-      remoteAccountStructure,
+      profile?.accountStructure,
       params.existing?.accountStructure,
       params.claims.planType,
       params.claims.organizationId
@@ -191,6 +229,10 @@ export function buildAccountRecordDraft(params: {
     dismissedHealthIssueKey: params.existing?.dismissedHealthIssueKey,
     lastQuotaAt: params.existing?.lastQuotaAt,
     quotaSummary: params.existing?.quotaSummary,
+    quotaHistory: priorSubscription?.quotaHistory,
+    resetCreditRedemption: params.existing?.resetCreditRedemption,
+    resetCreditLocalHistory: priorSubscription?.resetCreditLocalHistory,
+    resetCreditInventory: priorSubscription?.resetCreditInventory,
     quotaError: params.existing?.quotaError,
     createdAt: params.existing?.createdAt ?? params.now,
     updatedAt: params.now
@@ -215,19 +257,34 @@ export function applyRemoteProfileToAccount(params: {
     params.account.accountName = repairedName;
   }
 
+  const nextAccountId = params.remoteProfile?.accountId ?? claimsAccountId ?? params.account.accountId;
+  const nextOrganizationId = params.remoteProfile?.organizationId ?? params.claims.organizationId ?? params.account.organizationId;
+  const nextUserId = params.remoteProfile?.userId ?? params.claims.userId ?? params.account.userId;
+  if (
+    (params.account.accountId && params.account.accountId !== nextAccountId) ||
+    (params.account.organizationId && params.account.organizationId !== nextOrganizationId) ||
+    (params.account.userId && params.account.userId !== nextUserId)
+  ) {
+    clearDerivedWorkspaceData(params.account);
+  }
   params.account.email = params.remoteProfile?.email ?? params.claims.email ?? params.account.email;
-  params.account.userId = params.remoteProfile?.userId ?? params.claims.userId ?? params.account.userId;
+  params.account.userId = nextUserId;
   params.account.planType = normalizePlanType(
-    params.preservePlanType
+    params.preservePlanType || params.account.subscriptionExpirySource
       ? params.account.planType ?? params.remoteProfile?.planType ?? params.claims.planType
       : params.remoteProfile?.planType ?? params.claims.planType ?? params.account.planType
   );
-  params.account.subscriptionActiveUntil =
-    params.remoteProfile?.subscriptionActiveUntil ??
-    params.claims.subscriptionActiveUntil ??
-    params.account.subscriptionActiveUntil;
-  params.account.accountId = params.remoteProfile?.accountId ?? claimsAccountId ?? params.account.accountId;
-  params.account.organizationId = params.remoteProfile?.organizationId ?? params.claims.organizationId ?? params.account.organizationId;
+  if (!params.account.subscriptionExpirySource) {
+    const claimsMatchWorkspace =
+      (!params.claims.accountId || params.claims.accountId === nextAccountId) &&
+      (!params.claims.organizationId || params.claims.organizationId === nextOrganizationId);
+    params.account.subscriptionActiveUntil =
+      params.remoteProfile?.subscriptionActiveUntil ??
+      (claimsMatchWorkspace ? params.claims.subscriptionActiveUntil : undefined) ??
+      params.account.subscriptionActiveUntil;
+  }
+  params.account.accountId = nextAccountId;
+  params.account.organizationId = nextOrganizationId;
   params.account.accountStructure = resolveAccountStructure(
     params.remoteProfile?.accountStructure,
     params.account.accountStructure,

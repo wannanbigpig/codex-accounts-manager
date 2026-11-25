@@ -75,7 +75,7 @@ export class WakeupService {
       return await this.store.read();
     } catch (error) {
       return {
-        version: 4,
+        version: 5,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         tasks: [],
         history: [],
@@ -93,7 +93,7 @@ export class WakeupService {
     }
     await this.store.saveTask(valid, this.now());
     if (valid.scheduleMode === "quota_reset") {
-      await this.store.syncQuotaSchedules((id) => this.repo.getAccount(id));
+      await this.store.syncQuotaSchedules((id) => this.repo.getAccount(id), this.now());
     }
     await this.checkCancellation();
     this.notify();
@@ -129,7 +129,7 @@ export class WakeupService {
     try {
       await this.checkCancellation();
       await this.store.recoverInterrupted(this.now());
-      await this.store.syncQuotaSchedules((id) => this.repo.getAccount(id));
+      await this.store.syncQuotaSchedules((id) => this.repo.getAccount(id), this.now());
       const state = await this.store.read();
       const serialized = JSON.stringify(state);
       if (serialized !== this.lastSnapshot) {

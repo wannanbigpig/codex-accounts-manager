@@ -32,6 +32,9 @@ export function useAccountSessionModal(params: {
   };
 
   const closeAddAccountModal = (completeOAuthPending: boolean): void => {
+    if (oauth.cancelDevice(performCloseAddAccountModal)) {
+      return;
+    }
     if (oauth.oauthFlowStarted || completeOAuthPending) {
       setConfirmCancelOauthOpen(true);
       return;
@@ -56,6 +59,9 @@ export function useAccountSessionModal(params: {
   };
 
   const handleAddAccountTabChange = (tab: "oauth" | "import"): void => {
+    if (tab === "import" && oauth.cancelDevice(() => setAddAccountTab("import"))) {
+      return;
+    }
     setAddAccountTab(tab);
     if (tab === "oauth") {
       setImportRecoveryMode(false);
@@ -91,6 +97,15 @@ export function useAccountSessionModal(params: {
     oauthSession: oauth.oauthSession,
     oauthCallbackUrl: oauth.oauthCallbackUrl,
     oauthError: oauth.oauthError,
+    deviceActive: oauth.deviceActive,
+    deviceGrant: oauth.deviceGrant,
+    deviceCancellation: oauth.deviceCancellation,
+    deviceBrowserFailed: oauth.deviceBrowserFailed,
+    startDevice: oauth.startDevice,
+    cancelDevice: () => { oauth.cancelDevice(); },
+    openDevicePage: oauth.openDevicePage,
+    copyDeviceCode: oauth.copyDeviceCode,
+    copyDeviceLink: oauth.copyDeviceLink,
     importJsonText: sharedImport.importJsonText,
     importJsonError: sharedImport.importJsonError,
     importPreview: sharedImport.importPreview,

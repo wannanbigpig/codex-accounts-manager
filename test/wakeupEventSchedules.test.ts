@@ -73,11 +73,22 @@ describe("expanded wakeup modes", () => {
     expect(() =>
       validateWakeupTask({ ...input, scheduleMode: "quota_reset", quotaResetWindow: "unknown" } as WakeupTaskInput)
     ).toThrow());
-  it("uses format 4 for independent task states while retaining existing calendar tasks", async () => {
+  it("keeps existing calendar tasks with the new schedule format", async () => {
     const legacy = await store.saveTask(input, now);
     await store.saveTask({ ...input, scheduleMode: "startup", startupDelayMinutes: 0 }, now);
-    expect((await store.read()).version).toBe(4);
+    expect((await store.read()).version).toBe(5);
     expect((await store.read()).tasks[0]!.nextRunAt).toBe(legacy.nextRunAt);
+  });
+  it("keeps the delayed occurrence across a refresh between reset and wakeup", async () => {
+    const task = await store.saveTask({ ...input, scheduleMode: "quota_reset", quotaResetWindow: "hourly", quotaResetDelayMinutes: 3 }, now);
+    const reset = now + 60_000;
+    const due = reset + 180_000;
+    await store.syncQuotaSchedules(async (id) => account(id, reset), now);
+    expect((await store.read()).tasks[0]?.nextRunAt).toBe(due);
+    await store.syncQuotaSchedules(async (id) => account(id, reset + 3_600_000, reset + 1_000), reset + 1_000);
+    expect((await store.read()).tasks[0]?.nextRunAt).toBe(due);
+    expect(await store.claim(task.id, "scheduled", due, due - 1)).toBeUndefined();
+    expect(await store.claim(task.id, "scheduled", due, due)).toBeDefined();
   });
 });
 describe("startup occurrences shared across active windows", () => {
@@ -142,6 +153,42 @@ describe("startup occurrences shared across active windows", () => {
   });
 });
 describe("quota reset occurrences", () => {
+  it("runs armed resets even if refreshed quota reports the next window before polling", async () => {
+    await store.saveTask({ ...input, scheduleMode: "quota_reset", quotaResetWindow: "hourly" }, now);
+    const firstReset = now + 60_000;
+    const secondReset = now + 65_000;
+    const nextReset = now + 5 * 3_600_000;
+    let clock = now;
+    const execute = vi.fn(async (_id: string) => undefined);
+    const service = new WakeupService(
+      store,
+      {
+        getAccount: async (id) =>
+          clock === now ? account(id, id === "a" ? firstReset : secondReset) : account(id, nextReset, clock)
+      },
+      execute,
+      () => {},
+      () => clock
+    );
+    services.push(service);
+    await service.poll();
+    clock = secondReset + 10_000;
+    await service.poll();
+    await service.poll();
+    expect(execute.mock.calls.map(([id]) => id)).toEqual(["a", "b"]);
+    expect((await store.read()).history.map((run) => run.scheduledAt)).toEqual([secondReset, firstReset]);
+  });
+
+  it("leaves the state file untouched during polls with identical quota schedules", async () => {
+    await store.saveTask({ ...input, scheduleMode: "quota_reset", quotaResetWindow: "hourly" }, now);
+    const getAccount = async (id: string) => account(id, now + 60_000);
+    await store.syncQuotaSchedules(getAccount, now);
+    const statePath = path.join(directory, "tasks.json");
+    await fs.utimes(statePath, 1, 1);
+    await store.syncQuotaSchedules(getAccount, now + 15_000);
+    expect((await fs.stat(statePath)).mtimeMs).toBe(1000);
+  });
+
   it("waits for reset data and dispatches only the accounts whose window resets at that occurrence", async () => {
     const task = await store.saveTask({ ...input, scheduleMode: "quota_reset", quotaResetWindow: "hourly" }, now);
     await store.syncQuotaSchedules(async (id) => account(id));

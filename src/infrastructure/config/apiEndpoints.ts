@@ -13,6 +13,9 @@ export const QUOTA_USAGE_URL = `${CODEX_API_BASE}/backend-api/wham/usage`;
 /** 每日 token 使用量明细 API */
 export const DAILY_USAGE_BREAKDOWN_URL = `${CODEX_API_BASE}/backend-api/wham/usage/daily-token-usage-breakdown`;
 
+/** 官方账号累计 Token API */
+export const PROFILE_USAGE_URL = `${CODEX_API_BASE}/backend-api/wham/profiles/me`;
+
 /** 账号检查 API */
 export const ACCOUNT_CHECK_URL = `${CODEX_API_BASE}/backend-api/wham/accounts/check`;
 
@@ -21,6 +24,9 @@ export const RESET_CREDITS_URL = `${CODEX_API_BASE}/backend-api/wham/rate-limit-
 
 /** 主动重置次数消耗 API */
 export const RESET_CREDITS_CONSUME_URL = `${CODEX_API_BASE}/backend-api/wham/rate-limit-reset-credits/consume`;
+
+/** 官方重置卡发放和兑换历史 API */
+export const RESET_CREDITS_HISTORY_URL = `${RESET_CREDITS_URL}/history`;
 
 /** 订阅账号查询 API（对齐 cockpit accounts/check） */
 export const SUBSCRIPTION_ACCOUNTS_CHECK_URL = `${CODEX_API_BASE}/backend-api/accounts/check/v4-2023-04-27`;
@@ -36,6 +42,11 @@ export const AUTH_ENDPOINT = "https://auth.openai.com/oauth/authorize";
 
 /** OAuth Token 端点 */
 export const TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token";
+
+export const DEVICE_USER_CODE_ENDPOINT = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+export const DEVICE_TOKEN_ENDPOINT = "https://auth.openai.com/api/accounts/deviceauth/token";
+export const DEVICE_VERIFICATION_URL = "https://auth.openai.com/codex/device";
+export const DEVICE_EXCHANGE_REDIRECT_URI = "https://auth.openai.com/deviceauth/callback";
 
 /** OAuth 客户端 ID */
 export const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";

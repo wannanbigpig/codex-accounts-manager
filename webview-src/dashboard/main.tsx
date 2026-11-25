@@ -1,15 +1,17 @@
 import { render } from "preact";
-import { useEffect, useReducer, useState } from "preact/hooks";
+import { useEffect, useMemo, useReducer, useState } from "preact/hooks";
 import packageJson from "../../package.json";
-import type { DashboardAccountViewModel, DashboardHostMessage } from "../../src/domain/dashboard/types";
+import type { DashboardAccountViewModel, DashboardBatchResult, DashboardHostMessage } from "../../src/domain/dashboard/types";
 import { getWakeupCopy } from "../../src/domain/wakeup/copy";
 import { AnnouncementCenter } from "./announcementCenter";
 import { BatchSelectionBar, OverviewSection, RecoveryPanel } from "./components";
 import { postMessageToHost } from "./host";
-import { formatSavedAccountsSummary, normalizeThresholds, resolveLockMinutes, resolveOverviewAccount } from "./helpers";
+import { formatSavedAccountsSummary, getSensitiveDisplayValue, normalizeThresholds, resolveLockMinutes, resolveOverviewAccount } from "./helpers";
 import { useDashboardActions, useDashboardHostSync, useDashboardModals } from "./hooks";
 import { BellIcon, EyeIcon, EyeOffIcon, GitHubIcon, InfoIcon } from "./icons";
 import { AboutModal, AddAccountModal, ConfirmCancelOauthModal, SettingsOverlay, ShareTokenModal } from "./panels";
+import { createResetCreditHistoryController, resetCreditHistoryScope, type ResetCreditHistoryState } from "./resetCreditHistory";
+import { ResetCreditsModal } from "./resetCreditsModal";
 import { SavedAccountCard } from "./savedAccountCard";
 import { createInitialState, reducer } from "./state";
 import { resolveDashboardThemeFromMedia } from "./theme";
@@ -24,11 +26,17 @@ function App() {
   const [wakeupOpen, setWakeupOpen] = useState(false);
   const [wakeupAccountId, setWakeupAccountId] = useState<string>();
   const [wakeupResult, setWakeupResult] = useState<Extract<DashboardHostMessage, { type: "dashboard:action-result" }>>();
+  const [resetCreditHistory, setResetCreditHistory] = useState<ResetCreditHistoryState>();
+  const [manualRefreshFailures, setManualRefreshFailures] = useState<Record<string, number>>({});
+  const [batchSyncResult, setBatchSyncResult] = useState<DashboardBatchResult>();
+  const resetCredits = useMemo(() => createResetCreditHistoryController(postMessageToHost, setResetCreditHistory), []);
   const { patchSettings, sendAction, sendSetting, isActionPending, hasGlobalPendingAction } = useDashboardActions(
     state,
     dispatch
   );
   const snapshot = state.snapshot;
+  const resetCreditsAccount = snapshot?.accounts.find((account) => account.id === resetCreditHistory?.accountId);
+  const resetCreditsScope = resetCreditsAccount ? resetCreditHistoryScope(resetCreditsAccount) : undefined;
   const modals = useDashboardModals({
     dispatch,
     sendAction,
@@ -37,11 +45,34 @@ function App() {
   useDashboardHostSync({
     handleHostMessage: (message) => {
       modals.handleHostMessage(message);
-      if (message.type === "dashboard:action-result" && message.action.includes("Wakeup")) {
-        setWakeupResult(message);
+      if (message.type === "dashboard:action-result") {
+        if (message.payload?.batchResult?.kind === "batch_resync") {
+          setBatchSyncResult(message.payload.batchResult);
+        }
+        const pending = state.pendingActions.find((action) => action.requestId === message.requestId);
+        if (message.action === "refresh" && message.accountId && pending?.accountId === message.accountId) {
+          const id = message.accountId;
+          setManualRefreshFailures((previous) => {
+            const next = { ...previous };
+            if (message.status === "failed") {
+              next[id] = pending.requestedAt;
+            } else {
+              delete next[id];
+            }
+            return next;
+          });
+        }
+        resetCredits.applyActionResult(message);
+        if (message.action.includes("Wakeup")) {
+          setWakeupResult(message);
+        }
       }
     },
     handleEscape: () => {
+      if (resetCreditHistory) {
+        resetCredits.close();
+        return true;
+      }
       if (wakeupOpen) {
         setWakeupOpen(false);
         return true;
@@ -49,6 +80,16 @@ function App() {
       return modals.handleEscape(isActionPending("completeOAuthSession"));
     }
   });
+  useEffect(() => {
+    if (!snapshot || !resetCreditHistory) {
+      return;
+    }
+    if (!resetCreditsAccount || resetCreditsScope === undefined) {
+      resetCredits.close();
+    } else if (resetCreditsScope !== resetCreditHistory.scope) {
+      resetCredits.open(resetCreditsAccount.id, resetCreditsScope);
+    }
+  }, [resetCreditHistory, resetCredits, resetCreditsAccount, resetCreditsScope, snapshot]);
   useEffect(() => {
     const preference = snapshot?.settings.dashboardTheme ?? "auto";
     const root = document.documentElement;
@@ -381,7 +422,10 @@ function App() {
                   sharePending={sharePending}
                   tagsPending={batchTagsPending}
                   onRefresh={() => sendAction("batchRefresh", undefined, { accountIds: state.selectedAccountIds })}
-                  onResync={() => sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds })}
+                  onResync={() => {
+                    setBatchSyncResult(undefined);
+                    sendAction("batchResyncProfile", undefined, { accountIds: state.selectedAccountIds });
+                  }}
                   onRemove={() => sendAction("batchRemove", undefined, { accountIds: state.selectedAccountIds })}
                   onShare={handleShareTokens}
                   onAddTags={() => handleBatchTagMutation("add")}
@@ -389,8 +433,21 @@ function App() {
                 />
               ) : null}
             </div>
+            {batchSyncResult ? (
+              <details class="modal-summary-card" open={batchSyncResult.failures.length > 0}>
+                <summary>{snapshot.copy.batchResultTitle} · {snapshot.copy.batchResultSuccess} {batchSyncResult.successCount} · {snapshot.copy.batchResultFailed} {batchSyncResult.failedCount}
+                  {batchSyncResult.partialCount ? ` · ${snapshot.copy.batchResultPartial} ${batchSyncResult.partialCount}` : ""}
+                  {batchSyncResult.supersededCount ? ` · ${snapshot.copy.batchResultSuperseded} ${batchSyncResult.supersededCount}` : ""}
+                </summary>
+                {batchSyncResult.failures.length ? <ul>{batchSyncResult.failures.map((item, index) => (
+                  <li key={`${item.accountId ?? ""}-${index}`}>
+                    {item.email ? `${getSensitiveDisplayValue(item.email, state.privacyMode, "email")} · ` : ""}{item.message}
+                  </li>
+                ))}</ul> : null}
+              </details>
+            ) : null}
             <div class="accounts-grid">
-              {snapshot.accounts.map((account) => (
+              {snapshot.accounts.map((account, position) => (
                 <SavedAccountCard
                   key={account.id}
                   account={account}
@@ -405,15 +462,19 @@ function App() {
                   reauthorizePending={isActionPending("reauthorize", account.id)}
                   resyncProfilePending={isActionPending("resyncProfile", account.id)}
                   refreshPending={isActionPending("refresh", account.id)}
+                  manualRefreshFailed={(manualRefreshFailures[account.id] ?? 0) > (account.lastQuotaAt ?? 0)}
                   detailsPending={isActionPending("details", account.id)}
                   removePending={isActionPending("remove", account.id)}
                   togglePending={isActionPending("toggleStatusBar", account.id)}
                   updateTagsPending={isActionPending("updateTags", account.id)}
-                  consumeResetCreditPending={isActionPending("consumeResetCredit", account.id)}
                   selected={selectedAccountIds.has(account.id)}
+                  previousAccountId={snapshot.accounts[position - 1]?.reorderable && account.reorderable ? snapshot.accounts[position - 1]?.id : undefined}
+                  nextAccountId={snapshot.accounts[position + 1]?.reorderable && account.reorderable ? snapshot.accounts[position + 1]?.id : undefined}
+                  onMove={(id, targetId, after) => sendAction("moveDashboardAccount", id, { moveTargetAccountId: targetId, moveAfter: after })}
                   onToggleSelected={() => dispatch({ type: "toggle-select", accountId: account.id })}
                   onEditTags={() => handleEditAccountTags(account)}
                   onAction={sendAction}
+                  onManageResetCredits={() => resetCredits.open(account.id, resetCreditHistoryScope(account))}
                   onConfigureWakeup={() => {
                     setWakeupAccountId(account.id);
                     setWakeupResult(undefined);
@@ -425,6 +486,31 @@ function App() {
           </section>
         ) : null}
       </div>
+
+      {resetCreditsAccount && resetCreditHistory && resetCreditsScope === resetCreditHistory.scope ? (
+        <ResetCreditsModal
+          key={JSON.stringify([resetCreditsAccount.id, resetCreditHistory.scope])}
+          account={resetCreditsAccount}
+          history={resetCreditHistory}
+          copy={snapshot.copy}
+          lang={snapshot.lang}
+          now={state.now}
+          privacyMode={state.privacyMode}
+          redemptionPending={isActionPending("consumeResetCredit", resetCreditsAccount.id)}
+          disabled={isAccountBusy(resetCreditsAccount.id)}
+          onRedeem={(creditId) => {
+            const accountId = resetCreditsAccount.id;
+            const requestId = sendAction("consumeResetCredit", accountId, creditId === undefined ? undefined : { resetCreditId: creditId });
+            resetCredits.watchRedemption(accountId, requestId, creditId);
+          }}
+          onTabChange={(tab) => resetCredits.selectTab(tab)}
+          onRefresh={() => resetCredits.refresh()}
+          onReloadInventory={() => resetCredits.reloadInventory()}
+          onLoadMore={() => resetCredits.loadMore()}
+          onRetry={() => resetCredits.retry()}
+          onClose={() => resetCredits.close()}
+        />
+      ) : null}
 
       {wakeupOpen ? (
         <WakeupModal
@@ -486,6 +572,15 @@ function App() {
         oauthSession={modals.oauthSession}
         oauthCallbackUrl={modals.oauthCallbackUrl}
         oauthError={modals.oauthError}
+        deviceActive={modals.deviceActive}
+        deviceGrant={modals.deviceGrant}
+        deviceCancellation={modals.deviceCancellation}
+        deviceBrowserFailed={modals.deviceBrowserFailed}
+        onStartDevice={modals.startDevice}
+        onCancelDevice={modals.cancelDevice}
+        onOpenDevicePage={modals.openDevicePage}
+        onCopyDeviceCode={modals.copyDeviceCode}
+        onCopyDeviceLink={modals.copyDeviceLink}
         importJsonText={modals.importJsonText}
         importJsonError={modals.importJsonError}
         importPreview={modals.importPreview}

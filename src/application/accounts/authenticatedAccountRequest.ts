@@ -25,7 +25,7 @@ export async function runAuthenticatedAccountRequest<T>(
 
     const refreshedTokens = await repo.getFreshTokens(accountId, { force: true, expectedTokens: effectiveTokens });
     if (!refreshedTokens?.accessToken) {
-      throw new Error("No access token available");
+      throw new Error("No access token available", { cause: error });
     }
     return request(refreshedTokens);
   }

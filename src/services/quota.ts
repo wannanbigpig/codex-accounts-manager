@@ -8,32 +8,39 @@
  * - 添加配额刷新缓存，避免短时间内重复 API 调用
  */
 
+import { createHash } from "node:crypto";
 import {
   CodexAdditionalQuotaLimit,
   CodexAccountRecord,
-  CodexCreditsSummary,
   CodexQuotaErrorInfo,
   CodexQuotaSummary,
   CodexResetCredit,
   CodexResetCreditsSnapshot,
   CodexTokens,
   CodexUsageResponse,
-  UsageCreditsInfo,
   UsageRateLimitInfo,
   UsageWindowInfo
 } from "../core/types";
 import { APIError } from "../core/errors";
+import { isAvailableResetCredit } from "../domain/resetCredits";
+import { workspaceKind } from "./workspaceIdentity";
 import { shouldRetryWithoutWorkspace } from "./workspaceRetry";
 import { QUOTA_USAGE_URL, RESET_CREDITS_CONSUME_URL, RESET_CREDITS_URL } from "../infrastructure/config/apiEndpoints";
 import { extractClaims } from "../utils/jwt";
+import { readUsageCredits } from "../utils/quotaCredits";
 import { logNetworkEvent } from "../utils/debug";
 import { fetchWithTimeout, isRetriableHttpStatus, isRetriableNetworkError, retryWithBackoff } from "../utils/network";
 
 /** 配额缓存失效时间 (毫秒) - 避免短时间内重复刷新 */
 const QUOTA_CACHE_TTL_MS = 30000; // 30 秒
+// Bound total inline response backoff to the existing request timeout scale so a batch can continue.
+const MAX_QUOTA_INLINE_RETRY_MS = 15_000;
+const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 
 /** 配额缓存接口 */
 interface QuotaCacheEntry {
+  requestKey: string;
+  scope: QuotaRequestScope;
   /** 缓存的配额摘要 */
   summary: CodexQuotaSummary;
   /** 缓存时间戳 */
@@ -44,13 +51,31 @@ interface QuotaCacheEntry {
 const quotaCache = new Map<string, QuotaCacheEntry>();
 
 /** 同账号并发刷新复用 */
-const inflightQuotaRefreshes = new Map<string, Promise<QuotaRefreshResult>>();
+const inflightQuotaRefreshes = new Map<string, { requestKey: string; task: Promise<QuotaRefreshResult> }>();
 
-/** 账号缓存失效代次 */
-const quotaCacheGenerations = new Map<string, number>();
+interface QuotaRequestScope {
+  savedAccountId: string;
+  accountId?: string;
+  organizationId?: string;
+  userId?: string;
+}
+
+type QuotaCooldownError = CodexQuotaErrorInfo & { retryAt: number };
+const quotaCooldowns = new Map<string, { scope: QuotaRequestScope; error: QuotaCooldownError }>();
+
+interface QuotaUsageResult {
+  ok: boolean;
+  status: number;
+  raw: string;
+  payload?: CodexUsageResponse;
+  cooldownError?: QuotaCooldownError;
+  blockedByCooldown?: boolean;
+}
 
 export interface QuotaRefreshResult {
   quota?: CodexQuotaSummary;
+  /** Observation time for a verified network snapshot. Cache hits do not create another observation. */
+  observedAt?: number;
   error?: CodexQuotaErrorInfo;
   updatedTokens?: CodexTokens;
   updatedPlanType?: string;
@@ -71,11 +96,33 @@ export async function refreshQuota(
   forceRefresh = false
 ): Promise<QuotaRefreshResult> {
   pruneQuotaCache();
-  const generation = getQuotaCacheGeneration(account.id);
-  if (!forceRefresh) {
+  let claims: ReturnType<typeof extractClaims> | undefined;
+  try {
+    claims = extractClaims(tokens.idToken, tokens.accessToken);
+  } catch (error) {
+    if (!account.accountId && !tokens.accountId) {
+      throw error;
+    }
+  }
+  const accountId = account.accountId ?? tokens.accountId ?? claims?.accountId;
+  const organizationId = account.organizationId ?? claims?.organizationId;
+  const userId = account.userId ?? claims?.userId;
+  const scope = { savedAccountId: account.id, accountId, organizationId, userId };
+  const savedError = account.quotaError;
+  if (savedError?.statusCode === 429 && typeof savedError.retryAt === "number" &&
+    Number.isFinite(savedError.retryAt) && savedError.retryAt > Date.now()) {
+    invalidateQuotaCacheForScope(scope);
+    recordQuotaCooldown(scope, { ...savedError, retryAt: savedError.retryAt });
+  }
+  const cooldown = getQuotaCooldown(scope);
+  const requestKey = createHash("sha256")
+    .update(JSON.stringify([accountId, organizationId, userId, account.accountStructure,
+      tokens.accountId, tokens.idToken, tokens.accessToken, tokens.refreshToken]))
+    .digest("hex");
+  if (!forceRefresh && !cooldown) {
     const cached = quotaCache.get(account.id);
     if (cached) {
-      if (Date.now() - cached.timestamp < QUOTA_CACHE_TTL_MS) {
+      if (cached.requestKey === requestKey && Date.now() - cached.timestamp < QUOTA_CACHE_TTL_MS) {
         return { quota: cached.summary };
       }
       quotaCache.delete(account.id);
@@ -83,73 +130,106 @@ export async function refreshQuota(
   }
 
   const inflight = inflightQuotaRefreshes.get(account.id);
-  if (inflight) {
-    return inflight;
+  if (inflight?.requestKey === requestKey) {
+    return inflight.task;
+  }
+  if (cooldown) {
+    return { error: cooldown, updatedTokens: tokens };
   }
 
   const refreshTask = (async (): Promise<QuotaRefreshResult> => {
+    const observedAt = Date.now();
     const effectiveTokens = tokens;
+    const retryBudget = { remainingMs: MAX_QUOTA_INLINE_RETRY_MS };
 
-    const accountId = account.accountId ?? extractClaims(effectiveTokens.idToken, effectiveTokens.accessToken).accountId;
-    const primary = await requestQuotaUsage(effectiveTokens.accessToken, accountId);
-    const usageResult =
-      accountId && !primary.ok && shouldRetryWithoutWorkspace(primary.status, primary.raw)
-        ? await (async () => {
-            logNetworkEvent("quota.retry-without-workspace", {
-              accountId,
-              status: primary.status
-            });
-            return requestQuotaUsage(effectiveTokens.accessToken);
-          })()
-        : primary;
+    const primary = await requestQuotaUsage(effectiveTokens.accessToken, scope, retryBudget, accountId);
+    const unscopedRetry = Boolean(accountId && !primary.ok && primary.status !== 401 &&
+      shouldRetryWithoutWorkspace(primary.status, primary.raw));
+    if (unscopedRetry) {
+      logNetworkEvent("quota.retry-without-workspace", { accountId, status: primary.status });
+    }
+    const usageResult = unscopedRetry ? await requestQuotaUsage(effectiveTokens.accessToken, scope, retryBudget) : primary;
 
     if (!usageResult.ok) {
-      const message =
-        usageResult.status >= 200 && usageResult.status < 300 && usageResult.payload === undefined
-          ? "Invalid quota response"
-          : extractErrorMessage(usageResult.status, usageResult.raw);
-      return { error: buildError(message), updatedTokens: effectiveTokens };
+      const { status, raw, cooldownError } = usageResult;
+      const error = cooldownError ?? (status >= 200 && status < 300
+        ? buildError("Invalid quota response")
+        : { ...buildError(extractErrorMessage(status, raw)), statusCode: status });
+      return { error, updatedTokens: effectiveTokens };
     }
 
     const usage = usageResult.payload;
     if (!usage) {
       return { error: buildError("Invalid quota response"), updatedTokens: effectiveTokens };
     }
-    const quotaSummary = parseUsage(usage);
-
-    if (generation === getQuotaCacheGeneration(account.id)) {
-      quotaCache.set(account.id, {
-        summary: quotaSummary,
-        timestamp: Date.now()
-      });
+    const responseAccountId = readOptionalString(usage.account_id, usage.accountId);
+    const responseOrganizationId = readOptionalString(usage.organization_id, usage.organizationId);
+    const responseUserId = readOptionalString(usage.user_id, usage.userId);
+    const knownWorkspaceKind = workspaceKind(account.accountStructure);
+    const reportedWorkspaceKind = workspaceKind(undefined, usage.plan_type);
+    const unscopedPersonalConflict = unscopedRetry && workspaceKind(account.accountStructure, account.planType) === "personal" &&
+      workspaceKind(undefined, usage.plan_type) === "workspace";
+    if (
+      (accountId && responseAccountId && responseAccountId !== accountId) ||
+      (organizationId && responseOrganizationId && responseOrganizationId !== organizationId) ||
+      (userId && responseUserId && responseUserId !== userId) ||
+      (knownWorkspaceKind && reportedWorkspaceKind && knownWorkspaceKind !== reportedWorkspaceKind) ||
+      unscopedPersonalConflict ||
+      (unscopedRetry && responseAccountId !== accountId) ||
+      ((!accountId || unscopedRetry) && organizationId && responseOrganizationId !== organizationId)
+    ) {
+      return {
+        error: {
+          ...buildError("Codex quota response could not be verified for the requested workspace"),
+          code: "workspace_identity_mismatch"
+        },
+        updatedTokens: effectiveTokens
+      };
     }
-
+    const quotaSummary = parseUsage(usage, workspaceKind(account.accountStructure, usage.plan_type ?? account.planType) === "workspace");
+    if (!quotaSummary) {
+      return { error: buildError("Invalid quota response"), updatedTokens: effectiveTokens };
+    }
     return {
       quota: quotaSummary,
+      observedAt,
       updatedTokens: effectiveTokens,
       updatedPlanType: usage.plan_type,
       updatedSubscriptionActiveUntil: readUsageSubscriptionActiveUntil(usage)
     };
   })();
 
-  inflightQuotaRefreshes.set(account.id, refreshTask);
+  inflightQuotaRefreshes.set(account.id, { requestKey, task: refreshTask });
   try {
-    return await refreshTask;
+    const result = await refreshTask;
+    if (inflightQuotaRefreshes.get(account.id)?.task === refreshTask) {
+      if (result.quota && !getQuotaCooldown(scope)) {
+        quotaCache.set(account.id, { requestKey, scope, summary: result.quota, timestamp: Date.now() });
+      } else if (quotaCache.get(account.id)?.requestKey === requestKey) {
+        quotaCache.delete(account.id);
+      }
+    }
+    return result;
   } finally {
-    if (inflightQuotaRefreshes.get(account.id) === refreshTask) {
+    if (inflightQuotaRefreshes.get(account.id)?.task === refreshTask) {
       inflightQuotaRefreshes.delete(account.id);
     }
   }
 }
 
-async function requestQuotaUsage(accessToken: string, accountId?: string): Promise<{
-  ok: boolean;
-  status: number;
-  raw: string;
-  payload?: CodexUsageResponse;
-}> {
-  return retryWithBackoff(
+async function requestQuotaUsage(
+  accessToken: string,
+  scope: QuotaRequestScope,
+  retryBudget: { remainingMs: number },
+  accountId?: string
+): Promise<QuotaUsageResult> {
+  return retryWithBackoff<QuotaUsageResult>(
     async () => {
+      // A different credential may have received a 429 while this request was backing off.
+      const cooldown = getQuotaCooldown(scope);
+      if (cooldown) {
+        return { ok: false, status: 429, raw: "", cooldownError: cooldown, blockedByCooldown: true };
+      }
       const headers = new Headers({
         Authorization: `Bearer ${accessToken}`,
         Accept: "application/json"
@@ -158,6 +238,7 @@ async function requestQuotaUsage(accessToken: string, accountId?: string): Promi
         headers.set("ChatGPT-Account-Id", accountId);
       }
 
+      let retryAt: number | undefined;
       const response = await fetchWithTimeout(
         QUOTA_USAGE_URL,
         {
@@ -165,31 +246,134 @@ async function requestQuotaUsage(accessToken: string, accountId?: string): Promi
           headers
         },
         15000,
-        "Quota request"
+        "Quota request",
+        {
+          onHeaders: ({ status, headers: responseHeaders }) => {
+            if (status === 429) {
+              invalidateQuotaCacheForScope(scope);
+              retryAt = parseRetryAfter(responseHeaders.get("retry-after"), Date.now());
+              if (retryAt !== undefined) {
+                recordQuotaCooldown(scope, createCooldownError(retryAt, ""));
+              }
+            }
+            return status === 429 || status === 401;
+          }
+        }
       );
 
       const raw = await response.text();
+      const payload = parseUsagePayload(raw);
+      let cooldownError: QuotaCooldownError | undefined;
+      if (response.status === 429) {
+        invalidateQuotaCacheForScope(scope);
+        cooldownError = rememberRetryAfter(scope, retryAt ?? parseRetryAfter(response.headers?.get("retry-after"), Date.now()), raw);
+      }
+      const requestIds = Object.fromEntries(["request-id", "x-request-id", "cf-ray"].flatMap((name) => {
+        const value = response.headers?.get(name);
+        return value && /^[a-zA-Z0-9_:-]{1,128}$/.test(value) ? [[name, value]] : [];
+      }));
       logNetworkEvent("quota", {
         accountId,
         status: response.status,
         ok: response.ok,
         url: QUOTA_USAGE_URL,
+        errorCode: response.ok ? undefined : extractErrorDetailCode(raw),
+        ...requestIds,
+        retryAt: cooldownError?.retryAt ? new Date(cooldownError.retryAt).toISOString() : undefined,
         bodyPreview: raw
       });
-
-      const payload = parseUsagePayload(raw);
       return {
         ok: response.ok && payload !== undefined,
         status: response.status,
         raw,
-        payload
+        payload,
+        cooldownError
       };
     },
     {
       shouldRetryError: isRetriableNetworkError,
-      shouldRetryResult: (result) => !result.ok && isRetriableHttpStatus(result.status)
+      shouldRetryResult: (result) => !result.ok && !result.blockedByCooldown && isRetriableHttpStatus(result.status),
+      resultRetryDelayMs: (result, defaultDelayMs) => {
+        const retryAt = result.cooldownError?.retryAt;
+        const delayMs = retryAt === undefined ? defaultDelayMs : Math.max(defaultDelayMs, retryAt - Date.now());
+        if (delayMs > retryBudget.remainingMs) {
+          return undefined;
+        }
+        retryBudget.remainingMs -= delayMs;
+        return delayMs;
+      }
     }
   );
+}
+
+function getQuotaCooldown(scope: QuotaRequestScope): QuotaCooldownError | undefined {
+  const now = Date.now();
+  let longest: QuotaCooldownError | undefined;
+  for (const [key, entry] of quotaCooldowns) {
+    if (entry.error.retryAt <= now) {
+      quotaCooldowns.delete(key);
+      continue;
+    }
+    if (quotaScopesOverlap(entry.scope, scope) && (!longest || entry.error.retryAt > longest.retryAt)) {
+      longest = entry.error;
+    }
+  }
+  return longest;
+}
+
+function quotaScopesOverlap(left: QuotaRequestScope, right: QuotaRequestScope): boolean {
+  // Filling in previously missing workspace metadata must not bypass a rate limit.
+  return left.savedAccountId === right.savedAccountId &&
+    (!left.accountId || !right.accountId || left.accountId === right.accountId) &&
+    (!left.organizationId || !right.organizationId || left.organizationId === right.organizationId) &&
+    (!left.userId || !right.userId || left.userId === right.userId);
+}
+
+function invalidateQuotaCacheForScope(scope: QuotaRequestScope): void {
+  const cached = quotaCache.get(scope.savedAccountId);
+  if (cached && quotaScopesOverlap(cached.scope, scope)) {
+    quotaCache.delete(scope.savedAccountId);
+  }
+}
+
+function rememberRetryAfter(scope: QuotaRequestScope, retryAt: number | undefined, raw: string): QuotaCooldownError | undefined {
+  if (retryAt === undefined) {
+    return getQuotaCooldown(scope);
+  }
+  const error = createCooldownError(retryAt, raw);
+  recordQuotaCooldown(scope, error, raw.length > 0);
+  return getQuotaCooldown(scope) ?? error;
+}
+
+function createCooldownError(retryAt: number, raw: string): QuotaCooldownError {
+  const message = raw ? extractErrorMessage(429, raw) : "API returned 429";
+  return { ...buildError(message), statusCode: 429, retryAt };
+}
+
+function recordQuotaCooldown(scope: QuotaRequestScope, error: QuotaCooldownError, hasBody = false): void {
+  const key = JSON.stringify([scope.savedAccountId, scope.accountId, scope.organizationId, scope.userId]);
+  const savedDeadline = quotaCooldowns.get(key)?.error.retryAt ?? 0;
+  if (error.retryAt > Date.now() && (error.retryAt > savedDeadline || (hasBody && error.retryAt === savedDeadline))) {
+    quotaCooldowns.set(key, { scope, error });
+  }
+}
+
+function parseRetryAfter(header: string | null | undefined, now: number): number | undefined {
+  const value = header?.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (/^\d+$/.test(value)) {
+    return Math.min(now + Number(value) * 1_000, MAX_DATE_TIMESTAMP_MS);
+  }
+
+  // Date.parse also accepts numbers and locale dates, which are invalid Retry-After values.
+  const httpDate = /^(?:[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]{6,9}, \d{2}-[A-Za-z]{3}-\d{2} \d{2}:\d{2}:\d{2} GMT|[A-Za-z]{3} [A-Za-z]{3} [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
+  if (!httpDate.test(value)) {
+    return undefined;
+  }
+  const date = Date.parse(value.endsWith(" GMT") ? value : `${value} GMT`);
+  return Number.isFinite(date) ? Math.max(now, date) : undefined;
 }
 
 function parseUsagePayload(raw: string): CodexUsageResponse | undefined {
@@ -208,11 +392,12 @@ function parseUsagePayload(raw: string): CodexUsageResponse | undefined {
       "additional_rate_limits",
       "additionalRateLimits",
       "credits",
+      "ambient_usage",
       "spend_control",
       "rate_limit_reset_credits",
       "rateLimitResetCredits"
     ].some((key) => record[key] !== undefined && record[key] !== null);
-    return hasQuotaData ? (record as CodexUsageResponse) : undefined;
+    return hasQuotaData ? record : undefined;
   } catch {
     return undefined;
   }
@@ -247,7 +432,7 @@ function normalizeOptionalScalar(value: unknown): string | undefined {
 /**
  * 解析配额使用量数据
  */
-function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
+function parseUsage(usage: CodexUsageResponse, workspace: boolean): CodexQuotaSummary | undefined {
   const primary = pickWindow(usage.rate_limit, "primary");
   const secondary = pickWindow(usage.rate_limit, "secondary");
   const additionalRateLimitItems = normalizeAdditionalRateLimitItems(
@@ -270,9 +455,23 @@ function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
   const { hourlyWindow, weeklyWindow } = resolveRateLimitWindows(primary, secondary);
   const hourlyPercentage = resolveRemainingPercentage(hourlyWindow, percentScale);
   const weeklyPercentage = resolveRemainingPercentage(weeklyWindow, percentScale);
+  if (invalidQuotaMeasurement(hourlyWindow, hourlyPercentage) || invalidQuotaMeasurement(weeklyWindow, weeklyPercentage)) {
+    return undefined;
+  }
 
   const crWindow = extractCodeReviewWindow(crPrimary, crSecondary, codeReviewPercentScale);
   const crPercentage = resolveRemainingPercentage(crWindow, codeReviewPercentScale);
+  const additionalRateLimits = parseAdditionalRateLimits(additionalRateLimitItems);
+  const credits = readUsageCredits(usage, workspace);
+  const resetCreditsAvailable = normalizeResetCreditsAvailable(usage);
+  const hasKnownCreditState = credits?.availability === "available" || credits?.availability === "limited" ||
+    Boolean(credits?.balance) || credits?.remainingPercent !== undefined;
+  if (
+    hourlyPercentage === undefined && weeklyPercentage === undefined && crPercentage === undefined &&
+    additionalRateLimits.length === 0 && !hasKnownCreditState
+  ) {
+    return undefined;
+  }
 
   return {
     hourlyPercentage: hourlyPercentage ?? 0,
@@ -293,9 +492,9 @@ function parseUsage(usage: CodexUsageResponse): CodexQuotaSummary {
     codeReviewRequestsLimit: crWindow ? pickNumberField(crWindow, "limit", "requests_limit", "requestsLimit") : undefined,
     codeReviewWindowMinutes: crWindow ? normalizeWindow(crWindow) : undefined,
     codeReviewWindowPresent: crPercentage !== undefined,
-    additionalRateLimits: parseAdditionalRateLimits(additionalRateLimitItems),
-    credits: normalizeSpendControlCredits(usage) ?? normalizeCredits(usage.credits),
-    resetCreditsAvailable: normalizeResetCreditsAvailable(usage),
+    additionalRateLimits,
+    credits,
+    resetCreditsAvailable,
     rawData: usage
   };
 }
@@ -314,7 +513,7 @@ function normalizeResetCreditsAvailable(usage: CodexUsageResponse): number | und
     return undefined;
   }
   const value = src.available_count ?? src.availableCount;
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return normalizeOptionalInt(value);
 }
 
 /**
@@ -366,7 +565,7 @@ function normalizeAdditionalRateLimitItems(
 }
 
 function parseAdditionalRateLimits(items: NormalizedAdditionalRateLimit[]): CodexAdditionalQuotaLimit[] {
-  return items.map((item) => {
+  return items.flatMap((item) => {
     const primary = pickWindow(item.rateLimit, "primary");
     const secondary = pickWindow(item.rateLimit, "secondary");
     const { hourlyWindow, weeklyWindow } = resolveRateLimitWindows(
@@ -377,7 +576,11 @@ function parseAdditionalRateLimits(items: NormalizedAdditionalRateLimit[]): Code
     const hourlyPercentage = resolveRemainingPercentage(hourlyWindow, percentScale);
     const weeklyPercentage = resolveRemainingPercentage(weeklyWindow, percentScale);
 
-    return {
+    if (hourlyPercentage === undefined && weeklyPercentage === undefined) {
+      return [];
+    }
+
+    return [{
       limitName: item.limitName,
       meteredFeature: item.meteredFeature,
       hourlyPercentage,
@@ -392,85 +595,8 @@ function parseAdditionalRateLimits(items: NormalizedAdditionalRateLimit[]): Code
       weeklyRequestsLimit: pickNumberField(weeklyWindow, "limit", "requests_limit", "requestsLimit"),
       weeklyWindowMinutes: normalizeWindow(weeklyWindow),
       weeklyWindowPresent: weeklyPercentage !== undefined
-    };
+    }];
   });
-}
-
-function normalizeCredits(credits: UsageCreditsInfo | null | undefined): CodexCreditsSummary | undefined {
-  if (!credits || typeof credits !== "object") {
-    return undefined;
-  }
-
-  return {
-    hasCredits: credits.has_credits === true || credits.hasCredits === true,
-    unlimited: credits.unlimited === true,
-    overageLimitReached: credits.overage_limit_reached === true || credits.overageLimitReached === true,
-    balance: String(credits.balance ?? "").trim(),
-    approxLocalMessages: Array.isArray(credits.approx_local_messages)
-      ? credits.approx_local_messages
-      : Array.isArray(credits.approxLocalMessages)
-        ? credits.approxLocalMessages
-        : [],
-    approxCloudMessages: Array.isArray(credits.approx_cloud_messages)
-      ? credits.approx_cloud_messages
-      : Array.isArray(credits.approxCloudMessages)
-        ? credits.approxCloudMessages
-        : []
-  };
-}
-
-function normalizeSpendControlCredits(usage: CodexUsageResponse): CodexCreditsSummary | undefined {
-  const limit = usage.spend_control?.individual_limit;
-  if (!limit || typeof limit !== "object") {
-    return undefined;
-  }
-
-  const total = normalizeFiniteNumber(limit.limit);
-  const used = normalizeFiniteNumber(limit.used);
-  const remaining = normalizeFiniteNumber(limit.remaining) ??
-    (total !== undefined && used !== undefined ? Math.max(0, total - used) : undefined);
-  const remainingPercentRaw = normalizeFiniteNumber(limit.remaining_percent) ??
-    (total !== undefined && total > 0 && remaining !== undefined ? (remaining / total) * 100 : undefined);
-  const remainingPercent = remainingPercentRaw === undefined ? undefined : Math.round(clampPercent(remainingPercentRaw));
-  const resetAt = normalizeFiniteNumber(limit.reset_at);
-  const resetAfterSeconds = normalizeFiniteNumber(limit.reset_after_seconds);
-  const resetTime =
-    resetAt !== undefined
-      ? resetAt > 1_000_000_000_000
-        ? Math.floor(resetAt / 1000)
-        : Math.floor(resetAt)
-      : resetAfterSeconds !== undefined && resetAfterSeconds >= 0
-        ? Math.floor(Date.now() / 1000) + resetAfterSeconds
-        : undefined;
-
-  if ([total, used, remaining, remainingPercent].every((value) => value === undefined)) {
-    return undefined;
-  }
-
-  return {
-    hasCredits: (remaining ?? 0) > 0,
-    unlimited: false,
-    overageLimitReached: remaining === 0,
-    balance: remaining === undefined ? "" : String(remaining),
-    approxLocalMessages: [],
-    approxCloudMessages: [],
-    total,
-    used,
-    remaining,
-    remainingPercent,
-    resetTime
-  };
-}
-
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }
 
 function resolveRateLimitWindows(
@@ -539,8 +665,8 @@ function resolveRemainingPercentage(window: UsageWindowInfo | undefined, scale: 
 
   const remaining = pickNumberField(window, "remaining", "requests_left", "requestsLeft");
   const limit = pickNumberField(window, "limit", "requests_limit", "requestsLimit");
-  if (remaining !== undefined && limit !== undefined && limit > 0) {
-    return clampPercent((remaining / limit) * 100);
+  if (remaining !== undefined && limit !== undefined && limit > 0 && remaining >= 0 && remaining <= limit) {
+    return (remaining / limit) * 100;
   }
 
   return undefined;
@@ -553,11 +679,15 @@ function normalizePercentValue(value: number | undefined, scale: "percent" | "ra
   }
 
   const normalized = scale === "ratio" ? raw * 100 : raw;
-  return clampPercent(normalized);
+  return normalized >= 0 && normalized <= 100 ? normalized : undefined;
 }
 
-function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, value));
+function invalidQuotaMeasurement(window: UsageWindowInfo | undefined, percentage: number | undefined): boolean {
+  return Boolean(window && percentage === undefined && (
+    [window.used_percent, window.usedPercent, window.remaining_percent, window.remainingPercent].some((value) => value != null) ||
+    ([window.remaining, window.requests_left, window.requestsLeft].some((value) => value != null) &&
+      [window.limit, window.requests_limit, window.requestsLimit].some((value) => value != null))
+  ));
 }
 
 function pickNumber(...values: Array<number | undefined>): number | undefined {
@@ -602,7 +732,7 @@ function detectUsagePercentScale(...windows: Array<UsageWindowInfo | undefined>)
       pickNumberField(window, "used_percent", "usedPercent"),
       pickNumberField(window, "remaining_percent", "remainingPercent")
     ])
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100);
 
   if (!values.length) {
     return "percent";
@@ -646,17 +776,8 @@ function normalizeWindow(window?: UsageWindowInfo): number | undefined {
  * 提取错误消息
  */
 function extractErrorMessage(status: number, raw: string): string {
-  try {
-    const payload = JSON.parse(raw) as Record<string, unknown>;
-    const detailValue = payload["detail"];
-    const detail = detailValue as Record<string, unknown> | undefined;
-    const codeValue = detail?.["code"];
-    const code = typeof codeValue === "string" ? codeValue : undefined;
-    const shortRaw = raw.slice(0, 200);
-    return code ? `API returned ${status} [error_code:${code}] - ${shortRaw}` : `API returned ${status} - ${shortRaw}`;
-  } catch {
-    return `API returned ${status} - ${raw.slice(0, 200)}`;
-  }
+  const code = extractErrorDetailCode(raw);
+  return `API returned ${status}${code ? ` [error_code:${code}]` : ""} - ${raw.slice(0, 200)}`;
 }
 
 /**
@@ -686,13 +807,9 @@ function pruneQuotaCache(): void {
  * @param accountId - 账号 ID
  */
 export function clearQuotaCacheForAccount(accountId: string): void {
-  quotaCacheGenerations.set(accountId, getQuotaCacheGeneration(accountId) + 1);
   quotaCache.delete(accountId);
   inflightQuotaRefreshes.delete(accountId);
-}
-
-function getQuotaCacheGeneration(accountId: string): number {
-  return quotaCacheGenerations.get(accountId) ?? 0;
+  // Cooldowns belong to the workspace and survive credential or cache changes.
 }
 
 // ── 主动重置次数（rate-limit reset credits）──
@@ -741,8 +858,14 @@ export async function fetchResetCredits(
     });
   }
 
-  return parseResetCreditsSnapshot(JSON.parse(raw) as Record<string, unknown>);
+  const payload: unknown = JSON.parse(raw);
+  if (!isResetCreditRecord(payload)) {
+    throw new Error("Invalid reset credit inventory");
+  }
+  return parseResetCreditsSnapshot(payload);
 }
+
+export type ResetCreditRedemptionOutcome = "reset" | "already_redeemed" | "nothing_to_reset" | "no_credit";
 
 /**
  * 消耗一次主动重置次数。
@@ -753,8 +876,9 @@ export async function fetchResetCredits(
 export async function consumeResetCredit(
   accessToken: string,
   accountId?: string,
-  redeemRequestId = crypto.randomUUID()
-): Promise<void> {
+  redeemRequestId: string = crypto.randomUUID(),
+  creditId?: string
+): Promise<ResetCreditRedemptionOutcome> {
   const headers = new Headers({
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
@@ -769,7 +893,7 @@ export async function consumeResetCredit(
     {
       method: "POST",
       headers,
-      body: JSON.stringify({ redeem_request_id: redeemRequestId })
+      body: JSON.stringify({ redeem_request_id: redeemRequestId, credit_id: creditId })
     },
     15000,
     "Consume reset credit"
@@ -793,6 +917,30 @@ export async function consumeResetCredit(
       context: detailCode ? { errorCode: detailCode } : undefined
     });
   }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw) as unknown;
+  } catch {
+    // A malformed or empty success response leaves the redemption unconfirmed.
+  }
+
+  const code = isResetCreditRecord(payload) ? payload["code"] : undefined;
+  switch (code) {
+    case "reset":
+    case "already_redeemed":
+    case "nothing_to_reset":
+    case "no_credit":
+      return code;
+    default:
+      throw new APIError(`Reset credit redemption outcome could not be confirmed (HTTP ${response.status})`, {
+        statusCode: response.status,
+        context: {
+          errorCode: "reset_credit_outcome_unconfirmed",
+          reason: payload === undefined ? "invalid_or_empty_json" : "missing_or_unknown_code"
+        }
+      });
+  }
 }
 
 function parseResetCreditsSnapshot(payload: Record<string, unknown>): CodexResetCreditsSnapshot {
@@ -802,12 +950,16 @@ function parseResetCreditsSnapshot(payload: Record<string, unknown>): CodexReset
     ? creditsValue.filter(isResetCreditRecord).map(parseResetCreditRecord)
     : [];
 
-  const availableCount =
+  const reportedCount =
     normalizeOptionalInt(payload["available_count"]) ??
     normalizeOptionalInt(payload["availableCount"]) ??
     normalizeOptionalInt(dataRecord?.["available_count"]) ??
-    normalizeOptionalInt(dataRecord?.["availableCount"]) ??
-    credits.filter(isAvailableResetCredit).length;
+    normalizeOptionalInt(dataRecord?.["availableCount"]);
+  if (reportedCount === undefined && (!Array.isArray(creditsValue) || credits.length !== creditsValue.length)) {
+    throw new Error("Invalid reset credit inventory");
+  }
+  const availableCredits = credits.filter((credit) => isAvailableResetCredit(credit));
+  const availableCount = reportedCount ?? availableCredits.length;
 
   const explicitNextExpiresAt =
     readResetCreditTimestamp(payload, [
@@ -825,8 +977,7 @@ function parseResetCreditsSnapshot(payload: Record<string, unknown>): CodexReset
         ])
       : undefined);
 
-  const derivedNextExpiresAt = credits
-    .filter(isAvailableResetCredit)
+  const derivedNextExpiresAt = availableCredits
     .map((c) => c.expires_at)
     .filter((v): v is number => typeof v === "number" && v > 0)
     .sort((a, b) => a - b)[0];
@@ -859,14 +1010,6 @@ function normalizeResetCreditStatus(rawStatus: string | undefined, expiresAt: nu
     return "expired";
   }
   return status;
-}
-
-function isAvailableResetCredit(credit: CodexResetCredit): boolean {
-  const status = credit.status?.trim().toLowerCase() ?? "available";
-  if (["redeemed", "used", "consumed", "expired"].includes(status)) {
-    return false;
-  }
-  return credit.expires_at === undefined || credit.expires_at > Math.floor(Date.now() / 1000);
 }
 
 function readResetCreditString(record: Record<string, unknown>, keys: string[]): string | undefined {
@@ -906,7 +1049,7 @@ function isResetCreditRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeOptionalInt(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
     return value;
   }
   return undefined;
@@ -916,20 +1059,12 @@ function extractErrorDetailCode(body: string): string | undefined {
   try {
     const value = JSON.parse(body) as Record<string, unknown>;
     const detail = value["detail"];
-    if (detail && typeof detail === "object") {
-      const code = (detail as Record<string, unknown>)["code"];
-      if (typeof code === "string" && code) {
-        return code;
-      }
-    }
-    const err = value["error"];
-    if (err && typeof err === "object") {
-      const code = (err as Record<string, unknown>)["code"];
-      if (typeof code === "string" && code) {
-        return code;
-      }
-    }
-    return undefined;
+    const error = value["error"];
+    return [
+      isResetCreditRecord(detail) ? detail["code"] : undefined,
+      isResetCreditRecord(error) ? error["code"] : undefined,
+      value["code"]
+    ].find((code): code is string => typeof code === "string" && /^[a-zA-Z0-9_:-]{1,128}$/.test(code));
   } catch {
     return undefined;
   }

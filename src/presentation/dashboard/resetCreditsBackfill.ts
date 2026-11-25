@@ -1,29 +1,16 @@
 import type { DashboardAccountViewModel } from "../../domain/dashboard/types";
 import { AccountsRepository } from "../../storage";
-import { fetchResetCredits } from "../../services/quota";
+import { refreshResetCreditInventory } from "../../application/accounts/resetCreditInventory";
+import { runWithConcurrencyLimit } from "../../utils/concurrency";
 import { logNetworkEvent } from "../../utils/debug";
-import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
-
-const RESET_CREDITS_BACKFILL_COOLDOWN_MS = 60_000;
-const inflightResetCreditsBackfills = new Set<string>();
-const resetCreditsBackfillCooldownUntil = new Map<string, number>();
 
 export function pickResetCreditsBackfillTargets(
   accounts: readonly DashboardAccountViewModel[],
   now = Date.now()
 ): DashboardAccountViewModel[] {
-  return accounts.filter((account) => {
-    if ((account.resetCreditsAvailable ?? 0) <= 0) {
-      return false;
-    }
-    if ((account.resetCreditsNextExpiresAt ?? 0) > 0) {
-      return false;
-    }
-    if (inflightResetCreditsBackfills.has(account.id)) {
-      return false;
-    }
-    return (resetCreditsBackfillCooldownUntil.get(account.id) ?? 0) <= now;
-  });
+  return accounts.filter((account) =>
+    (account.resetCreditsAvailable ?? 0) > 0 && (account.resetCreditsNextExpiresAt ?? 0) * 1000 <= now
+  );
 }
 
 export async function backfillMissingResetCreditExpiries(
@@ -38,48 +25,42 @@ export async function backfillMissingResetCreditExpiries(
   }
 
   let updated = false;
-  await Promise.all(
-    targets.map(async (account) => {
-      inflightResetCreditsBackfills.add(account.id);
-      resetCreditsBackfillCooldownUntil.set(account.id, now + RESET_CREDITS_BACKFILL_COOLDOWN_MS);
-      try {
-        const snapshot = await runAuthenticatedAccountRequest(repo, account.id, (tokens) =>
-          fetchResetCredits(tokens.accessToken, account.accountId ?? undefined)
-        );
-        logNetworkEvent("resetCredits.backfill", {
-          accountId: account.id,
-          remoteAccountId: account.accountId,
-          step: "fetched",
-          availableCount: snapshot.availableCount,
-          nextExpiresAt: snapshot.nextExpiresAt ?? null,
-          creditsCount: snapshot.credits.length
-        });
-        if (snapshot.availableCount > 0 && snapshot.nextExpiresAt == null) {
-          console.info(
-            `[codexAccounts] reset credits backfill returned ${snapshot.availableCount} credit(s) without an expiry for ${
-              account.email ?? account.id
-            }`
-          );
-        }
-        await repo.updateResetCreditsSnapshot(account.id, snapshot.availableCount, snapshot.nextExpiresAt);
-        updated = true;
-      } catch (error) {
-        console.warn(
-          `[codexAccounts] reset credits backfill failed for ${account.email ?? account.id}:`,
-          error
-        );
-        logNetworkEvent("resetCredits.backfill", {
-          accountId: account.id,
-          remoteAccountId: account.accountId,
-          step: "failed",
-          error: error instanceof Error ? error.message : String(error)
-        });
+  await runWithConcurrencyLimit(targets, 2, async (account) => {
+    try {
+      const saved = await repo.getAccount(account.id);
+      if (!saved) {
         return;
-      } finally {
-        inflightResetCreditsBackfills.delete(account.id);
       }
-    })
-  );
+      const snapshot = await refreshResetCreditInventory(repo, saved);
+      if (!snapshot) {
+        return;
+      }
+      logNetworkEvent("resetCredits.backfill", {
+        accountId: account.id,
+        remoteAccountId: account.accountId,
+        step: "fetched",
+        availableCount: snapshot.availableCount,
+        nextExpiresAt: snapshot.nextExpiresAt ?? null,
+        creditsCount: snapshot.credits.length
+      });
+      if (snapshot.availableCount > 0 && snapshot.nextExpiresAt == null) {
+        console.info(
+          `[codexAccounts] reset credits backfill returned ${snapshot.availableCount} credit(s) without an expiry for ${
+            account.email ?? account.id
+          }`
+        );
+      }
+      updated = true;
+    } catch (error) {
+      console.warn(`[codexAccounts] reset credits backfill failed for ${account.email ?? account.id}:`, error);
+      logNetworkEvent("resetCredits.backfill", {
+        accountId: account.id,
+        remoteAccountId: account.accountId,
+        step: "failed",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
 
   if (updated) {
     onUpdated();

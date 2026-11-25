@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { DashboardSettings, DashboardThemeOption } from "../../domain/dashboard/types";
+import { AUTO_REFRESH_PLANS, type DashboardSettings, type DashboardThemeOption } from "../../domain/dashboard/types";
 import { DashboardLanguage, DashboardLanguageOption, resolveDashboardLanguage } from "../../localization/languages";
 import { normalizeQuotaColorThresholds } from "../../utils";
 
@@ -19,6 +19,7 @@ export class ExtensionSettingsStore {
       codexAppRestartMode: config.get<"auto" | "manual">("codexAppRestartMode") ?? "manual",
       backgroundTokenRefreshEnabled: config.get<boolean>("backgroundTokenRefreshEnabled", true),
       autoRefreshMinutes: normalizeAutoRefreshMinutes(config.get<number>("autoRefreshMinutes", 0)),
+      autoRefreshPlanTypes: readAutoRefreshPlanTypes(config.get<unknown>("autoRefreshPlanTypes")),
       autoSwitchEnabled: config.get<boolean>("autoSwitchEnabled", false),
       hourlyQuotaControlEnabled: config.get<boolean>("hourlyQuotaControlEnabled", false),
       autoSwitchReloadWindowEnabled: config.get<boolean>("autoSwitchReloadWindowEnabled", false),
@@ -68,6 +69,10 @@ export function getCodexAccountsConfiguration(): vscode.WorkspaceConfiguration {
 
 export function getAutoRefreshMinutes(): number {
   return normalizeAutoRefreshMinutes(getCodexAccountsConfiguration().get<number>("autoRefreshMinutes", 0));
+}
+
+export function readAutoRefreshPlanTypes(value: unknown): readonly string[] {
+  return Array.isArray(value) ? AUTO_REFRESH_PLANS.filter((plan) => value.includes(plan)) : AUTO_REFRESH_PLANS;
 }
 
 export function isBackgroundTokenRefreshEnabled(): boolean {

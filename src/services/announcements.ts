@@ -156,7 +156,7 @@ export class AnnouncementService {
     if (!Array.isArray(raw)) {
       return [];
     }
-    return raw.map((value) => String(value || "").trim()).filter(Boolean);
+    return raw.map(normalizeOptionalString).filter((value): value is string => value !== undefined);
   }
 
   private async saveReadIds(ids: string[]): Promise<void> {
@@ -170,7 +170,7 @@ export function normalizeAnnouncementResponse(payload: unknown): { version: stri
   const raw = isRecord(payload) ? payload : {};
   const source = Array.isArray(raw["announcements"]) ? raw["announcements"] : Array.isArray(raw["data"]) ? raw["data"] : [];
   return {
-    version: String(raw["version"] || "1.0"),
+    version: stringFromScalar(raw["version"] || undefined) ?? "1.0",
     announcements: source.map(normalizeAnnouncement).filter((item): item is CodexAnnouncement => Boolean(item))
   };
 }
@@ -234,30 +234,30 @@ function normalizeAnnouncement(item: unknown): CodexAnnouncement | null {
   if (!isRecord(item)) {
     return null;
   }
-  const id = String(item["id"] || "").trim();
+  const id = normalizeOptionalString(item["id"] || undefined);
   if (!id) {
     return null;
   }
 
   return {
     id,
-    type: String(item["type"] || item["announcementType"] || "info").trim() || "info",
+    type: normalizeOptionalString(item["type"] || item["announcementType"]) ?? "info",
     priority: Number.isFinite(Number(item["priority"])) ? Number(item["priority"]) : 0,
     releaseVersion: normalizeVersionString(
       item["releaseVersion"] ?? item["release_version"] ?? item["updateVersion"] ?? item["update_version"] ?? item["version"]
     ),
-    title: String(item["title"] || "").trim(),
-    summary: String(item["summary"] || "").trim(),
-    content: String(item["content"] || "").trim(),
+    title: normalizeOptionalString(item["title"] || undefined) ?? "",
+    summary: normalizeOptionalString(item["summary"] || undefined) ?? "",
+    content: normalizeOptionalString(item["content"] || undefined) ?? "",
     restartHint: normalizeOptionalString(item["restartHint"] ?? item["restart_hint"]),
     action: normalizeAction(item["action"]),
-    targetVersions: String(item["targetVersions"] || item["target_versions"] || "*").trim() || "*",
+    targetVersions: normalizeOptionalString(item["targetVersions"] || item["target_versions"]) ?? "*",
     targetLanguages: normalizeStringList(item["targetLanguages"] ?? item["target_languages"], ["*"]),
     showOnce: item["showOnce"] !== false && item["show_once"] !== false,
     popup: item["popup"] === true,
     pinned: item["pinned"] === true || item["top"] === true,
-    createdAt: String(item["createdAt"] || item["created_at"] || "").trim(),
-    expiresAt: item["expiresAt"] == null && item["expires_at"] == null ? null : String(item["expiresAt"] ?? item["expires_at"]),
+    createdAt: normalizeOptionalString(item["createdAt"] || item["created_at"]) ?? "",
+    expiresAt: stringFromScalar(item["expiresAt"] ?? item["expires_at"]) ?? null,
     locales: isRecord(item["locales"]) ? item["locales"] : null,
     images: Array.isArray(item["images"])
       ? item["images"].map(normalizeImage).filter((image): image is CodexAnnouncementImage => Boolean(image))
@@ -269,15 +269,15 @@ function normalizeAction(action: unknown): CodexAnnouncementAction | undefined {
   if (!isRecord(action)) {
     return undefined;
   }
-  const type = String(action["type"] || "").trim();
-  const target = String(action["target"] || "").trim();
+  const type = normalizeOptionalString(action["type"] || undefined);
+  const target = normalizeOptionalString(action["target"] || undefined);
   if (!type || !target) {
     return undefined;
   }
   return {
     type,
     target,
-    label: String(action["label"] || "").trim() || "打开",
+    label: normalizeOptionalString(action["label"] || undefined) ?? "打开",
     arguments: Array.isArray(action["arguments"]) ? action["arguments"] : []
   };
 }
@@ -286,14 +286,14 @@ function normalizeImage(image: unknown): CodexAnnouncementImage | undefined {
   if (!isRecord(image)) {
     return undefined;
   }
-  const url = String(image["url"] || "").trim();
+  const url = normalizeOptionalString(image["url"] || undefined);
   if (!url) {
     return undefined;
   }
   return {
     url,
-    label: String(image["label"] || "").trim() || undefined,
-    alt: String(image["alt"] || "").trim() || undefined
+    label: normalizeOptionalString(image["label"] || undefined),
+    alt: normalizeOptionalString(image["alt"] || undefined)
   };
 }
 
@@ -313,20 +313,13 @@ function applyLocale(announcement: CodexAnnouncement, locale: string): CodexAnno
   }
 
   const next = { ...announcement };
-  if (localized["title"]) {
-    next.title = String(localized["title"]);
-  }
-  if (localized["summary"]) {
-    next.summary = String(localized["summary"]);
-  }
-  if (localized["content"]) {
-    next.content = String(localized["content"]);
-  }
-  if (localized["restartHint"]) {
-    next.restartHint = String(localized["restartHint"]);
-  }
-  if (localized["actionLabel"] && next.action) {
-    next.action = { ...next.action, label: String(localized["actionLabel"]) };
+  next.title = stringFromScalar(localized["title"] || undefined) ?? next.title;
+  next.summary = stringFromScalar(localized["summary"] || undefined) ?? next.summary;
+  next.content = stringFromScalar(localized["content"] || undefined) ?? next.content;
+  next.restartHint = stringFromScalar(localized["restartHint"] || undefined) ?? next.restartHint;
+  const actionLabel = stringFromScalar(localized["actionLabel"] || undefined);
+  if (actionLabel && next.action) {
+    next.action = { ...next.action, label: actionLabel };
   }
   return next;
 }
@@ -453,7 +446,7 @@ function normalizeStringList(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) {
     return fallback;
   }
-  const normalized = value.map((item) => String(item ?? "").trim()).filter(Boolean);
+  const normalized = value.map(normalizeOptionalString).filter((item): item is string => item !== undefined);
   return normalized.length ? normalized : fallback;
 }
 
@@ -463,11 +456,13 @@ function normalizeVersionString(value: unknown): string | undefined {
 }
 
 function normalizeOptionalString(value: unknown): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  const text = String(value).trim();
-  return text || undefined;
+  return stringFromScalar(value)?.trim() || undefined;
+}
+
+function stringFromScalar(value: unknown): string | undefined {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+    ? String(value)
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

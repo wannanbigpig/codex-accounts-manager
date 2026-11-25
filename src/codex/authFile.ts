@@ -98,10 +98,15 @@ function buildAuthFile(tokens: CodexTokens): CodexAuthFile {
  */
 async function writeAuthJsonAtomic(filePath: string, content: string): Promise<void> {
   const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmpPath = path.join(dir, `.${path.basename(filePath)}.tmp.${process.pid}.${crypto.randomBytes(4).toString("hex")}`);
-  await fs.writeFile(tmpPath, content, "utf8");
+  const file = await fs.open(tmpPath, "wx", 0o600);
   try {
+    try {
+      await file.writeFile(content, "utf8");
+    } finally {
+      await file.close();
+    }
     await fs.rename(tmpPath, filePath);
   } catch (error) {
     await fs.unlink(tmpPath).catch(() => undefined);
@@ -129,7 +134,7 @@ async function syncCodexKeychain(authJsonContent: string): Promise<void> {
         ["add-generic-password", "-U", "-s", CODEX_KEYCHAIN_SERVICE, "-a", account, "-w", authJsonContent],
         (error) => {
           if (error) {
-            reject(error);
+            reject(error instanceof Error ? error : new Error("Failed to synchronize Codex Keychain"));
           } else {
             resolve();
           }
@@ -147,12 +152,7 @@ async function syncCodexKeychain(authJsonContent: string): Promise<void> {
  */
 async function buildCodexKeychainAccount(): Promise<string> {
   const home = getCodexHome();
-  let resolved = home;
-  try {
-    resolved = await fs.realpath(home);
-  } catch {
-    resolved = home;
-  }
+  const resolved = await fs.realpath(home).catch(() => home);
   const digest = crypto.createHash("sha256").update(resolved).digest("hex");
   return `cli|${digest.slice(0, 16)}`;
 }

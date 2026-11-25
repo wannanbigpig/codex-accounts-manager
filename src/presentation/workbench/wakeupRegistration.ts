@@ -5,8 +5,13 @@ import type { AccountsRepository } from "../../storage";
 import { WakeupStore } from "../../storage/wakeupStore";
 import { WakeupService } from "../../application/wakeup/service";
 import { runAuthenticatedAccountRequest } from "../../application/accounts/authenticatedAccountRequest";
+import { refreshStoredAccountQuota } from "../../application/accounts/quota";
 import { sendWakeupRequest } from "../../services/wakeupClient";
-import { refreshQuota } from "../../services/quota";
+import { sameAccountWorkspace } from "../../storage/accountMetadata";
+import type { CodexAccountRecord } from "../../core/types";
+import { collectQuotaResetTimes } from "../../domain/wakeup/schedule";
+
+const SHORT_WINDOW_RECHECK_MS = 30_000;
 
 let service: WakeupService | undefined;
 
@@ -19,6 +24,34 @@ export async function registerWakeupScheduler(
   repo: AccountsRepository,
   onChange: () => void
 ): Promise<void> {
+  const rechecks = new Map<string, { timer: NodeJS.Timeout; controller: AbortController }>();
+  const shortResetPending = (account: CodexAccountRecord): boolean =>
+    !collectQuotaResetTimes(account.quotaSummary && { ...account.quotaSummary, additionalRateLimits: undefined }, "hourly")
+      .some((time) => time > Date.now());
+  const queueQuotaRecheck = (checked: CodexAccountRecord): void => {
+    if (rechecks.has(checked.id)) {
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void (async () => {
+        const latest = await repo.getAccount(checked.id);
+        if (!latest || !sameAccountWorkspace(latest, checked) || !shortResetPending(latest) || controller.signal.aborted) {
+          return;
+        }
+        const tokens = await repo.getFreshTokens(latest.id);
+        if (tokens && !controller.signal.aborted) {
+          await refreshStoredAccountQuota(repo, latest, tokens, true, controller.signal);
+          if (!controller.signal.aborted) {
+            onChange();
+          }
+        }
+      })().catch(() => console.warn("[codexAccounts] post-wakeup quota recheck failed"))
+        .finally(() => rechecks.delete(checked.id));
+    }, SHORT_WINDOW_RECHECK_MS);
+    timer.unref();
+    rechecks.set(checked.id, { timer, controller });
+  };
   service = new WakeupService(
     new WakeupStore(path.join(os.homedir(), ".codex-accounts-manager", "wakeup")),
     repo,
@@ -32,18 +65,12 @@ export async function registerWakeupScheduler(
       try {
         const account = await repo.getAccount(id);
         const tokens = await repo.getFreshTokens(id);
-        if (account && tokens && !signal.aborted) {
-          const result = await refreshQuota(account, tokens, true);
+        if (selectedAccount && account && sameAccountWorkspace(selectedAccount, account) && tokens && !signal.aborted) {
+          const { result, updatedAccount } = await refreshStoredAccountQuota(repo, account, tokens, true, signal);
           quotaWarning = result.error?.message;
-          await repo.updateQuota(
-            id,
-            result.quota,
-            result.error,
-            result.updatedTokens,
-            result.updatedPlanType,
-            result.updatedSubscriptionActiveUntil,
-            tokens
-          );
+          if (task.scheduleMode === "quota_reset" && task.quotaResetWindow !== "weekly" && result.quota && !signal.aborted && shortResetPending(updatedAccount)) {
+            queueQuotaRecheck(updatedAccount);
+          }
         }
       } catch {
         quotaWarning = "Post-wakeup quota refresh failed";
@@ -56,6 +83,11 @@ export async function registerWakeupScheduler(
   const instance = service;
   context.subscriptions.push({
     dispose: () => {
+      for (const { timer, controller } of rechecks.values()) {
+        clearTimeout(timer);
+        controller.abort();
+      }
+      rechecks.clear();
       instance.dispose();
       if (service === instance) {
         service = undefined;

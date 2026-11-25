@@ -1,14 +1,15 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { loginWithOAuth } from "../../auth";
+import { checkOAuthCancellation } from "../../auth/oauth";
 import { getCodexHome } from "../../codex";
 import { getErrorMessage } from "../../core";
-import { CodexAccountRecord, SharedCodexAccountJson } from "../../core/types";
+import { CodexAccountRecord } from "../../core/types";
 import { AccountsRepository } from "../../storage";
-import { buildAccountStorageId } from "../../utils/accountIdentity";
-import { extractClaims } from "../../utils/jwt";
 import { runWithConcurrencyLimit } from "../../utils/concurrency";
-import { needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
+import { getCurrentWindowRuntimeAccountId, needsWindowReloadForAccount } from "../../presentation/workbench/windowRuntimeAccount";
+import { AUTO_REFRESH_PLANS } from "../../domain/dashboard/types";
+import { resolveAccountPlanCategory } from "../dashboard/copy";
 import { getCommandCopy, getLanguage, logNetworkEvent, resolveLongQuotaLabel, t } from "../../utils";
 import { openDetailsPanel } from "../../ui";
 import { openQuotaSummaryPanel } from "../../ui/quotaSummary";
@@ -47,7 +48,7 @@ export class AccountsCommandService {
             hasRefreshToken: Boolean(tokens.refreshToken),
             accountId: tokens.accountId
           });
-          const account = await this.repo.upsertFromTokens(tokens, false);
+          const account = await this.repo.upsertFromTokens(tokens, false, () => checkOAuthCancellation(cancellationToken));
           logNetworkEvent("account.add", {
             step: "account-upserted",
             storedAccountId: account.accountId,
@@ -116,22 +117,12 @@ export class AccountsCommandService {
     await this.withProgress(
       copy.progressAddAccount,
       async (_progress, cancellationToken) => {
-        const tokens = await loginWithOAuth(cancellationToken);
-        const claims = extractClaims(tokens.idToken, tokens.accessToken);
-        const authorizedId = claims.email
-          ? buildAccountStorageId(claims.email, claims.accountId, claims.organizationId)
-          : undefined;
-
-        if (!authorizedId || authorizedId !== account.id) {
-          void vscode.window.showWarningMessage(
-            `Authorized account does not match ${account.email}. No changes were applied.`
-          );
+        const updated = await this.repo.reauthorizeAccount(account.id, () => loginWithOAuth(cancellationToken),
+          () => checkOAuthCancellation(cancellationToken));
+        if (!updated) {
           return;
         }
-
-        const updated = await this.repo.upsertFromTokens(tokens, account.isActive);
-        if (account.isActive) {
-          await this.repo.switchAccount(updated.id);
+        if (updated.isActive) {
           this.view.markObservedAuthIdentity?.(updated.id);
         }
 
@@ -143,7 +134,7 @@ export class AccountsCommandService {
           return;
         }
 
-        if (account.isActive && needsWindowReloadForAccount(updated.id)) {
+        if (updated.isActive && needsWindowReloadForAccount(updated.id)) {
           const choice = await vscode.window.showInformationMessage(
             copy.switchedAndAskReload(updated.email),
             copy.reloadNow,
@@ -183,19 +174,26 @@ export class AccountsCommandService {
     await promptWindowReloadForAccount(account);
   }
 
-  async refreshQuota(item?: CodexAccountRecord): Promise<void> {
+  async refreshQuota(item?: CodexAccountRecord): Promise<boolean | undefined> {
     const copy = getCommandCopy();
     const account = item ?? (await this.pickAccount(copy.pickRefreshAccount));
     if (!account) {
       return;
     }
 
-    await refreshSingleQuota(this.repo, this.view, account.id);
+    return refreshSingleQuota(this.repo, this.view, account.id);
   }
 
-  async refreshAllQuotas(options?: { silent?: boolean; forceRefresh?: boolean }): Promise<void> {
+  async refreshAllQuotas(options?: { silent?: boolean; forceRefresh?: boolean; backgroundPlanTypes?: readonly string[] }): Promise<void> {
     const copy = getCommandCopy();
-    const accounts = await this.repo.listAccounts();
+    const saved = await this.repo.listAccounts();
+    const plans = options?.silent && options.backgroundPlanTypes ? new Set(options.backgroundPlanTypes) : undefined;
+    const current = getCurrentWindowRuntimeAccountId();
+    const accounts = plans ? saved.filter((account) => {
+      const plan = resolveAccountPlanCategory(account);
+      const key = AUTO_REFRESH_PLANS.find((item) => item === plan) ?? "other";
+      return account.isActive || account.id === current || plans.has(key);
+    }) : saved;
     let success = 0;
     let failed = 0;
     const refreshAll = async (progress?: vscode.Progress<{ message?: string; increment?: number }>) => {
@@ -213,13 +211,17 @@ export class AccountsCommandService {
             return;
           }
           try {
-            await refreshSingleQuota(this.repo, this.view, account.id, {
+            const refreshed = await refreshSingleQuota(this.repo, this.view, account.id, {
               announce: false,
               forceRefresh: options?.forceRefresh ?? true,
               refreshView: false,
               warnQuota: false
             });
-            success += 1;
+            if (refreshed) {
+              success += 1;
+            } else {
+              failed += 1;
+            }
           } catch (error) {
             failed += 1;
             console.warn(`[codexAccounts] refresh all failed for ${account.email}:`, error);
@@ -368,7 +370,7 @@ export class AccountsCommandService {
       }
 
       const raw = await vscode.workspace.fs.readFile(picked[0]);
-      const parsed = JSON.parse(Buffer.from(raw).toString("utf8")) as SharedCodexAccountJson | SharedCodexAccountJson[];
+      const parsed = JSON.parse(Buffer.from(raw).toString("utf8")) as unknown;
       const restored = await this.repo.restoreAccountsFromSharedJson(parsed);
       this.view.refresh();
       void vscode.window.showInformationMessage(

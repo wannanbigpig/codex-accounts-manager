@@ -11,6 +11,7 @@ export function getQuotaIssueKind(error?: CodexQuotaErrorInfo): QuotaIssueKind |
   const code = String(error.code ?? "").toLowerCase();
 
   if (
+    error.statusCode === 402 ||
     code === "deactivated_workspace" ||
     message.includes("deactivated_workspace") ||
     message.includes("api returned 402")
@@ -18,7 +19,12 @@ export function getQuotaIssueKind(error?: CodexQuotaErrorInfo): QuotaIssueKind |
     return "disabled";
   }
 
+  if (error.statusCode === 429) {
+    return "quota";
+  }
+
   if (
+    error.statusCode === 401 ||
     code === "unauthorized" ||
     code.startsWith("auth_") ||
     message.includes("401") ||

@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
-import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint } from "../core/types";
+import { CodexAccountRecord, CodexDailyUsageBreakdown, CodexDailyUsagePoint, CodexTokens } from "../core/types";
+import { runAuthenticatedAccountRequest } from "../application/accounts/authenticatedAccountRequest";
 import { resolveAccountHealth, isHealthDismissed } from "../application/accounts/health";
-import { resolveSubscriptionDisplay } from "../application/dashboard/buildDashboardState";
-import { formatAccountStructure, formatPlanType, getDashboardCopy } from "../application/dashboard/copy";
+import { formatCreditsText, resolveSubscriptionDisplay } from "../application/dashboard/buildDashboardState";
+import { formatAccountPlan, formatAccountStructure, getDashboardCopy } from "../application/dashboard/copy";
 import type { DashboardThemeOption } from "../domain/dashboard/types";
 import { getCodexAccountsConfiguration, normalizeDashboardTheme } from "../infrastructure/config/extensionSettings";
 import type { DashboardLanguage } from "../localization/languages";
@@ -11,7 +12,9 @@ import { detailCopyResources } from "../localization/resources/details";
 import { promptForTags } from "../presentation/tagEditor";
 import { getAutoSwitchRuntimeSnapshot } from "../presentation/workbench/autoSwitchState";
 import { getTokenAutomationSnapshot } from "../presentation/workbench/tokenAutomationState";
-import { fetchDailyUsageBreakdown } from "../services";
+import { fetchDailyUsageBreakdown, fetchProfileLifetimeTokens } from "../services/usage";
+import { LocalSessionUsageReader, type LocalSessionUsage } from "../services/localSessionUsage";
+import { workspaceKind } from "../services/workspaceIdentity";
 import { AccountsRepository } from "../storage";
 import {
   colorForPercentage,
@@ -22,25 +25,32 @@ import {
   resolveLongQuotaLabel
 } from "../utils";
 import { formatRelativeReset, formatTimestamp } from "../utils/time";
+import { observedQuotaConsumption, quotaWindowReset, QUOTA_HISTORY_DAYS, readQuotaHistory } from "../domain/quotaHistory";
 
 let detailsPanel: vscode.WebviewPanel | undefined;
 let detailsPanelRequestId = 0;
 let detailsPanelConfigWatcher: vscode.Disposable | undefined;
+const localSessionUsageReader = new LocalSessionUsageReader();
 
 type DetailsUsageState = "loading" | "ready" | "empty" | "error";
+
+type DetailsUsage<T> = { state: Exclude<DetailsUsageState, "ready">; value?: undefined } | { state: "ready"; value: T };
 
 type DetailsPanelState = {
   repo?: AccountsRepository;
   accountId?: string;
   styles?: WebviewStyles;
   scripts?: WebviewScripts;
-  usageState: DetailsUsageState;
-  usage?: CodexDailyUsageBreakdown;
+  usageScope?: string;
+  dailyUsage: DetailsUsage<CodexDailyUsageBreakdown>;
+  lifetimeUsage: DetailsUsage<number>;
+  localSessionUsage?: DetailsUsage<LocalSessionUsage>;
   privacyMode: boolean;
 };
 
 const detailsPanelState: DetailsPanelState = {
-  usageState: "loading",
+  dailyUsage: { state: "loading" },
+  lifetimeUsage: { state: "loading" },
   privacyMode: false
 };
 
@@ -69,14 +79,36 @@ export function openDetailsPanel(
       detailsPanelState.accountId = undefined;
       detailsPanelState.styles = undefined;
       detailsPanelState.scripts = undefined;
-      detailsPanelState.usage = undefined;
-      detailsPanelState.usageState = "loading";
+      resetDetailsUsage();
       detailsPanelState.privacyMode = false;
       detailsPanel = undefined;
     });
 
     detailsPanel.webview.onDidReceiveMessage(async (message: { type?: string }) => {
       if (!detailsPanelState.repo || !detailsPanelState.accountId) {
+        return;
+      }
+
+      if (message.type === "details:load-local-sessions") {
+        if (detailsPanelState.localSessionUsage?.state === "loading") {
+          return;
+        }
+        const requestId = detailsPanelRequestId;
+        detailsPanelState.localSessionUsage = { state: "loading" };
+        void refreshDetailsPanel();
+        try {
+          const value = await localSessionUsageReader.read();
+          if (isCurrentDetailsRequest(requestId)) {
+            detailsPanelState.localSessionUsage = { state: "ready", value };
+          }
+        } catch {
+          if (isCurrentDetailsRequest(requestId)) {
+            detailsPanelState.localSessionUsage = { state: "error" };
+          }
+        }
+        if (isCurrentDetailsRequest(requestId)) {
+          await refreshDetailsPanel();
+        }
         return;
       }
 
@@ -137,46 +169,64 @@ export function openDetailsPanel(
   detailsPanelState.accountId = account.id;
   detailsPanelState.styles = styles;
   detailsPanelState.scripts = scripts;
-  detailsPanelState.usage = undefined;
-  detailsPanelState.usageState = "loading";
+  resetDetailsUsage();
   detailsPanelState.privacyMode = options?.privacyMode === true;
-  const requestId = ++detailsPanelRequestId;
+  detailsPanelRequestId += 1;
   void refreshDetailsPanel();
-
-  void hydrateUsage(repo, account.id, requestId);
 }
 
-async function hydrateUsage(repo: AccountsRepository, accountId: string, requestId: number): Promise<void> {
-  try {
-    const tokens = await getFreshUsageTokens(repo, accountId);
-    if (!tokens || !detailsPanel || requestId !== detailsPanelRequestId || detailsPanelState.accountId !== accountId) {
-      return;
-    }
-
-    const usage = await fetchDailyUsageBreakdown(tokens, 30);
-    if (!detailsPanel || requestId !== detailsPanelRequestId || detailsPanelState.accountId !== accountId) {
-      return;
-    }
-
-    detailsPanelState.usageState = usage?.points.length ? "ready" : "empty";
-    detailsPanelState.usage = usage;
-    await refreshDetailsPanel();
-  } catch {
-    if (!detailsPanel || requestId !== detailsPanelRequestId || detailsPanelState.accountId !== accountId) {
-      return;
-    }
-
-    detailsPanelState.usageState = "error";
-    detailsPanelState.usage = undefined;
-    await refreshDetailsPanel();
-  }
+function resetDetailsUsage(scope?: string): void {
+  detailsPanelState.usageScope = scope;
+  detailsPanelState.dailyUsage = { state: "loading" };
+  detailsPanelState.lifetimeUsage = { state: "loading" };
+  detailsPanelState.localSessionUsage = undefined;
 }
 
-async function getFreshUsageTokens(
-  repo: AccountsRepository,
-  accountId: string
-): Promise<Awaited<ReturnType<AccountsRepository["getTokens"]>>> {
-  return repo.getFreshTokens(accountId);
+function hydrateUsage(repo: AccountsRepository, account: CodexAccountRecord, requestId: number): void {
+  const initialTokens = repo.getFreshTokens(account.id);
+  const load = <T>(fetchUsage: (tokens: CodexTokens) => Promise<T | undefined>) =>
+    initialTokens.then((tokens) => {
+      if (!isCurrentDetailsRequest(requestId)) {
+        return undefined;
+      }
+      if (!tokens?.accessToken) {
+        throw new Error("No access token available");
+      }
+      return runAuthenticatedAccountRequest(repo, account.id, fetchUsage, tokens);
+    });
+
+  const daily = load(async (tokens) => {
+    const result = await fetchDailyUsageBreakdown(tokens, 30, account.accountId);
+    return result?.points.length ? result : undefined;
+  });
+  trackDetailsUsage(requestId, daily, (state) => {
+    detailsPanelState.dailyUsage = state;
+  });
+  const lifetime = load((tokens) => fetchProfileLifetimeTokens(tokens, account.accountId));
+  trackDetailsUsage(requestId, lifetime, (state) => {
+    detailsPanelState.lifetimeUsage = state;
+  });
+}
+
+function trackDetailsUsage<T>(
+  requestId: number,
+  request: Promise<T | undefined>,
+  save: (usage: DetailsUsage<T>) => void
+): void {
+  const publish = (usage: DetailsUsage<T>): void => {
+    if (isCurrentDetailsRequest(requestId)) {
+      save(usage);
+      void refreshDetailsPanel();
+    }
+  };
+  void request.then(
+    (value) => publish(value === undefined ? { state: "empty" } : { state: "ready", value }),
+    () => publish({ state: "error" })
+  );
+}
+
+function isCurrentDetailsRequest(requestId: number): boolean {
+  return detailsPanel !== undefined && detailsPanelRequestId === requestId;
 }
 
 export async function refreshDetailsPanel(): Promise<void> {
@@ -190,14 +240,28 @@ export async function refreshDetailsPanel(): Promise<void> {
     return;
   }
 
-  const account = await detailsPanelState.repo.getAccount(detailsPanelState.accountId);
+  const { repo, accountId } = detailsPanelState;
+  let requestId = detailsPanelRequestId;
+  const account = await repo.getAccount(accountId);
+  if (!isCurrentDetailsRequest(requestId)) {
+    return;
+  }
   if (!account) {
     detailsPanel.dispose();
     return;
   }
 
-  const tokens = await detailsPanelState.repo.getTokens(account.id);
-  renderDetails(account, tokens);
+  const scope = JSON.stringify([account.accountId, account.organizationId, account.userId]);
+  if (scope !== detailsPanelState.usageScope) {
+    resetDetailsUsage(scope);
+    requestId = ++detailsPanelRequestId;
+    hydrateUsage(repo, account, requestId);
+  }
+
+  const tokens = await repo.getTokens(account.id);
+  if (isCurrentDetailsRequest(requestId)) {
+    renderDetails(account, tokens);
+  }
 }
 
 function renderDetails(account: CodexAccountRecord, tokens?: Awaited<ReturnType<AccountsRepository["getTokens"]>>): void {
@@ -211,8 +275,9 @@ function renderDetails(account: CodexAccountRecord, tokens?: Awaited<ReturnType<
   detailsPanel.webview.html = renderHtml(account, tokens, copy, detailsPanelState.styles, detailsPanelState.scripts, {
     theme,
     privacyMode: detailsPanelState.privacyMode,
-    usageState: detailsPanelState.usageState,
-    usage: detailsPanelState.usage
+    dailyUsage: detailsPanelState.dailyUsage,
+    lifetimeUsage: detailsPanelState.lifetimeUsage,
+    localSessionUsage: detailsPanelState.localSessionUsage
   });
 }
 
@@ -236,8 +301,9 @@ function renderHtml(
   options: {
     theme: DashboardThemeOption;
     privacyMode: boolean;
-    usageState: "loading" | "ready" | "empty" | "error";
-    usage?: CodexDailyUsageBreakdown;
+    dailyUsage: DetailsUsage<CodexDailyUsageBreakdown>;
+    lifetimeUsage: DetailsUsage<number>;
+    localSessionUsage?: DetailsUsage<LocalSessionUsage>;
   }
 ): string {
   const quota = account.quotaSummary;
@@ -248,6 +314,8 @@ function renderHtml(
   const workspaceValue = getDetailsWorkspaceValue(account, workspaceLabel);
   const dashboardCopy = getDashboardCopy(copy.lang);
   const subscription = resolveSubscriptionDisplay(account, tokens, dashboardCopy, copy.lang);
+  const creditsText = formatCreditsText(quota?.credits, copy.lang,
+    Boolean(quota) && workspaceKind(account.accountStructure, account.planType) === "workspace");
   const subscriptionStyle = subscription.color ? ` style="color:${escapeHtmlAttr(subscription.color)};"` : "";
   const longQuotaLabel = resolveLongQuotaLabel(
     account.planType,
@@ -346,7 +414,7 @@ function renderHtml(
           </div>
           <div class="badges">
             ${account.isActive ? `<span class="pill active">${escapeHtml(copy.current)}</span>` : `<span class="pill">${escapeHtml(copy.saved)}</span>`}
-            <span class="pill plan">${escapeHtml(formatPlanType(account.planType, copy.lang))}</span>
+            <span class="pill plan">${escapeHtml(formatAccountPlan(account, copy.lang))}</span>
             ${renderHealthBadge(health.kind, dismissedHealth, dashboardCopy)}
           </div>
         </div>
@@ -355,6 +423,7 @@ function renderHtml(
           <div class="meta"><strong>${escapeHtml(copy.login)}:</strong> ${escapeHtml(provider)}</div>
           <div class="meta"><strong>${escapeHtml(copy.loginTime)}:</strong> ${renderLiveTimestamp(account.loginAt, copy)}</div>
           <div class="meta"><strong>${escapeHtml(copy.subscription)}:</strong> <span${subscriptionStyle} title="${escapeHtmlAttr(subscription.title)}">${escapeHtml(subscription.text)}</span></div>
+          ${creditsText ? `<div class="meta">${escapeHtml(creditsText)}</div>` : ""}
           <div class="meta"><strong>${escapeHtml(copy.userId)}:</strong> ${renderSensitiveHtml(account.userId ?? account.accountId, "id", "-")}</div>
           <div class="meta"><strong>${escapeHtml(copy.status)}:</strong> ${escapeHtml(accountStatus)}</div>
         </div>
@@ -382,10 +451,14 @@ function renderHtml(
           <div class="usage-note">${escapeHtml(copy.usageHint)}</div>
           <div class="meta">${escapeHtml(copy.usageSubtitle)}</div>
         </div>
-        <div class="usage-range">${escapeHtml(copy.rangeLabel(options.usage?.days ?? 30))}</div>
+        <div class="usage-range">${escapeHtml(copy.rangeLabel(options.dailyUsage.value?.days ?? 30))}</div>
       </div>
-      ${renderUsageSection(options.usageState, options.usage, copy)}
+      <div class="meta">${escapeHtml(copy.usageLifetimeLabel)}: <strong>${escapeHtml(renderLifetimeUsage(options.lifetimeUsage, copy))}</strong></div>
+      ${renderUsageSection(options.dailyUsage.state, options.dailyUsage.value, copy)}
     </section>
+
+    ${renderQuotaHistory(account, tokens, copy, longQuotaLabel)}
+    ${renderLocalSessionUsage(options.localSessionUsage, copy)}
 
     <section class="meta-card">
       <h2>${escapeHtml(copy.metadata)}</h2>
@@ -452,6 +525,19 @@ function getWebviewScripts(webview: vscode.Webview, extensionUri: vscode.Uri, pa
   return {
     page: webview.asWebviewUri(page).toString()
   };
+}
+
+function renderLifetimeUsage(usage: DetailsUsage<number>, copy: DetailCopy): string {
+  switch (usage.state) {
+    case "ready":
+      return usage.value.toLocaleString(getIntlLocale(copy.lang));
+    case "loading":
+      return copy.usageLifetimeLoading;
+    case "empty":
+      return copy.usageLifetimeEmpty;
+    case "error":
+      return copy.usageLifetimeError;
+  }
 }
 
 function renderUsageSection(
@@ -675,6 +761,61 @@ function formatSurfaceLabel(key: string): string {
   return key;
 }
 
+function renderQuotaHistory(account: CodexAccountRecord, tokens: CodexTokens | undefined, copy: DetailCopy, longLabel: string): string {
+  const now = Date.now();
+  const points = readQuotaHistory(account, tokens, now);
+  const weekStart = now - 7 * 86400_000;
+  const format = new Intl.NumberFormat(getIntlLocale(copy.lang), { maximumFractionDigits: 1 });
+  const formatConsumption = (value?: number): string => value === undefined ? "—" : `${format.format(value)} ${copy.quotaHistoryPoints}`;
+  const rows = [...points].reverse().map((point, index) => {
+    const previous = points[points.length - index - 2];
+    const renderWindow = (key: "hourly" | "weekly"): string => {
+      const window = point[key];
+      if (!window) {
+        return '<td><span class="usage-note">—</span></td>';
+      }
+      const value = format.format(window.remaining);
+      const hint = window.resetAt === undefined ? "" :
+        `<span class="usage-note">${escapeHtml(copy.reset)} ${escapeHtml(formatTimestamp(window.resetAt))}</span>`;
+      const reset = quotaWindowReset(previous?.[key], window)
+        ? `<span class="usage-note">${escapeHtml(copy.quotaHistoryReset)}</span>` : "";
+      return `<td><span>${escapeHtml(value)}%</span><meter min="0" max="100" value="${window.remaining}" aria-hidden="true"></meter>${reset}${hint}</td>`;
+    };
+    const at = new Date(point.at);
+    return `<tr data-quota-week="${point.at >= weekStart}"${index >= 12 ? " hidden" : ""}><td><time datetime="${at.toISOString()}">${escapeHtml(at.toLocaleString(getIntlLocale(copy.lang)))}</time></td>${renderWindow("hourly")}${renderWindow("weekly")}</tr>`;
+  }).join("");
+  const totals = (dataset: typeof points, range: number) => `<div class="usage-note" data-quota-totals="${range}"${range === 7 ? " hidden" : ""}>${escapeHtml(copy.quotaHistoryConsumed)} · ${escapeHtml(copy.hourlyQuota)} ${escapeHtml(formatConsumption(observedQuotaConsumption(dataset, "hourly")))} · ${escapeHtml(longLabel)} ${escapeHtml(formatConsumption(observedQuotaConsumption(dataset, "weekly")))}</div>`;
+  return `<section class="usage-card quota-history">
+    <div class="usage-head"><h2>${escapeHtml(copy.quotaHistoryTitle)}</h2>${rows ? `<div class="detail-history-actions"><button type="button" class="detail-inline-btn" data-quota-range="7" aria-pressed="false">${escapeHtml(copy.rangeLabel(7))}</button><button type="button" class="detail-inline-btn" data-quota-range="30" aria-pressed="true">${escapeHtml(copy.rangeLabel(QUOTA_HISTORY_DAYS))}</button></div>` : ""}</div>
+    ${rows ? `${totals(points.filter((point) => point.at >= weekStart), 7)}${totals(points, QUOTA_HISTORY_DAYS)}
+    <table><thead><tr><th scope="col">${escapeHtml(copy.quotaHistorySampleTime)}</th><th scope="col">${escapeHtml(copy.hourlyQuota)}</th><th scope="col">${escapeHtml(longLabel)}</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="usage-note" data-quota-empty hidden>${escapeHtml(copy.quotaHistoryEmpty)}</div>
+    <div class="detail-history-actions"><button type="button" class="detail-inline-btn" data-quota-previous disabled>${escapeHtml(copy.previousPage)}</button><output data-quota-page aria-live="polite">1 / ${Math.ceil(points.length / 12)}</output><button type="button" class="detail-inline-btn" data-quota-next${points.length <= 12 ? " disabled" : ""}>${escapeHtml(copy.nextPage)}</button></div>`
+    : `<div class="usage-note">${escapeHtml(copy.quotaHistoryEmpty)}</div>`}
+  </section>`;
+}
+
+function renderLocalSessionUsage(usage: DetailsUsage<LocalSessionUsage> | undefined, copy: DetailCopy): string {
+  const value = usage?.value;
+  return `<section class="usage-card quota-history" data-local-sessions>
+    <div class="usage-head"><h2>${escapeHtml(copy.localSessionTitle)}</h2>
+      <button class="detail-inline-btn" type="button" data-local-session-load${usage?.state === "loading" ? " disabled" : ""}>${escapeHtml(copy.localSessionLoad)}</button></div>
+    <div class="usage-note">${escapeHtml(copy.localSessionHint)}</div>
+    ${usage?.state === "loading" ? `<div class="usage-note" role="status">${escapeHtml(copy.usageLoading)}</div>` : ""}
+    ${usage?.state === "error" ? `<div class="usage-note" role="alert">${escapeHtml(copy.usageError)}</div>` : ""}
+    ${value?.limited ? `<div class="usage-note">${escapeHtml(copy.localSessionLimited)}</div>` : ""}
+    ${value?.rows.length ? `<textarea hidden data-local-session-data>${escapeHtml(JSON.stringify(value.rows))}</textarea>
+      <div class="detail-history-actions">
+        <label>${escapeHtml(copy.localSessionProject)} <select data-local-session-project><option value="*">${escapeHtml(copy.localSessionAll)}</option></select></label>
+        <label>${escapeHtml(copy.localSessionModel)} <select data-local-session-model><option value="*">${escapeHtml(copy.localSessionAll)}</option></select></label>
+      </div>
+      <div class="usage-note" data-local-session-totals aria-live="polite"></div>
+      <table><thead><tr><th scope="col">${escapeHtml(copy.quotaHistorySampleTime)}</th><th scope="col">${escapeHtml(copy.localSessionModel)}</th><th scope="col">${escapeHtml(copy.localSessionProject)}</th><th scope="col">${escapeHtml(copy.localSessionTokens)}</th></tr></thead><tbody data-local-session-rows></tbody></table>
+      <div class="detail-history-actions"><button type="button" class="detail-inline-btn" data-local-session-previous>${escapeHtml(copy.previousPage)}</button><output data-local-session-page aria-live="polite"></output><button type="button" class="detail-inline-btn" data-local-session-next>${escapeHtml(copy.nextPage)}</button></div>`
+      : value ? `<div class="usage-note">${escapeHtml(copy.usageEmpty)}</div>` : ""}
+  </section>`;
+}
+
 type DetailCopy = {
   lang: DashboardLanguage;
   titlePrefix: string;
@@ -699,11 +840,31 @@ type DetailCopy = {
   reviewQuota: string;
   reset: string;
   usageTitle: string;
+  quotaHistoryTitle: string;
+  quotaHistoryConsumed: string;
+  quotaHistorySampleTime: string;
+  quotaHistoryEmpty: string;
+  quotaHistoryPoints: string;
+  quotaHistoryReset: string;
+  previousPage: string;
+  nextPage: string;
+  localSessionTitle: string;
+  localSessionHint: string;
+  localSessionLoad: string;
+  localSessionLimited: string;
+  localSessionProject: string;
+  localSessionModel: string;
+  localSessionAll: string;
+  localSessionTokens: string;
   usageHint: string;
   usageSubtitle: string;
   usageLoading: string;
   usageEmpty: string;
   usageError: string;
+  usageLifetimeLabel: string;
+  usageLifetimeLoading: string;
+  usageLifetimeEmpty: string;
+  usageLifetimeError: string;
   rangeLabel: (days: number) => string;
   usageValueLabel: (value: number, total: number) => string;
   metadata: string;
